@@ -9,7 +9,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { createChart, ColorType, CandlestickSeries, HistogramSeries } from "lightweight-charts";
+import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineStyle } from "lightweight-charts";
 import type { UTCTimestamp } from "lightweight-charts";
 
 // ─── Types ───
@@ -23,9 +23,11 @@ interface KlineData {
 }
 
 // ─── TradingView Lightweight Chart Component ───
-const MiniChart = ({ data }: { data: KlineData[] }) => {
+const MiniChart = ({ data, positions }: { data: KlineData[]; positions: any[] }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
+  const [chartInitialized, setChartInitialized] = useState(false);
+  const priceLinesRef = useRef<any[]>([]);
 
   const chartRef = useRef<any>(null);
   const candlestickSeriesRef = useRef<any>(null);
@@ -202,11 +204,14 @@ const MiniChart = ({ data }: { data: KlineData[] }) => {
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
 
+    setChartInitialized(true);
+
     return () => {
       if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
+      setChartInitialized(false);
     };
   }, []);
 
@@ -290,6 +295,81 @@ const MiniChart = ({ data }: { data: KlineData[] }) => {
       isGreen: c >= o,
     });
   }, [data]);
+
+  // Draw custom position lines (entry price and liquidation price)
+  useEffect(() => {
+    const series = candlestickSeriesRef.current;
+    if (!series) return;
+
+    // Remove all old price lines
+    priceLinesRef.current.forEach((line) => {
+      try {
+        series.removePriceLine(line);
+      } catch (err) {
+        console.error("Failed to remove price line", err);
+      }
+    });
+    priceLinesRef.current = [];
+
+    // Create new price lines for current positions
+    if (!positions || positions.length === 0) return;
+
+    const newLines = positions
+      .map((pos) => {
+        const entryPrice = parseFloat(pos.entryPrice);
+        if (isNaN(entryPrice) || entryPrice <= 0) return null;
+
+        const isLong = pos.side === "long";
+        const color = isLong ? "#0ecb81" : "#f6465d";
+
+        const sizeStr = parseFloat(pos.size || "0").toFixed(4);
+        const title = `${isLong ? "LONG" : "SHORT"} ${sizeStr} @ ${entryPrice.toFixed(2)}`;
+
+        try {
+          const line = series.createPriceLine({
+            price: entryPrice,
+            color: color,
+            lineWidth: 1.5,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: title,
+          });
+          return line;
+        } catch (err) {
+          console.error("Error creating entry price line", err);
+          return null;
+        }
+      })
+      .filter(Boolean);
+
+    // Create liquidation lines
+    const liqLines = positions
+      .map((pos) => {
+        if (!pos.liquidationPrice) return null;
+        const liqPrice = parseFloat(pos.liquidationPrice);
+        if (isNaN(liqPrice) || liqPrice <= 0) return null;
+
+        const title = `LIQ @ ${liqPrice.toFixed(2)}`;
+
+        try {
+          const line = series.createPriceLine({
+            price: liqPrice,
+            color: "#f59e0b",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dotted,
+            axisLabelVisible: true,
+            title: title,
+          });
+          return line;
+        } catch (err) {
+          console.error("Error creating liq price line", err);
+          return null;
+        }
+      })
+      .filter(Boolean);
+
+    priceLinesRef.current = [...newLines, ...liqLines];
+  }, [positions, chartInitialized]);
 
   return (
     <div ref={chartContainerRef} className="w-full h-full relative select-none">
@@ -568,11 +648,39 @@ const TickerStrip = () => {
 
 // ─── Main Dashboard ───
 const Dashboard = () => {
-  const [selectedSymbol, setSelectedSymbol] = useState("BTCUSDT");
-  const [interval, setInterval] = useState("1m");
-  const [side, setSide] = useState<"buy" | "sell">("buy");
+  const [selectedSymbol, setSelectedSymbol] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("janus_selected_symbol") || "BTCUSDT";
+    }
+    return "BTCUSDT";
+  });
+  const [interval, setInterval] = useState(() => {
+    if (typeof window !== "undefined") {
+      return localStorage.getItem("janus_selected_interval") || "1m";
+    }
+    return "1m";
+  });
+  const [side, setSide] = useState<"buy" | "sell">(() => {
+    if (typeof window !== "undefined") {
+      const stored = localStorage.getItem("janus_selected_side");
+      if (stored === "buy" || stored === "sell") return stored;
+    }
+    return "buy";
+  });
   const [leverage, setLeverage] = useState(1);
   const [orderSize, setOrderSize] = useState("");
+
+  useEffect(() => {
+    localStorage.setItem("janus_selected_symbol", selectedSymbol);
+  }, [selectedSymbol]);
+
+  useEffect(() => {
+    localStorage.setItem("janus_selected_interval", interval);
+  }, [interval]);
+
+  useEffect(() => {
+    localStorage.setItem("janus_selected_side", side);
+  }, [side]);
 
   const [klines, setKlines] = useState<KlineData[]>([]);
   const [ticker, setTicker] = useState<any>(null);
@@ -631,6 +739,32 @@ const Dashboard = () => {
         setTicker(data);
       },
     }
+  );
+
+  // Fetch portfolio for open positions
+  const [portfolio, setPortfolio] = useState<any>(null);
+  const { data: initialPortfolio } = trpc.trading.portfolio.useQuery(
+    { userId: 1 },
+    { staleTime: Infinity }
+  );
+  useEffect(() => {
+    if (initialPortfolio) {
+      setPortfolio(initialPortfolio);
+    }
+  }, [initialPortfolio]);
+
+  trpc.trading.portfolioStream.useSubscription(
+    { userId: 1 },
+    {
+      onData: (data: any) => {
+        setPortfolio(data);
+      },
+    }
+  );
+
+  const openPositions = portfolio?.positions || [];
+  const symbolPositions = openPositions.filter(
+    (p: any) => p.symbol === selectedSymbol && p.status === "open"
   );
 
   const { data: instrInfo } = trpc.trading.instrumentInfo.useQuery(
@@ -762,7 +896,7 @@ const Dashboard = () => {
           {/* Chart Area */}
           <div className="flex-1 bg-[#09090b] border-b border-[#27272a] overflow-hidden">
             {klines && klines.length > 0 ? (
-              <MiniChart data={klines as KlineData[]} />
+              <MiniChart data={klines as KlineData[]} positions={symbolPositions} />
             ) : (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
                 <RefreshCw size={16} className="animate-spin mr-2" />
