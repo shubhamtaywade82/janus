@@ -110,6 +110,7 @@ const MiniChart = ({ data, positions, lastPrice }: { data: KlineData[]; position
         borderColor: "rgba(39, 39, 42, 0.25)",
         timeVisible: true,
         secondsVisible: false,
+        rightOffset: 8,
       },
       rightPriceScale: {
         borderColor: "rgba(39, 39, 42, 0.25)",
@@ -271,7 +272,10 @@ const MiniChart = ({ data, positions, lastPrice }: { data: KlineData[]; position
       });
       candlestickSeriesRef.current.setData(chartData);
       volumeSeriesRef.current.setData(volumeData);
-      if (chartRef.current) chartRef.current.timeScale().fitContent();
+      if (chartRef.current) {
+        chartRef.current.timeScale().fitContent();
+        chartRef.current.timeScale().scrollToPosition(8, false);
+      }
       // Reset animation state on full reload
       animCurrent.current.close = 0;
       animLoopRunning.current = false;
