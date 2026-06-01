@@ -48,8 +48,43 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
     if (!allStates) return;
 
     // Load current alert rules from local storage
-    const storedRules = localStorage.getItem("janus_alert_rules");
-    if (!storedRules) return;
+    let storedRules = localStorage.getItem("janus_alert_rules");
+    if (!storedRules) {
+      const defaultRules = [
+        {
+          id: "default-btc-volatility",
+          symbol: "BTCUSDT",
+          type: "volatility",
+          value: 1,
+          isActive: true,
+        },
+        {
+          id: "default-eth-volatility",
+          symbol: "ETHUSDT",
+          type: "volatility",
+          value: 1,
+          isActive: true,
+        },
+        {
+          id: "default-btc-imbalance-high",
+          symbol: "BTCUSDT",
+          type: "imbalance",
+          operator: ">",
+          value: 1.5,
+          isActive: true,
+        },
+        {
+          id: "default-btc-imbalance-low",
+          symbol: "BTCUSDT",
+          type: "imbalance",
+          operator: "<",
+          value: -1.5,
+          isActive: true,
+        },
+      ];
+      localStorage.setItem("janus_alert_rules", JSON.stringify(defaultRules));
+      storedRules = JSON.stringify(defaultRules);
+    }
 
     const alertRules: AlertRule[] = JSON.parse(storedRules);
     const activeRules = alertRules.filter((r) => r.isActive);
@@ -199,15 +234,24 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
               description: `Score: ${compositeScore.toFixed(1)}. Trend turned bullish (was ${prev.direction.toUpperCase()}).`,
               duration: 5000,
             });
+            sendTelegramAlert.mutate({
+              message: `🟢 <b>Janus Trend Alert: ${cleanSymbol}</b>\n\nTrend turned <b>BULLISH 🚀</b> (Score: ${compositeScore.toFixed(1)}, was ${prev.direction.toUpperCase()})`,
+            });
           } else if (sig.direction === "short") {
             toast.error(`${cleanSymbol} Signal BEARISH 📉`, {
               description: `Score: ${compositeScore.toFixed(1)}. Trend turned bearish (was ${prev.direction.toUpperCase()}).`,
               duration: 5000,
             });
+            sendTelegramAlert.mutate({
+              message: `🔴 <b>Janus Trend Alert: ${cleanSymbol}</b>\n\nTrend turned <b>BEARISH 📉</b> (Score: ${compositeScore.toFixed(1)}, was ${prev.direction.toUpperCase()})`,
+            });
           } else {
             toast.info(`${cleanSymbol} Signal NEUTRAL ⚖️`, {
               description: `Score: ${compositeScore.toFixed(1)}. Trend returned to neutral (was ${prev.direction.toUpperCase()}).`,
               duration: 4000,
+            });
+            sendTelegramAlert.mutate({
+              message: `⚪ <b>Janus Trend Alert: ${cleanSymbol}</b>\n\nTrend returned to <b>NEUTRAL ⚖️</b> (Score: ${compositeScore.toFixed(1)}, was ${prev.direction.toUpperCase()})`,
             });
           }
         }
@@ -218,10 +262,16 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
               description: `Composite Score: ${compositeScore.toFixed(1)} crossed 75-point gate threshold.`,
               duration: 5000,
             });
+            sendTelegramAlert.mutate({
+              message: `🔓 <b>Janus Signal Alert: ${cleanSymbol}</b>\n\nSignal crossed the 75-point gate threshold! Composite score: <b>${compositeScore.toFixed(1)}</b>`,
+            });
           } else {
             toast.warning(`${cleanSymbol} Signal GATED 🔒`, {
               description: `Composite Score: ${compositeScore.toFixed(1)} fell below threshold.`,
               duration: 4000,
+            });
+            sendTelegramAlert.mutate({
+              message: `🔒 <b>Janus Signal Alert: ${cleanSymbol}</b>\n\nSignal fell below the gate threshold. Composite score: <b>${compositeScore.toFixed(1)}</b>`,
             });
           }
         }
