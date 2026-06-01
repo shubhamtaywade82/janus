@@ -1,11 +1,10 @@
-import WebSocket from "ws";
+import io from "socket.io-client";
 import { createHmac } from "crypto";
 import { getDb } from "../queries/connection";
-import { exchangeCredentials, positions, trades } from "@db/schema";
+import { exchangeCredentials, positions } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 
-let socket: WebSocket | null = null;
-let reconnectTimer: NodeJS.Timeout | null = null;
+let socket: any = null;
 
 // Generate signature for WebSocket Auth Handshake
 function generateWsSignature(secret: string, timestamp: number): string {
@@ -34,100 +33,85 @@ export async function initCoinDCXPrivateWs() {
   }
 
   const { apiKey, apiSecret } = creds[0];
-  const wsUrl = "wss://stream.coindcx.com"; // CoinDCX WebSocket stream endpoint
+  const wsUrl = "wss://stream.coindcx.com"; // CoinDCX Socket.io stream endpoint
 
   if (socket) {
-    socket.close();
+    socket.disconnect();
   }
 
-  console.log(`[coindcx-ws] Connecting to CoinDCX Private WS: ${wsUrl}`);
-  socket = new WebSocket(wsUrl);
+  console.log(`[coindcx-ws] Connecting to CoinDCX Private Socket.io v2: ${wsUrl}`);
+  
+  socket = io(wsUrl, {
+    transports: ["websocket"],
+    upgrade: false,
+    rejectUnauthorized: false
+  });
 
-  socket.on("open", () => {
-    console.log("[coindcx-ws] Socket connection opened. Authenticating...");
+  socket.on("connect", () => {
+    console.log("[coindcx-ws] Socket.io connection opened. Authenticating...");
     
     // Auth Handshake
     const timestamp = Date.now();
     const signature = generateWsSignature(apiSecret, timestamp);
 
-    const authMessage = {
-      event: "auth",
-      params: {
-        key: apiKey,
-        signature,
-        timestamp,
-      },
-    };
-
-    socket?.send(JSON.stringify(authMessage));
+    // CoinDCX socket.io join auth handshake
+    socket.emit("join", {
+      key: apiKey,
+      signature,
+      timestamp,
+    });
   });
 
-  socket.on("message", async (dataStr) => {
+  socket.on("joined", (response: any) => {
+    console.log("[coindcx-ws] Authenticated successfully via join event:", response);
+    
+    // Subscribe to execution reports / user orders
+    socket.emit("subscribe", {
+      channel: "user-orders"
+    });
+  });
+
+  // Handle incoming private ticks / execution reports
+  socket.on("user-orders", async (order: any) => {
     try {
-      const payload = JSON.parse(dataStr.toString());
-      console.log("[coindcx-ws] Received message:", payload);
+      console.log("[coindcx-ws] Received execution report:", order);
+      const exchangeOrderId = order.id;
+      const status = order.status; // e.g. "filled", "cancelled"
 
-      // Handle auth success
-      if (payload.event === "auth" && payload.status === "success") {
-        console.log("[coindcx-ws] Authenticated successfully. Subscribing to execution reports...");
+      if (status === "filled") {
+        const db = getDb();
         
-        // Subscribe to user execution reports/fills channel
-        const subMessage = {
-          event: "subscribe",
-          topic: "user-orders",
-        };
-        socket?.send(JSON.stringify(subMessage));
-      }
+        // Match position by exchangeOrderId
+        const matchedPositions = await db
+          .select()
+          .from(positions)
+          .where(eq(positions.exchangeOrderId, exchangeOrderId))
+          .limit(1);
 
-      // Handle order execution report / fill updates
-      if (payload.topic === "user-orders" && payload.data) {
-        const order = payload.data;
-        const exchangeOrderId = order.id;
-        const status = order.status; // e.g. "filled", "cancelled"
-
-        console.log(`[coindcx-ws] Execution Report - Order ${exchangeOrderId}: ${status}`);
-
-        // Update database position/trade records
-        if (status === "filled") {
-          const db = getDb();
+        if (matchedPositions && matchedPositions[0]) {
+          const pos = matchedPositions[0];
           
-          // Match by exchangeOrderId
-          const matchedPositions = await db
-            .select()
-            .from(positions)
-            .where(eq(positions.exchangeOrderId, exchangeOrderId))
-            .limit(1);
+          await db
+            .update(positions)
+            .set({
+              status: "open",
+              updatedAt: new Date(),
+            })
+            .where(eq(positions.id, pos.id));
 
-          if (matchedPositions && matchedPositions[0]) {
-            const pos = matchedPositions[0];
-            
-            // If it's a closing trade or status update
-            await db
-              .update(positions)
-              .set({
-                status: "open",
-                updatedAt: new Date(),
-              })
-              .where(eq(positions.id, pos.id));
-
-            console.log(`[coindcx-ws] Updated position ${pos.id} in DB.`);
-          }
+          console.log(`[coindcx-ws] Updated position ${pos.id} to open in DB.`);
         }
       }
     } catch (err) {
-      console.error("[coindcx-ws] Error parsing message:", err);
+      console.error("[coindcx-ws] Error handling user order tick:", err);
     }
   });
 
-  socket.on("error", (err) => {
-    console.error("[coindcx-ws] Private socket error:", err);
+  socket.on("error", (err: any) => {
+    console.error("[coindcx-ws] Socket.io private socket error:", err);
   });
 
-  socket.on("close", () => {
-    console.log("[coindcx-ws] Socket connection closed. Reconnecting in 5 seconds...");
-    if (reconnectTimer) clearTimeout(reconnectTimer);
-    reconnectTimer = setTimeout(() => {
-      initCoinDCXPrivateWs();
-    }, 5000);
+  socket.on("disconnect", (reason: string) => {
+    console.log(`[coindcx-ws] Socket.io disconnected. Reason: ${reason}. Will reconnect automatically.`);
   });
 }

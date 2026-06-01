@@ -3,7 +3,8 @@ import { createRouter, publicQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { positions, trades, exchangeCredentials } from "@db/schema";
 import { desc, eq, and } from "drizzle-orm";
-import { createFuturesOrder, getFuturesPositions, getCoinDCXTicker } from "../services/coindcx";
+import { createFuturesOrder, getFuturesPositions, getCoinDCXTicker, calculateLiquidationPrice } from "../services/coindcx";
+import { TRPCError } from "@trpc/server";
 
 export const tradingRouter = createRouter({
   // ─── Get all positions ───
@@ -141,6 +142,36 @@ export const tradingRouter = createRouter({
     )
     .mutation(async ({ input }) => {
       const db = getDb();
+
+      // 1. Leverage Cap check (10x maximum)
+      if (input.leverage > 10) {
+        throw new TRPCError({
+          code: "BAD_REQUEST",
+          message: "Leverage exceeds maximum allowed safety cap of 10x.",
+        });
+      }
+
+      // 2. Stop-Loss & Liquidation Price distance buffer check
+      if (input.stopLoss) {
+        const entry = parseFloat(input.entryPrice);
+        const stop = parseFloat(input.stopLoss);
+        const size = parseFloat(input.size);
+        const margin = parseFloat(input.margin);
+        
+        const liq = input.liquidationPrice 
+          ? parseFloat(input.liquidationPrice) 
+          : calculateLiquidationPrice(entry, margin, size, input.side, input.leverage);
+
+        const distLiq = Math.abs(entry - liq);
+        const distStop = Math.abs(entry - stop);
+
+        if (distLiq < 2 * distStop) {
+          throw new TRPCError({
+            code: "BAD_REQUEST",
+            message: "Risk buffer violation: Projected liquidation price distance must be at least twice the distance of the stop loss price relative to entry price.",
+          });
+        }
+      }
 
       // Check if user has saved CoinDCX credentials for live execution
       const creds = await db
