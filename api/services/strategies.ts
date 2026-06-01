@@ -1,4 +1,4 @@
-import { OrderBookMetrics, TradeTapeMetrics } from "./confluence";
+import type { OrderBookMetrics, TradeTapeMetrics } from "./confluence";
 
 // ─── Technical Indicators ───
 
@@ -207,7 +207,6 @@ export function evaluateGridStrategy(
 
   const high = Math.max(...prices.slice(-30));
   const low = Math.min(...prices.slice(-30));
-  const range = high - low;
   const mid = (high + low) / 2;
 
   // Grid works best in low volatility ranges
@@ -396,7 +395,7 @@ export function evaluateMLSizing(
 
 // 5. High-Frequency microstructure order book wall scalper
 export function evaluateScalpingMicro(
-  currentPrice: number,
+  _currentPrice: number,
   orderBook: OrderBookMetrics,
   tradeTape: TradeTapeMetrics,
   threshold = 65
