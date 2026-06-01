@@ -1,5 +1,7 @@
 import { z } from "zod";
+import { observable } from "@trpc/server/observable";
 import { createRouter, publicQuery } from "../middleware";
+import { subscribeToSymbol, unsubscribeFromSymbol, marketEvents } from "../services/streaming";
 import {
   fetchKlines,
   fetch24hTicker,
@@ -210,5 +212,69 @@ export const marketRouter = createRouter({
         .orderBy(desc(marketData.timestamp))
         .limit(input.limit);
       return rows.reverse();
+    }),
+
+  // ─── Order Book Subscription ───
+  orderBookStream: publicQuery
+    .input(z.object({ symbol: z.string().default("BTCUSDT") }))
+    .subscription(({ input }) => {
+      return observable((emit) => {
+        const symbol = input.symbol;
+        subscribeToSymbol(symbol);
+        const onData = (data: any) => emit.next(data);
+        marketEvents.on(`${symbol}:depth`, onData);
+        return () => {
+          marketEvents.off(`${symbol}:depth`, onData);
+          unsubscribeFromSymbol(symbol);
+        };
+      });
+    }),
+
+  // ─── Recent Trades Subscription ───
+  recentTradesStream: publicQuery
+    .input(z.object({ symbol: z.string().default("BTCUSDT") }))
+    .subscription(({ input }) => {
+      return observable((emit) => {
+        const symbol = input.symbol;
+        subscribeToSymbol(symbol);
+        const onData = (data: any) => emit.next(data);
+        marketEvents.on(`${symbol}:trade`, onData);
+        return () => {
+          marketEvents.off(`${symbol}:trade`, onData);
+          unsubscribeFromSymbol(symbol);
+        };
+      });
+    }),
+
+  // ─── Ticker Subscription ───
+  tickerStream: publicQuery
+    .input(z.object({ symbol: z.string().default("BTCUSDT") }))
+    .subscription(({ input }) => {
+      return observable((emit) => {
+        const symbol = input.symbol;
+        subscribeToSymbol(symbol);
+        const onData = (data: any) => emit.next(data);
+        marketEvents.on(`${symbol}:ticker`, onData);
+        return () => {
+          marketEvents.off(`${symbol}:ticker`, onData);
+          unsubscribeFromSymbol(symbol);
+        };
+      });
+    }),
+
+  // ─── Kline Subscription ───
+  klineStream: publicQuery
+    .input(z.object({ symbol: z.string().default("BTCUSDT") }))
+    .subscription(({ input }) => {
+      return observable((emit) => {
+        const symbol = input.symbol;
+        subscribeToSymbol(symbol);
+        const onData = (data: any) => emit.next(data);
+        marketEvents.on(`${symbol}:kline`, onData);
+        return () => {
+          marketEvents.off(`${symbol}:kline`, onData);
+          unsubscribeFromSymbol(symbol);
+        };
+      });
     }),
 });

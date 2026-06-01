@@ -26,8 +26,19 @@ function MiniChart({ data }: { data: KlineData[] }) {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
 
+  const chartRef = useRef<any>(null);
+  const candlestickSeriesRef = useRef<any>(null);
+  const volumeSeriesRef = useRef<any>(null);
+  const dataRef = useRef<KlineData[]>(data);
+
+  // Keep dataRef updated
   useEffect(() => {
-    if (!chartContainerRef.current || data.length === 0) return;
+    dataRef.current = data;
+  }, [data]);
+
+  // 1. Initialize Chart instance once
+  useEffect(() => {
+    if (!chartContainerRef.current) return;
 
     const container = chartContainerRef.current;
 
@@ -66,6 +77,7 @@ function MiniChart({ data }: { data: KlineData[] }) {
       width: container.clientWidth,
       height: container.clientHeight || 450,
     });
+    chartRef.current = chart;
 
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
       upColor: "#0ecb81",
@@ -75,6 +87,7 @@ function MiniChart({ data }: { data: KlineData[] }) {
       wickUpColor: "#0ecb81",
       wickDownColor: "#f6465d",
     });
+    candlestickSeriesRef.current = candlestickSeries;
 
     const volumeSeries = chart.addSeries(HistogramSeries, {
       priceFormat: {
@@ -82,7 +95,8 @@ function MiniChart({ data }: { data: KlineData[] }) {
       },
       priceScaleId: "", // Overlay on the main pane
     });
-    
+    volumeSeriesRef.current = volumeSeries;
+
     // Scale volume pane down
     volumeSeries.priceScale().applyOptions({
       scaleMargins: {
@@ -91,34 +105,9 @@ function MiniChart({ data }: { data: KlineData[] }) {
       },
     });
 
-    // Format data
-    const chartData = data.map((d) => {
-      const time = (d.openTime / 1000) as UTCTimestamp;
-      return {
-        time,
-        open: parseFloat(d.open),
-        high: parseFloat(d.high),
-        low: parseFloat(d.low),
-        close: parseFloat(d.close),
-      };
-    });
-
-    const volumeData = data.map((d) => {
-      const time = (d.openTime / 1000) as UTCTimestamp;
-      const open = parseFloat(d.open);
-      const close = parseFloat(d.close);
-      return {
-        time,
-        value: parseFloat(d.volume),
-        color: close >= open ? "rgba(14, 203, 129, 0.15)" : "rgba(246, 70, 93, 0.15)",
-      };
-    });
-
-    candlestickSeries.setData(chartData);
-    volumeSeries.setData(volumeData);
-
     // Sync HUD with crosshair movement
     chart.subscribeCrosshairMove((param) => {
+      const currentData = dataRef.current;
       if (
         !param.time ||
         param.point === undefined ||
@@ -126,7 +115,7 @@ function MiniChart({ data }: { data: KlineData[] }) {
         param.point.y < 0
       ) {
         // Show latest data if cursor is out of bounds
-        const last = data[data.length - 1];
+        const last = currentData[currentData.length - 1];
         if (last) {
           const o = parseFloat(last.open);
           const c = parseFloat(last.close);
@@ -165,6 +154,54 @@ function MiniChart({ data }: { data: KlineData[] }) {
       }
     });
 
+    // Resize handler
+    const handleResize = () => {
+      chart.applyOptions({
+        width: container.clientWidth,
+        height: container.clientHeight,
+      });
+    };
+
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(container);
+
+    return () => {
+      resizeObserver.disconnect();
+      chart.remove();
+      chartRef.current = null;
+    };
+  }, []);
+
+  // 2. Update Data when data props change (without destroying chart)
+  useEffect(() => {
+    if (!candlestickSeriesRef.current || !volumeSeriesRef.current || data.length === 0) return;
+
+    // Format data
+    const chartData = data.map((d) => {
+      const time = (d.openTime / 1000) as UTCTimestamp;
+      return {
+        time,
+        open: parseFloat(d.open),
+        high: parseFloat(d.high),
+        low: parseFloat(d.low),
+        close: parseFloat(d.close),
+      };
+    });
+
+    const volumeData = data.map((d) => {
+      const time = (d.openTime / 1000) as UTCTimestamp;
+      const open = parseFloat(d.open);
+      const close = parseFloat(d.close);
+      return {
+        time,
+        value: parseFloat(d.volume),
+        color: close >= open ? "rgba(14, 203, 129, 0.15)" : "rgba(246, 70, 93, 0.15)",
+      };
+    });
+
+    candlestickSeriesRef.current.setData(chartData);
+    volumeSeriesRef.current.setData(volumeData);
+
     // Initial HUD data
     const last = data[data.length - 1];
     if (last) {
@@ -183,24 +220,10 @@ function MiniChart({ data }: { data: KlineData[] }) {
       });
     }
 
-    // Resize handler
-    const handleResize = () => {
-      chart.applyOptions({
-        width: container.clientWidth,
-        height: container.clientHeight,
-      });
-    };
-
-    const resizeObserver = new ResizeObserver(handleResize);
-    resizeObserver.observe(container);
-
-    // Fit content on initial load
-    chart.timeScale().fitContent();
-
-    return () => {
-      resizeObserver.disconnect();
-      chart.remove();
-    };
+    // Fit content on initial load only
+    if (chartRef.current) {
+      chartRef.current.timeScale().fitContent();
+    }
   }, [data]);
 
   return (
@@ -241,13 +264,28 @@ function MiniChart({ data }: { data: KlineData[] }) {
 
 // ─── Order Book Component ───
 function OrderBook({ symbol }: { symbol: string }) {
-  const { data: depth } = trpc.market.orderBook.useQuery(
+  const [depth, setDepth] = useState<any>(null);
+
+  const { data: initialDepth } = trpc.market.orderBook.useQuery(
     { symbol, limit: 20 },
-    { refetchInterval: 2000 }
+    { staleTime: Infinity }
   );
 
-  const bids = depth && "bids" in depth ? depth.bids.slice(0, 10).reverse() : [];
-  const asks = depth && "asks" in depth ? depth.asks.slice(0, 10) : [];
+  useEffect(() => {
+    if (initialDepth) setDepth(initialDepth);
+  }, [initialDepth, symbol]);
+
+  trpc.market.orderBookStream.useSubscription(
+    { symbol },
+    {
+      onData(data) {
+        setDepth(data);
+      },
+    }
+  );
+
+  const bids = (depth && "bids" in depth ? depth.bids.slice(0, 10).reverse() : []) as [string, string][];
+  const asks = (depth && "asks" in depth ? depth.asks.slice(0, 10) : []) as [string, string][];
 
   const maxBidSize = Math.max(...bids.map(([, q]) => parseFloat(q)), 1);
   const maxAskSize = Math.max(...asks.map(([, q]) => parseFloat(q)), 1);
@@ -323,9 +361,24 @@ function OrderBook({ symbol }: { symbol: string }) {
 
 // ─── Recent Trades Component ───
 function RecentTrades({ symbol }: { symbol: string }) {
-  const { data: trades } = trpc.market.recentTrades.useQuery(
+  const [trades, setTrades] = useState<any[]>([]);
+
+  const { data: initialTrades } = trpc.market.recentTrades.useQuery(
     { symbol, limit: 20 },
-    { refetchInterval: 3000 }
+    { staleTime: Infinity }
+  );
+
+  useEffect(() => {
+    if (initialTrades) setTrades(initialTrades);
+  }, [initialTrades, symbol]);
+
+  trpc.market.recentTradesStream.useSubscription(
+    { symbol },
+    {
+      onData(trade) {
+        setTrades((prev) => [trade, ...prev].slice(0, 20));
+      },
+    }
   );
 
   return (
@@ -363,12 +416,40 @@ function RecentTrades({ symbol }: { symbol: string }) {
 
 // ─── Ticker Strip ───
 function TickerStrip() {
-  const { data: tickers } = trpc.market.ticker24h.useQuery(
+  const [tickersMap, setTickersMap] = useState<Record<string, any>>({});
+
+  const { data: initialTickers } = trpc.market.ticker24h.useQuery(
     {},
-    { refetchInterval: 5000 }
+    { staleTime: Infinity }
   );
 
-  const tickerList = Array.isArray(tickers) ? tickers.slice(0, 8) : [];
+  useEffect(() => {
+    if (Array.isArray(initialTickers)) {
+      const map: Record<string, any> = {};
+      for (const t of initialTickers) {
+        map[t.symbol] = t;
+      }
+      setTickersMap(map);
+    }
+  }, [initialTickers]);
+
+  const supportedSymbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
+
+  for (const symbol of supportedSymbols) {
+    trpc.market.tickerStream.useSubscription(
+      { symbol },
+      {
+        onData(data) {
+          setTickersMap((prev) => ({
+            ...prev,
+            [symbol]: data,
+          }));
+        },
+      }
+    );
+  }
+
+  const tickerList = supportedSymbols.map((s) => tickersMap[s]).filter(Boolean);
 
   return (
     <div className="flex items-center gap-6 px-4 py-1.5 border-b border-[#27272a] bg-[#09090b] overflow-x-auto scrollbar-thin">
@@ -401,14 +482,55 @@ export default function Dashboard() {
   const [leverage, setLeverage] = useState(1);
   const [orderSize, setOrderSize] = useState("");
 
-  const { data: klines } = trpc.market.klines.useQuery(
+  const [klines, setKlines] = useState<KlineData[]>([]);
+  const [ticker, setTicker] = useState<any>(null);
+
+  const { data: initialKlines } = trpc.market.klines.useQuery(
     { symbol: selectedSymbol, interval, limit: 150 },
-    { refetchInterval: 5000 }
+    { staleTime: Infinity }
   );
 
-  const { data: ticker } = trpc.market.ticker24h.useQuery(
+  const { data: initialTicker } = trpc.market.ticker24h.useQuery(
     { symbol: selectedSymbol },
-    { refetchInterval: 3000 }
+    { staleTime: Infinity }
+  );
+
+  useEffect(() => {
+    if (initialKlines) setKlines(initialKlines);
+  }, [initialKlines, selectedSymbol, interval]);
+
+  useEffect(() => {
+    if (initialTicker && !Array.isArray(initialTicker)) {
+      setTicker(initialTicker);
+    }
+  }, [initialTicker, selectedSymbol]);
+
+  trpc.market.klineStream.useSubscription(
+    { symbol: selectedSymbol },
+    {
+      onData(data: any) {
+        const kline = data as KlineData;
+        setKlines((prev) => {
+          if (prev.length === 0) return [kline];
+          const last = prev[prev.length - 1];
+          if (last.openTime === kline.openTime) {
+            return [...prev.slice(0, -1), kline];
+          } else if (kline.openTime > last.openTime) {
+            return [...prev, kline].slice(-150);
+          }
+          return prev;
+        });
+      },
+    }
+  );
+
+  trpc.market.tickerStream.useSubscription(
+    { symbol: selectedSymbol },
+    {
+      onData(data) {
+        setTicker(data);
+      },
+    }
   );
 
   const createPosition = trpc.trading.createPosition.useMutation();

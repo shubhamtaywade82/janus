@@ -2,6 +2,8 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import type { HttpBindings } from "@hono/node-server";
 import { fetchRequestHandler } from "@trpc/server/adapters/fetch";
+import { WebSocketServer } from "ws";
+import { applyWSSHandler } from "@trpc/server/adapters/ws";
 import { appRouter } from "./router";
 import { createContext } from "./context";
 import { env } from "./lib/env";
@@ -77,10 +79,32 @@ app.get("*", async (c, next) => {
 
 export default app;
 
+// Setup WS Server context creator
+const createContextWSS = (opts: any) => {
+  return {
+    req: opts.req,
+    resHeaders: new Headers(),
+  };
+};
+
+// Setup WS Server in Development
+if (!env.isProduction) {
+  const globalWss = globalThis as any;
+  if (!globalWss.wss) {
+    globalWss.wss = new WebSocketServer({ port: 3004 });
+    applyWSSHandler({ wss: globalWss.wss, router: appRouter, createContext: createContextWSS });
+    console.log(`[ws] Dev WebSocket Server running on ws://localhost:3004`);
+  }
+}
+
 if (env.isProduction) {
   const { serve } = await import("@hono/node-server");
   const port = parseInt(process.env.PORT || "3000");
-  serve({ fetch: app.fetch, port }, () => {
+  const server = serve({ fetch: app.fetch, port }, () => {
     console.log(`Server running on http://localhost:${port}/`);
   });
+
+  const wss = new WebSocketServer({ server: server as any });
+  applyWSSHandler({ wss, router: appRouter, createContext: createContextWSS });
+  console.log(`[ws] Production WebSocket Server attached to HTTP port ${port}`);
 }
