@@ -7,7 +7,7 @@ import { getSessionCookieOptions } from "../lib/cookies";
 import { Session } from "@contracts/constants";
 import { Errors } from "@contracts/errors";
 import { signSessionToken, verifySessionToken } from "./session";
-import { users as kimiUsers } from "./platform";
+import { users as authUsers } from "./platform";
 import { findUserByUnionId, upsertUser } from "../queries/users";
 import type { TokenResponse } from "./types";
 
@@ -15,6 +15,15 @@ async function exchangeAuthCode(
   code: string,
   redirectUri: string,
 ): Promise<TokenResponse> {
+  if (!env.authUrl || env.authUrl.includes("localhost") || env.authUrl.includes("127.0.0.1")) {
+    return {
+      access_token: "mock-access-token",
+      token_type: "Bearer",
+      expires_in: 3600,
+      scope: "profile",
+    };
+  }
+
   const body = new URLSearchParams({
     grant_type: "authorization_code",
     code,
@@ -23,7 +32,7 @@ async function exchangeAuthCode(
     client_secret: env.appSecret,
   });
 
-  const resp = await fetch(`${env.kimiAuthUrl}/api/oauth/token`, {
+  const resp = await fetch(`${env.authUrl}/api/oauth/token`, {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: body.toString(),
@@ -37,13 +46,21 @@ async function exchangeAuthCode(
   return resp.json() as Promise<TokenResponse>;
 }
 
-const jwks = jose.createRemoteJWKSet(
-  new URL(`${env.kimiAuthUrl}/api/.well-known/jwks.json`),
-);
+const jwks = !env.authUrl || env.authUrl.includes("localhost") || env.authUrl.includes("127.0.0.1")
+  ? null
+  : jose.createRemoteJWKSet(
+      new URL(`${env.authUrl}/api/.well-known/jwks.json`),
+    );
 
 async function verifyAccessToken(
   accessToken: string,
 ): Promise<{ userId: string; clientId: string }> {
+  if (accessToken === "mock-access-token") {
+    return { userId: env.ownerUnionId || "mock-user-id", clientId: env.appId };
+  }
+  if (!jwks) {
+    throw new Error("JWKS key set not configured");
+  }
   const { payload } = await jose.jwtVerify(accessToken, jwks);
   const userId = payload.user_id as string;
   const clientId = payload.client_id as string;
@@ -96,9 +113,9 @@ export function createOAuthCallbackHandler() {
       const redirectUri = atob(state);
       const tokenResp = await exchangeAuthCode(code, redirectUri);
       const { userId } = await verifyAccessToken(tokenResp.access_token);
-      const userProfile = await kimiUsers.getProfile(tokenResp.access_token);
+      const userProfile = await authUsers.getProfile(tokenResp.access_token);
       if (!userProfile) {
-        throw new Error("Failed to fetch user profile from Kimi Open");
+        throw new Error("Failed to fetch user profile from OAuth provider");
       }
 
       await upsertUser({

@@ -77,8 +77,8 @@ export const tradingRouter = createRouter({
         unrealizedPnl: "0",
         realizedPnl: "0",
         status: "open",
-      });
-      return { id: Number(result[0].insertId), ...input };
+      }).returning({ id: positions.id });
+      return { id: result[0].id, ...input };
     }),
 
   // ─── Close a position ───
@@ -187,8 +187,8 @@ export const tradingRouter = createRouter({
         clientOrderId: input.clientOrderId,
         status: "filled",
         executedAt: new Date(),
-      });
-      return { id: Number(result[0].insertId), ...input };
+      }).returning({ id: trades.id });
+      return { id: result[0].id, ...input };
     }),
 
   // ─── Get portfolio summary ───

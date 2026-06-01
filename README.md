@@ -1,73 +1,167 @@
-# React + TypeScript + Vite
+# Janus: Advanced Trading Dashboard & Execution Engine
 
-This template provides a minimal setup to get React working in Vite with HMR and some ESLint rules.
+Janus is a full-stack algorithmic trading dashboard and execution engine. It provides high-performance real-time market data visualization, order book analysis, portfolio/position tracking, confluence scoring, and automated trade execution.
 
-Currently, two official plugins are available:
+Built on a unified modern stack utilizing Hono, Vite, React, TypeScript, and Drizzle ORM.
 
-- [@vitejs/plugin-react](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react) uses [Babel](https://babeljs.io/) (or [oxc](https://oxc.rs) when used in [rolldown-vite](https://vite.dev/guide/rolldown)) for Fast Refresh
-- [@vitejs/plugin-react-swc](https://github.com/vitejs/vite-plugin-react/blob/main/packages/plugin-react-swc) uses [SWC](https://swc.rs/) for Fast Refresh
+---
 
-## React Compiler
+## Architecture Overview
 
-The React Compiler is not enabled on this template because of its impact on dev & build performances. To add it, see [this documentation](https://react.dev/learn/react-compiler/installation).
+```mermaid
+graph TD
+    subgraph Frontend (Vite + React + TS)
+        UI[Dashboard / Market / Trading UI]
+        TRPC_Client[tRPC Client]
+        UI --> TRPC_Client
+    end
 
-## Expanding the ESLint configuration
+    subgraph Backend (Hono + Node Server)
+        API[Hono HTTP & WebSocket Server]
+        TRPC_Server[tRPC Router]
+        Auth[OAuth & Session Middleware]
+        
+        API --> TRPC_Server
+        API --> Auth
+    end
 
-If you are developing a production application, we recommend updating the configuration to enable type-aware lint rules:
+    subgraph Database
+        DB[(MySQL Database)]
+        Drizzle[Drizzle ORM]
+    end
 
-```js
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-
-      // Remove tseslint.configs.recommended and replace with this
-      tseslint.configs.recommendedTypeChecked,
-      // Alternatively, use this for stricter rules
-      tseslint.configs.strictTypeChecked,
-      // Optionally, add this for stylistic rules
-      tseslint.configs.stylisticTypeChecked,
-
-      // Other configs...
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+    TRPC_Client -->|tRPC Over HTTP| API
+    TRPC_Server --> Drizzle
+    Drizzle --> DB
 ```
 
-You can also install [eslint-plugin-react-x](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-x) and [eslint-plugin-react-dom](https://github.com/Rel1cx/eslint-react/tree/main/packages/plugins/eslint-plugin-react-dom) for React-specific lint rules:
+### Stack Components
 
-```js
-// eslint.config.js
-import reactX from 'eslint-plugin-react-x'
-import reactDom from 'eslint-plugin-react-dom'
+1. **Frontend**: React, TypeScript, Vite, Tailwind CSS, shadcn/ui.
+2. **Backend**: Hono, Node Server, tRPC (fetch adapter) for type-safe API communication.
+3. **Database**: MySQL managed with Drizzle ORM.
+4. **Authentication**: Generic OAuth workflow for user authorization, and JWT/Cookie-based session persistence.
 
-export default defineConfig([
-  globalIgnores(['dist']),
-  {
-    files: ['**/*.{ts,tsx}'],
-    extends: [
-      // Other configs...
-      // Enable lint rules for React
-      reactX.configs['recommended-typescript'],
-      // Enable lint rules for React DOM
-      reactDom.configs.recommended,
-    ],
-    languageOptions: {
-      parserOptions: {
-        project: ['./tsconfig.node.json', './tsconfig.app.json'],
-        tsconfigRootDir: import.meta.dirname,
-      },
-      // other options...
-    },
-  },
-])
+---
+
+## Directory Structure
+
+```text
+├── api/                  # Backend code
+│   ├── boot.ts           # Server entry point (serves API & Static client)
+│   ├── router.ts         # Main tRPC router
+│   ├── context.ts        # tRPC request context resolver
+│   ├── middleware.ts     # Public/Private tRPC procedures & CORS config
+│   ├── oauth/            # Platform-agnostic OAuth flow & session managers
+│   ├── routers/          # Domain-specific routers (market, trading, signal, etc.)
+│   ├── services/         # Core business logic/service layer
+│   └── lib/              # Shared helper libraries (env, cookies, encryption)
+├── contracts/            # Common type contracts and constant declarations
+├── db/                   # Database schemas and Drizzle migrations
+│   ├── schema.ts         # MySQL table definitions
+│   └── migrations/       # Generated SQL migrations
+├── src/                  # React Frontend application
+│   ├── components/       # shadcn/ui elements
+│   ├── hooks/            # Custom React hooks (trpc integration)
+│   ├── pages/            # View pages (Login, Dashboard, Market, etc.)
+│   ├── main.tsx          # Frontend entry point
+│   └── index.css         # Global tailwind styles
+└── contracts/            # Client-server shared constants & types
 ```
+
+---
+
+## Setup & Installation
+
+### 1. Prerequisites
+- **Node.js**: `v20` or higher
+- **Package Manager**: `npm`
+- **Database**: A running MySQL database instance
+
+### 2. Install Dependencies
+Clone the repository and install the npm packages:
+```bash
+npm install
+```
+
+### 3. Environment Variables
+Create a `.env` file in the root directory by copying the example file:
+```bash
+cp .env.example .env
+```
+
+Fill in the required configurations:
+```ini
+# ── Backend ─────────────────────────────────────────────────────
+APP_ID=your-app-id
+APP_SECRET=your-app-secret-jwt-key
+
+# ── Database ───────────────────────────────────────────────────
+DATABASE_URL=mysql://user:password@127.0.0.1:3306/janus
+
+# ── Frontend (exposed to browser via Vite) ──────────────────────
+VITE_AUTH_URL=https://auth.example.com
+VITE_APP_ID=your-app-id
+
+# ── Backend (Auth) ─────────────────────────────────────────────
+AUTH_URL=https://auth.example.com
+AUTH_PLATFORM_URL=https://open.example.com
+
+# ── Admin Role ──────────────────────────────────────────────────
+OWNER_UNION_ID=admin-union-id
+```
+
+### 4. Database Setup
+Push the Drizzle schemas to your MySQL database:
+```bash
+# Push schema changes directly
+npm run db:push
+
+# Or generate and run migrations
+npm run db:generate
+npm run db:migrate
+```
+
+---
+
+## Usage & Development
+
+### Run Development Server
+Start the unified backend dev server and Vite compilation process:
+```bash
+npm run dev
+```
+The application will be accessible at `http://localhost:3000`.
+
+### Running Tests
+Execute test suites with Vitest:
+```bash
+npm run test
+```
+
+### Linting & Formatting
+```bash
+# Run ESLint check
+npm run lint
+
+# Format codebase with Prettier
+npm run format
+```
+
+---
+
+## Production Deployment
+
+### Build the Application
+To build both the React frontend bundle and the Hono API node server:
+```bash
+npm run build
+```
+The production bundle will be created in the `dist/` directory.
+
+### Start Production Server
+Run the compiled server:
+```bash
+npm start
+```
+The server will boot and serve the client bundles as static pages along with API endpoints under `/api`.

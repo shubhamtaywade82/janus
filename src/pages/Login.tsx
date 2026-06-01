@@ -2,12 +2,12 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
 function getOAuthUrl() {
-  const kimiAuthUrl = import.meta.env.VITE_KIMI_AUTH_URL;
+  const authUrl = import.meta.env.VITE_AUTH_URL || window.location.origin;
   const appID = import.meta.env.VITE_APP_ID;
   const redirectUri = `${window.location.origin}/api/oauth/callback`;
   const state = btoa(redirectUri);
 
-  const url = new URL(`${kimiAuthUrl}/api/oauth/authorize`);
+  const url = new URL(`${authUrl}/api/oauth/authorize`);
   url.searchParams.set("client_id", appID);
   url.searchParams.set("redirect_uri", redirectUri);
   url.searchParams.set("response_type", "code");
@@ -32,7 +32,7 @@ export default function Login() {
               window.location.href = getOAuthUrl();
             }}
           >
-            Sign in with Kimi
+            Sign in
           </Button>
         </CardContent>
       </Card>

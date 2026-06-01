@@ -21,7 +21,7 @@ const navItems = [
 
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
-  const { user, logout } = useAuth();
+  const { user, logout } = useAuth({ redirectOnUnauthenticated: true });
 
   return (
     <div className="flex h-screen w-screen bg-[#09090b] text-[#f4f4f5] overflow-hidden">
