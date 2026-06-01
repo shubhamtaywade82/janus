@@ -13,7 +13,14 @@ export const userPositionsCache = new Map<number, any[]>();
 
 let socket: any = null;
 
-// Generate signature for WebSocket Auth Handshake
+// CoinDCX sends { event: string, data: "<JSON string>" } — double-serialized
+const parseWsEvent = (response: any): any => {
+  if (typeof response?.data === "string") {
+    try { return JSON.parse(response.data); } catch { return response; }
+  }
+  return response?.data ?? response;
+};
+
 function generateWsSignature(secret: string, body: Record<string, any>): string {
   const payload = JSON.stringify(body);
   return createHmac("sha256", secret).update(payload).digest("hex");
@@ -73,15 +80,11 @@ export async function initCoinDCXPrivateWs() {
     console.log("[coindcx-ws] Authenticated successfully joined 'coindcx' channel:", response);
   });
 
-  // Handle incoming private ticks / position updates
-  socket.on("df-position-update", (data: any) => {
-    console.log("[coindcx-ws] Received df-position-update:", data);
-    const posList = Array.isArray(data)
-      ? data
-      : (data && Array.isArray(data.data) ? data.data : null);
-
-    if (posList) {
-      // Merge into cache: update matching pairs, keep others
+  socket.on("df-position-update", (raw: any) => {
+    const parsed = parseWsEvent(raw);
+    const posList: any[] = Array.isArray(parsed) ? parsed : (parsed?.data ?? []);
+    console.log(`[coindcx-ws] df-position-update: ${posList.length} positions`);
+    if (posList.length > 0) {
       const existing = userPositionsCache.get(1) || [];
       const updated = [...existing];
       for (const p of posList) {
@@ -94,18 +97,16 @@ export async function initCoinDCXPrivateWs() {
     tradingEvents.emit("portfolio-update:1");
   });
 
-  // Handle incoming private order updates
-  socket.on("df-order-update", (data: any) => {
-    console.log("[coindcx-ws] Received df-order-update:", data);
+  socket.on("df-order-update", (raw: any) => {
+    const parsed = parseWsEvent(raw);
+    console.log("[coindcx-ws] df-order-update:", JSON.stringify(parsed).slice(0, 200));
     tradingEvents.emit("portfolio-update:1");
   });
 
-  // Handle incoming balance updates
-  socket.on("balance-update", async (response: any) => {
-    console.log("[coindcx-ws] Received balance-update:", response);
-    const balanceList = Array.isArray(response)
-      ? response
-      : (response && Array.isArray(response.data) ? response.data : null);
+  socket.on("balance-update", async (raw: any) => {
+    const parsed = parseWsEvent(raw);
+    const balanceList: any[] = Array.isArray(parsed) ? parsed : (parsed?.data ?? []);
+    console.log(`[coindcx-ws] balance-update: ${balanceList.length} entries`, balanceList.map((b: any) => `${b.currency_short_name}=${b.balance}`));
 
     if (balanceList) {
       userBalancesCache.set(1, balanceList);
