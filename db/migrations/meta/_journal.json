@@ -15,6 +15,13 @@
       "when": 1780299790770,
       "tag": "0001_dizzy_wendigo",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1780320614695,
+      "tag": "0002_fantastic_praxagora",
+      "breakpoints": true
     }
   ]
 }

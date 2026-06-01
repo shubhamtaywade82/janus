@@ -613,9 +613,18 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
     if (initialDepth) setDepth(initialDepth);
   }, [initialDepth, symbol]);
 
+  const onDataRef = useRef((data: any) => setDepth(data));
+  useEffect(() => {
+    onDataRef.current = (data: any) => setDepth(data);
+  }, []);
+
+  const streamOpts = useRef({
+    onData: (data: any) => onDataRef.current(data),
+  });
+
   trpc.market.orderBookStream.useSubscription(
     { symbol },
-    { onData: (data) => setDepth(data) }
+    streamOpts.current
   );
 
   // Pair bids[i] with asks[i] side-by-side — both sorted best first
@@ -737,13 +746,22 @@ const RecentTrades = ({ symbol }: { symbol: string }) => {
     if (initialTrades) setTrades(initialTrades);
   }, [initialTrades, symbol]);
 
+  const onDataRef = useRef((trade: any) => {
+    setTrades((prev) => [trade, ...prev].slice(0, 20));
+  });
+  useEffect(() => {
+    onDataRef.current = (trade: any) => {
+      setTrades((prev) => [trade, ...prev].slice(0, 20));
+    };
+  }, []);
+
+  const streamOpts = useRef({
+    onData: (trade: any) => onDataRef.current(trade),
+  });
+
   trpc.market.recentTradesStream.useSubscription(
     { symbol },
-    {
-      onData(trade) {
-        setTrades((prev) => [trade, ...prev].slice(0, 20));
-      },
-    }
+    streamOpts.current
   );
 
   return (
@@ -779,6 +797,29 @@ const RecentTrades = ({ symbol }: { symbol: string }) => {
   );
 }
 
+// ─── Helper Ticker Stream Subscriber Component ───
+const TickerStreamSubscriber = ({
+  symbol,
+  onUpdate,
+}: {
+  symbol: string;
+  onUpdate: (symbol: string, data: any) => void;
+}) => {
+  const onDataRef = useRef((data: any) => {
+    onUpdate(symbol, data);
+  });
+  useEffect(() => {
+    onDataRef.current = (data: any) => onUpdate(symbol, data);
+  }, [onUpdate, symbol]);
+
+  const opts = useRef({
+    onData: (data: any) => onDataRef.current(data),
+  });
+
+  trpc.market.tickerStream.useSubscription({ symbol }, opts.current);
+  return null;
+};
+
 // ─── Ticker Strip ───
 const TickerStrip = () => {
   const [tickersMap, setTickersMap] = useState<Record<string, any>>({});
@@ -800,24 +841,20 @@ const TickerStrip = () => {
 
   const supportedSymbols = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT"];
 
-  for (const symbol of supportedSymbols) {
-    trpc.market.tickerStream.useSubscription(
-      { symbol },
-      {
-        onData(data) {
-          setTickersMap((prev) => ({
-            ...prev,
-            [symbol]: data,
-          }));
-        },
-      }
-    );
-  }
+  const handleTickerUpdate = useCallback((symbol: string, data: any) => {
+    setTickersMap((prev) => ({
+      ...prev,
+      [symbol]: data,
+    }));
+  }, []);
 
   const tickerList = supportedSymbols.map((s) => tickersMap[s]).filter(Boolean);
 
   return (
     <div className="flex items-center gap-6 px-4 py-1.5 border-b border-[#27272a] bg-[#09090b] overflow-x-auto scrollbar-thin">
+      {supportedSymbols.map((symbol) => (
+        <TickerStreamSubscriber key={symbol} symbol={symbol} onUpdate={handleTickerUpdate} />
+      ))}
       {tickerList.map((t: any) => (
         <div key={t.symbol} className="flex items-center gap-2 flex-shrink-0">
           <span className="text-[10px] text-[#71717a] font-medium">{t.symbol}</span>
@@ -904,34 +941,47 @@ const Dashboard = () => {
     }
   }, [initialTicker, selectedSymbol]);
 
+  const klineCallbackRef = useRef<(data: any) => void>(() => {});
+  useEffect(() => {
+    klineCallbackRef.current = (data: any) => {
+      if (interval !== "1m") return;
+      const kline = data as KlineData;
+      setKlines((prev) => {
+        if (prev.length === 0) return [kline];
+        const last = prev[prev.length - 1];
+        if (last.openTime === kline.openTime) {
+          return [...prev.slice(0, -1), kline];
+        } else if (kline.openTime > last.openTime) {
+          return [...prev, kline].slice(-150);
+        }
+        return prev;
+      });
+    };
+  }, [interval]);
+
+  const klineStreamOpts = useRef({
+    onData: (data: any) => klineCallbackRef.current(data),
+  });
+
   trpc.market.klineStream.useSubscription(
     { symbol: selectedSymbol },
-    {
-      onData(data: any) {
-        // Stream is hardcoded 1m — only patch chart on 1m interval
-        if (interval !== "1m") return;
-        const kline = data as KlineData;
-        setKlines((prev) => {
-          if (prev.length === 0) return [kline];
-          const last = prev[prev.length - 1];
-          if (last.openTime === kline.openTime) {
-            return [...prev.slice(0, -1), kline];
-          } else if (kline.openTime > last.openTime) {
-            return [...prev, kline].slice(-150);
-          }
-          return prev;
-        });
-      },
-    }
+    klineStreamOpts.current
   );
+
+  const tickerCallbackRef = useRef<(data: any) => void>(() => {});
+  useEffect(() => {
+    tickerCallbackRef.current = (data: any) => {
+      setTicker(data);
+    };
+  }, []);
+
+  const tickerStreamOpts = useRef({
+    onData: (data: any) => tickerCallbackRef.current(data),
+  });
 
   trpc.market.tickerStream.useSubscription(
     { symbol: selectedSymbol },
-    {
-      onData(data) {
-        setTicker(data);
-      },
-    }
+    tickerStreamOpts.current
   );
 
   // Fetch portfolio for open positions
@@ -946,13 +996,20 @@ const Dashboard = () => {
     }
   }, [initialPortfolio]);
 
+  const portfolioCallbackRef = useRef<(data: any) => void>(() => {});
+  useEffect(() => {
+    portfolioCallbackRef.current = (data: any) => {
+      setPortfolio(data);
+    };
+  }, []);
+
+  const portfolioStreamOpts = useRef({
+    onData: (data: any) => portfolioCallbackRef.current(data),
+  });
+
   trpc.trading.portfolioStream.useSubscription(
     { userId: 1 },
-    {
-      onData: (data: any) => {
-        setPortfolio(data);
-      },
-    }
+    portfolioStreamOpts.current
   );
 
   const openPositions = portfolio?.positions || [];

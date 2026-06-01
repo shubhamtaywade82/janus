@@ -148,7 +148,6 @@ export function subscribeToSymbol(symbol: string) {
         const now = Date.now();
         if (now - lastDbSave.kline > 5000) {
           lastDbSave.kline = now;
-          const db = getDb();
           await db.insert(marketData).values({
             symbol,
             timeframe: k.i,
@@ -160,7 +159,22 @@ export function subscribeToSymbol(symbol: string) {
             volume: k.v,
             quoteVolume: k.q,
             tradeCount: k.n,
-          }).catch(() => {});
+          })
+          .onConflictDoUpdate({
+            target: [marketData.symbol, marketData.timeframe, marketData.timestamp],
+            set: {
+              open: k.o,
+              high: k.h,
+              low: k.l,
+              close: k.c,
+              volume: k.v,
+              quoteVolume: k.q,
+              tradeCount: k.n,
+            }
+          })
+          .catch((err) => {
+            console.error("[streaming] DB upsert failed:", err);
+          });
         }
       }
     } catch (err) {

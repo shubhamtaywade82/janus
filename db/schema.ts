@@ -9,6 +9,8 @@ import {
   integer,
   jsonb,
   boolean,
+  index,
+  unique,
 } from "drizzle-orm/pg-core";
 
 // ─── Enums (PostgreSQL custom types) ───
@@ -44,20 +46,27 @@ export type User = typeof users.$inferSelect;
 export type InsertUser = typeof users.$inferInsert;
 
 // ─── Market Data (OHLC Candlesticks) ───
-export const marketData = pgTable("market_data", {
-  id: serial("id").primaryKey(),
-  symbol: varchar("symbol", { length: 20 }).notNull(), // e.g., B-BTC_USDT
-  timeframe: varchar("timeframe", { length: 10 }).notNull(), // 1m, 5m, 15m, 1h, 4h, 1d
-  timestamp: timestamp("timestamp").notNull(),
-  open: decimal("open", { precision: 18, scale: 8 }).notNull(),
-  high: decimal("high", { precision: 18, scale: 8 }).notNull(),
-  low: decimal("low", { precision: 18, scale: 8 }).notNull(),
-  close: decimal("close", { precision: 18, scale: 8 }).notNull(),
-  volume: decimal("volume", { precision: 24, scale: 8 }).notNull(),
-  quoteVolume: decimal("quote_volume", { precision: 24, scale: 8 }).notNull(),
-  tradeCount: integer("trade_count").default(0),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+export const marketData = pgTable(
+  "market_data",
+  {
+    id: serial("id").primaryKey(),
+    symbol: varchar("symbol", { length: 20 }).notNull(), // e.g., B-BTC_USDT
+    timeframe: varchar("timeframe", { length: 10 }).notNull(), // 1m, 5m, 15m, 1h, 4h, 1d
+    timestamp: timestamp("timestamp").notNull(),
+    open: decimal("open", { precision: 18, scale: 8 }).notNull(),
+    high: decimal("high", { precision: 18, scale: 8 }).notNull(),
+    low: decimal("low", { precision: 18, scale: 8 }).notNull(),
+    close: decimal("close", { precision: 18, scale: 8 }).notNull(),
+    volume: decimal("volume", { precision: 24, scale: 8 }).notNull(),
+    quoteVolume: decimal("quote_volume", { precision: 24, scale: 8 }).notNull(),
+    tradeCount: integer("trade_count").default(0),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    symbolTimeframeTimestampIdx: index("idx_market_data_lookup").on(table.symbol, table.timeframe, table.timestamp),
+    uqMarketData: unique("uq_market_data").on(table.symbol, table.timeframe, table.timestamp),
+  })
+);
 
 export type MarketData = typeof marketData.$inferSelect;
 
@@ -79,61 +88,74 @@ export const signals = pgTable("signals", {
 export type Signal = typeof signals.$inferSelect;
 
 // ─── Positions (Open Trades) ───
-export const positions = pgTable("positions", {
-  id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull(),
-  symbol: varchar("symbol", { length: 20 }).notNull(),
-  side: positionSideEnum("side").notNull(),
-  entryPrice: decimal("entry_price", { precision: 18, scale: 8 }).notNull(),
-  currentPrice: decimal("current_price", { precision: 18, scale: 8 }).notNull(),
-  size: decimal("size", { precision: 18, scale: 8 }).notNull(),
-  leverage: integer("leverage").default(1).notNull(),
-  margin: decimal("margin", { precision: 18, scale: 8 }).notNull(),
-  unrealizedPnl: decimal("unrealized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
-  realizedPnl: decimal("realized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
-  liquidationPrice: decimal("liquidation_price", { precision: 18, scale: 8 }),
-  stopLoss: decimal("stop_loss", { precision: 18, scale: 8 }),
-  takeProfit: decimal("take_profit", { precision: 18, scale: 8 }),
-  status: positionStatusEnum("status").default("open").notNull(),
-  exchangeOrderId: varchar("exchange_order_id", { length: 255 }),
-  signalId: integer("signal_id"),
-  // ─── CoinDCX Futures Margin Fields ───
-  lockedMargin: decimal("locked_margin", { precision: 18, scale: 8 }),
-  maintenanceMargin: decimal("maintenance_margin", { precision: 18, scale: 8 }),
-  lockedOrderMargin: decimal("locked_order_margin", { precision: 18, scale: 8 }),
-  crossUserMargin: decimal("cross_user_margin", { precision: 18, scale: 8 }),
-  crossOrderMargin: decimal("cross_order_margin", { precision: 18, scale: 8 }),
-  marginMode: marginModeEnum("margin_mode").default("isolated"),
-  marginCurrency: marginCurrencyEnum("margin_currency").default("USDT"),
-  settlementCurrencyConversionPrice: decimal("settlement_currency_conversion_price", { precision: 18, scale: 8 }),
-  settlementCurrencyAvgPrice: decimal("settlement_currency_avg_price", { precision: 18, scale: 8 }),
-  priceInInr: decimal("price_in_inr", { precision: 18, scale: 8 }),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-  updatedAt: timestamp("updated_at").defaultNow().notNull(),
-  closedAt: timestamp("closed_at"),
-});
+export const positions = pgTable(
+  "positions",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    side: positionSideEnum("side").notNull(),
+    entryPrice: decimal("entry_price", { precision: 18, scale: 8 }).notNull(),
+    currentPrice: decimal("current_price", { precision: 18, scale: 8 }).notNull(),
+    size: decimal("size", { precision: 18, scale: 8 }).notNull(),
+    leverage: integer("leverage").default(1).notNull(),
+    margin: decimal("margin", { precision: 18, scale: 8 }).notNull(),
+    unrealizedPnl: decimal("unrealized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
+    realizedPnl: decimal("realized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
+    liquidationPrice: decimal("liquidation_price", { precision: 18, scale: 8 }),
+    stopLoss: decimal("stop_loss", { precision: 18, scale: 8 }),
+    takeProfit: decimal("take_profit", { precision: 18, scale: 8 }),
+    status: positionStatusEnum("status").default("open").notNull(),
+    exchangeOrderId: varchar("exchange_order_id", { length: 255 }),
+    signalId: integer("signal_id"),
+    // ─── CoinDCX Futures Margin Fields ───
+    lockedMargin: decimal("locked_margin", { precision: 18, scale: 8 }),
+    maintenanceMargin: decimal("maintenance_margin", { precision: 18, scale: 8 }),
+    lockedOrderMargin: decimal("locked_order_margin", { precision: 18, scale: 8 }),
+    crossUserMargin: decimal("cross_user_margin", { precision: 18, scale: 8 }),
+    crossOrderMargin: decimal("cross_order_margin", { precision: 18, scale: 8 }),
+    marginMode: marginModeEnum("margin_mode").default("isolated"),
+    marginCurrency: marginCurrencyEnum("margin_currency").default("USDT"),
+    settlementCurrencyConversionPrice: decimal("settlement_currency_conversion_price", { precision: 18, scale: 8 }),
+    settlementCurrencyAvgPrice: decimal("settlement_currency_avg_price", { precision: 18, scale: 8 }),
+    priceInInr: decimal("price_in_inr", { precision: 18, scale: 8 }),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+    closedAt: timestamp("closed_at"),
+  },
+  (table) => ({
+    userIdStatusIdx: index("idx_positions_user_status").on(table.userId, table.status),
+    symbolIdx: index("idx_positions_symbol").on(table.symbol),
+  })
+);
 
 export type Position = typeof positions.$inferSelect;
 
 // ─── Trades (Trade History / Executions) ───
-export const trades = pgTable("trades", {
-  id: serial("id").primaryKey(),
-  userId: integer("user_id").notNull(),
-  positionId: integer("position_id"),
-  symbol: varchar("symbol", { length: 20 }).notNull(),
-  side: tradeSideEnum("side").notNull(),
-  orderType: orderTypeEnum("order_type").default("market").notNull(),
-  price: decimal("price", { precision: 18, scale: 8 }).notNull(),
-  size: decimal("size", { precision: 18, scale: 8 }).notNull(),
-  leverage: integer("leverage").default(1).notNull(),
-  fee: decimal("fee", { precision: 18, scale: 8 }).default("0").notNull(),
-  total: decimal("total", { precision: 18, scale: 8 }).notNull(),
-  status: tradeStatusEnum("status").default("pending").notNull(),
-  exchangeOrderId: varchar("exchange_order_id", { length: 255 }),
-  clientOrderId: varchar("client_order_id", { length: 255 }),
-  executedAt: timestamp("executed_at"),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+export const trades = pgTable(
+  "trades",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    positionId: integer("position_id"),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    side: tradeSideEnum("side").notNull(),
+    orderType: orderTypeEnum("order_type").default("market").notNull(),
+    price: decimal("price", { precision: 18, scale: 8 }).notNull(),
+    size: decimal("size", { precision: 18, scale: 8 }).notNull(),
+    leverage: integer("leverage").default(1).notNull(),
+    fee: decimal("fee", { precision: 18, scale: 8 }).default("0").notNull(),
+    total: decimal("total", { precision: 18, scale: 8 }).notNull(),
+    status: tradeStatusEnum("status").default("pending").notNull(),
+    exchangeOrderId: varchar("exchange_order_id", { length: 255 }),
+    clientOrderId: varchar("client_order_id", { length: 255 }),
+    executedAt: timestamp("executed_at"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userIdPositionIdIdx: index("idx_trades_user_position").on(table.userId, table.positionId),
+  })
+);
 
 export type Trade = typeof trades.$inferSelect;
 
@@ -178,16 +200,22 @@ export const exchangeCredentials = pgTable("exchange_credentials", {
 export type ExchangeCredential = typeof exchangeCredentials.$inferSelect;
 
 // ─── Recent Ticks (for trade tape) ───
-export const recentTicks = pgTable("recent_ticks", {
-  id: serial("id").primaryKey(),
-  symbol: varchar("symbol", { length: 20 }).notNull(),
-  price: decimal("price", { precision: 18, scale: 8 }).notNull(),
-  size: decimal("size", { precision: 18, scale: 8 }).notNull(),
-  side: tradeSideEnum("side").notNull(),
-  isMaker: boolean("is_maker").default(false),
-  tradeTime: timestamp("trade_time").notNull(),
-  createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+export const recentTicks = pgTable(
+  "recent_ticks",
+  {
+    id: serial("id").primaryKey(),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    price: decimal("price", { precision: 18, scale: 8 }).notNull(),
+    size: decimal("size", { precision: 18, scale: 8 }).notNull(),
+    side: tradeSideEnum("side").notNull(),
+    isMaker: boolean("is_maker").default(false),
+    tradeTime: timestamp("trade_time").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    symbolTradeTimeIdx: index("idx_recent_ticks_lookup").on(table.symbol, table.tradeTime),
+  })
+);
 
 export type RecentTick = typeof recentTicks.$inferSelect;
 

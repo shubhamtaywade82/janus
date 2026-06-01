@@ -478,8 +478,12 @@ export const tradingRouter = createRouter({
             exchangeOrderId = orderRes.id;
             console.log(`[coindcx-execution] Live order succeeded. Order ID: ${exchangeOrderId}`);
           }
-        } catch (err) {
-          console.error("[coindcx-execution] Failed live execution, falling back to simulation mode:", err);
+        } catch (err: any) {
+          console.error("[coindcx-execution] Failed live execution:", err);
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `Live exchange order execution failed: ${err.message || err}`,
+          });
         }
       } else if (creds && creds[0] && !env.placeOrders) {
         console.warn(`[coindcx-execution] BLOCKED — PLACE_ORDERS=false. Set PLACE_ORDERS=true in .env to enable live trading.`);

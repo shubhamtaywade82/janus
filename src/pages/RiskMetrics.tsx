@@ -31,16 +31,23 @@ const RiskMetrics = () => {
     userId: 1,
   });
 
+  const portfolioCallbackRef = useRef<(data: any) => void>(() => {});
+  useEffect(() => {
+    portfolioCallbackRef.current = (data: any) => {
+      setPortfolio(data);
+    };
+  }, []);
+
+  const portfolioStreamOpts = useRef({
+    onData: (data: any) => portfolioCallbackRef.current(data),
+    onError: (err: any) => {
+      console.error("[risk-metrics] Portfolio stream error:", err);
+    },
+  });
+
   trpc.trading.portfolioStream.useSubscription(
     { userId: 1 },
-    {
-      onData(data) {
-        setPortfolio(data);
-      },
-      onError(err) {
-        console.error("[risk-metrics] Portfolio stream error:", err);
-      },
-    }
+    portfolioStreamOpts.current
   );
 
   const positions = portfolio?.positions || [];
