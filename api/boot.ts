@@ -91,15 +91,15 @@ const createContextWSS = (opts: any) => {
 if (!env.isProduction) {
   const globalWss = globalThis as any;
   if (!globalWss.wss) {
-    globalWss.wss = new WebSocketServer({ port: 3004 });
+    globalWss.wss = new WebSocketServer({ port: 3011 });
     applyWSSHandler({ wss: globalWss.wss, router: appRouter, createContext: createContextWSS });
-    console.log(`[ws] Dev WebSocket Server running on ws://localhost:3004`);
+    console.log(`[ws] Dev WebSocket Server running on ws://localhost:3011`);
   }
 }
 
 if (env.isProduction) {
   const { serve } = await import("@hono/node-server");
-  const port = parseInt(process.env.PORT || "3000");
+  const port = parseInt(process.env.PORT || "3010");
   const server = serve({ fetch: app.fetch, port }, () => {
     console.log(`Server running on http://localhost:${port}/`);
   });

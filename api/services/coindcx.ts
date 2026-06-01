@@ -163,7 +163,14 @@ export async function getCoinDCXCandles(
 }
 
 export async function getCoinDCXTicker(market?: string): Promise<any> {
-  return publicRequest<any>("/market_data/ticker", market ? { market } : undefined);
+  const url = "https://api.coindcx.com/exchange/ticker";
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`CoinDCX ticker API error: ${res.status}`);
+  const data = await res.json();
+  if (market && Array.isArray(data)) {
+    return data.find((t: any) => t.market === market);
+  }
+  return data;
 }
 
 // ─── Futures Operations ───
