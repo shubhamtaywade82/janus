@@ -298,4 +298,23 @@ export const marketRouter = createRouter({
         recentDeltas: state.deltaWindow.values().slice(-20),
       };
     }),
+
+  // ─── Get Live State & Derived Metrics for All Supported Symbols ───
+  allLiveStates: publicQuery
+    .query(() => {
+      const results: Record<string, any> = {};
+      for (const pair of SUPPORTED_PAIRS) {
+        const state = marketStateManager.get(pair.binance);
+        if (state) {
+          results[pair.binance] = {
+            symbol: state.symbol,
+            ltp: state.ltp,
+            metrics: state.metrics,
+            updatedAt: state.updatedAt,
+            sequenceNo: state.sequenceNo,
+          };
+        }
+      }
+      return results;
+    }),
 });
