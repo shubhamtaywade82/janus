@@ -32,7 +32,7 @@ const componentIcons: Record<string, React.ElementType> = {
 };
 
 // ─── Log Entry Row ───
-function LogRow({ log }: { log: any }) {
+const LogRow = ({ log }: { log: any }) => {
   const config = levelConfig[log.level as keyof typeof levelConfig] || levelConfig.info;
   const Icon = config.icon;
   const CompIcon = componentIcons[log.component] || componentIcons.default;
@@ -63,7 +63,7 @@ function LogRow({ log }: { log: any }) {
 }
 
 // ─── Main Logs Page ───
-export default function Logs() {
+const Logs = () => {
   const [levelFilter, setLevelFilter] = useState<string>("");
   const [componentFilter, setComponentFilter] = useState<string>("");
 
@@ -212,4 +212,6 @@ export default function Logs() {
       </div>
     </div>
   );
-}
+};
+
+export default Logs;

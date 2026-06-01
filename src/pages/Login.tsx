@@ -1,7 +1,7 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 
-function getOAuthUrl() {
+const getOAuthUrl = () => {
   const authUrl = import.meta.env.VITE_AUTH_URL || window.location.origin;
   const appID = import.meta.env.VITE_APP_ID;
   const redirectUri = `${window.location.origin}/api/oauth/callback`;
@@ -17,7 +17,7 @@ function getOAuthUrl() {
   return url.toString();
 }
 
-export default function Login() {
+const Login = () => {
   return (
     <div className="min-h-screen flex items-center justify-center">
       <Card className="w-full max-w-sm">
@@ -38,4 +38,6 @@ export default function Login() {
       </Card>
     </div>
   );
-}
+};
+
+export default Login;

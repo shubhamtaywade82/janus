@@ -22,7 +22,7 @@ const navItems = [
   { path: "/logs", label: "Logs", icon: ScrollText },
 ];
 
-export default function Layout({ children }: { children: React.ReactNode }) {
+const Layout = ({ children }: { children: React.ReactNode }) => {
   const location = useLocation();
   const { user, logout } = useAuth({ redirectOnUnauthenticated: true });
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
@@ -146,4 +146,6 @@ export default function Layout({ children }: { children: React.ReactNode }) {
       </main>
     </div>
   );
-}
+};
+
+export default Layout;

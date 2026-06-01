@@ -22,7 +22,7 @@ interface KlineData {
 }
 
 // ─── TradingView Lightweight Chart Component ───
-function MiniChart({ data }: { data: KlineData[] }) {
+const MiniChart = ({ data }: { data: KlineData[] }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
 
@@ -263,7 +263,7 @@ function MiniChart({ data }: { data: KlineData[] }) {
 }
 
 // ─── Order Book Component ───
-function OrderBook({ symbol }: { symbol: string }) {
+const OrderBook = ({ symbol }: { symbol: string }) => {
   const [depth, setDepth] = useState<any>(null);
 
   const { data: initialDepth } = trpc.market.orderBook.useQuery(
@@ -360,7 +360,7 @@ function OrderBook({ symbol }: { symbol: string }) {
 }
 
 // ─── Recent Trades Component ───
-function RecentTrades({ symbol }: { symbol: string }) {
+const RecentTrades = ({ symbol }: { symbol: string }) => {
   const [trades, setTrades] = useState<any[]>([]);
 
   const { data: initialTrades } = trpc.market.recentTrades.useQuery(
@@ -415,7 +415,7 @@ function RecentTrades({ symbol }: { symbol: string }) {
 }
 
 // ─── Ticker Strip ───
-function TickerStrip() {
+const TickerStrip = () => {
   const [tickersMap, setTickersMap] = useState<Record<string, any>>({});
 
   const { data: initialTickers } = trpc.market.ticker24h.useQuery(
@@ -475,7 +475,7 @@ function TickerStrip() {
 }
 
 // ─── Main Dashboard ───
-export default function Dashboard() {
+const Dashboard = () => {
   const [selectedSymbol, setSelectedSymbol] = useState("BTCUSDT");
   const [interval, setInterval] = useState("1m");
   const [side, setSide] = useState<"buy" | "sell">("buy");
@@ -806,4 +806,6 @@ export default function Dashboard() {
       </div>
     </div>
   );
-}
+};
+
+export default Dashboard;

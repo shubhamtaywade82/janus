@@ -37,11 +37,11 @@ const DEFAULT_WIDTH = 280;
 const MIN_WIDTH = 200;
 const MAX_WIDTH = 480;
 
-export default function AuthLayout({
+const AuthLayout = ({
   children,
 }: {
   children: ReactNode;
-}) {
+}) => {
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     const saved = localStorage.getItem(SIDEBAR_WIDTH_KEY);
     return saved ? parseInt(saved, 10) : DEFAULT_WIDTH;
@@ -96,17 +96,19 @@ export default function AuthLayout({
       </AuthLayoutContent>
     </SidebarProvider>
   );
-}
+};
+
+export default AuthLayout;
 
 type AuthLayoutContentProps = {
   children: ReactNode;
   setSidebarWidth: (width: number) => void;
 };
 
-function AuthLayoutContent({
+const AuthLayoutContent = ({
   children,
   setSidebarWidth,
-}: AuthLayoutContentProps) {
+}: AuthLayoutContentProps) => {
   const { user, logout } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();

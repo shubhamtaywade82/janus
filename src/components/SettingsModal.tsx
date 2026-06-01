@@ -7,7 +7,7 @@ interface SettingsModalProps {
   onClose: () => void;
 }
 
-export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
+const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
   const [coindcxKey, setCoindcxKey] = useState("");
   const [coindcxSecret, setCoindcxSecret] = useState("");
   const [binanceKey, setBinanceKey] = useState("");
@@ -226,4 +226,6 @@ export default function SettingsModal({ isOpen, onClose }: SettingsModalProps) {
       </div>
     </div>
   );
-}
+};
+
+export default SettingsModal;

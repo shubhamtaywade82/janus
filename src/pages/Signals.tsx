@@ -13,7 +13,7 @@ import {
 import { cn } from "@/lib/utils";
 
 // ─── Score Ring Component ───
-function ScoreRing({ score, label, color }: { score: number; label: string; color: string }) {
+const ScoreRing = ({ score, label, color }: { score: number; label: string; color: string }) => {
   const radius = 36;
   const circumference = 2 * Math.PI * radius;
   const offset = circumference - (score / 100) * circumference;
@@ -55,7 +55,7 @@ function ScoreRing({ score, label, color }: { score: number; label: string; colo
 }
 
 // ─── Signal Card ───
-function SignalCard({ signal }: { signal: any }) {
+const SignalCard = ({ signal }: { signal: any }) => {
   const indicators = signal.metadata ? (typeof signal.metadata === "string" ? JSON.parse(signal.metadata) : signal.metadata) : {};
 
   return (
@@ -143,7 +143,7 @@ function SignalCard({ signal }: { signal: any }) {
 }
 
 // ─── Main Signals Page ───
-export default function Signals() {
+const Signals = () => {
   const [selectedSymbol, setSelectedSymbol] = useState("BTCUSDT");
   const [analyzeTrigger, setAnalyzeTrigger] = useState(0);
   const [analyzeAllTrigger, setAnalyzeAllTrigger] = useState(0);
@@ -318,4 +318,6 @@ export default function Signals() {
       </div>
     </div>
   );
-}
+};
+
+export default Signals;

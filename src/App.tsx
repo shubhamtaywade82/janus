@@ -7,7 +7,7 @@ import Logs from "./pages/Logs";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 
-export default function App() {
+const App = () => {
   return (
     <Routes>
       <Route path="/login" element={<Login />} />
@@ -46,4 +46,6 @@ export default function App() {
       <Route path="*" element={<NotFound />} />
     </Routes>
   );
-}
+};
+
+export default App;

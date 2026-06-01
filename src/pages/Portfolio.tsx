@@ -15,7 +15,7 @@ import {
 import { cn } from "@/lib/utils";
 
 // ─── Position Row ───
-function PositionRow({ position }: { position: any }) {
+const PositionRow = ({ position }: { position: any }) => {
   const pnl = parseFloat(position.unrealizedPnl || "0");
   const isProfit = pnl >= 0;
 
@@ -85,7 +85,7 @@ function PositionRow({ position }: { position: any }) {
 }
 
 // ─── Main Portfolio Page ───
-export default function Portfolio() {
+const Portfolio = () => {
   const [statusFilter, setStatusFilter] = useState<string>("open");
 
   const { data: portfolio } = trpc.trading.portfolio.useQuery(
@@ -281,4 +281,6 @@ export default function Portfolio() {
       )}
     </div>
   );
-}
+};
+
+export default Portfolio;

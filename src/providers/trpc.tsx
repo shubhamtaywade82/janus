@@ -9,7 +9,7 @@ export const trpc = createTRPCReact<AppRouter>();
 
 const queryClient = new QueryClient();
 
-function getWsUrl() {
+const getWsUrl = () => {
   if (import.meta.env.DEV) {
     return "ws://localhost:3004";
   }
@@ -47,7 +47,7 @@ const trpcClient = trpc.createClient({
   ],
 });
 
-export function TRPCProvider({ children }: { children: ReactNode }) {
+export const TRPCProvider = ({ children }: { children: ReactNode }) => {
   return (
     <trpc.Provider client={trpcClient} queryClient={queryClient}>
       <QueryClientProvider client={queryClient}>

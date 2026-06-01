@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import '../App.css'
 
-export default function Home() {
+const Home = () => {
   const [count, setCount] = useState(0)
 
   return (
@@ -17,4 +17,6 @@ export default function Home() {
       </div>
     </>
   )
-}
+};
+
+export default Home;
