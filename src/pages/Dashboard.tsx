@@ -30,6 +30,8 @@ const MiniChart = ({ data }: { data: KlineData[] }) => {
   const candlestickSeriesRef = useRef<any>(null);
   const volumeSeriesRef = useRef<any>(null);
   const dataRef = useRef<KlineData[]>(data);
+  const prevLastTimeRef = useRef<number | null>(null);
+  const prevDataLenRef = useRef<number>(0);
 
   // Keep dataRef updated
   useEffect(() => {
@@ -172,58 +174,75 @@ const MiniChart = ({ data }: { data: KlineData[] }) => {
     };
   }, []);
 
-  // 2. Update Data when data props change (without destroying chart)
+  // 2. Update chart data — setData on full reload, update() on live tick
   useEffect(() => {
     if (!candlestickSeriesRef.current || !volumeSeriesRef.current || data.length === 0) return;
 
-    // Format data
-    const chartData = data.map((d) => {
-      const time = (d.openTime / 1000) as UTCTimestamp;
-      return {
-        time,
+    const last = data[data.length - 1];
+    const lastTime = last.openTime / 1000;
+    const isLiveTick =
+      prevDataLenRef.current === data.length &&
+      prevLastTimeRef.current === lastTime;
+    const isNewCandle =
+      prevDataLenRef.current === data.length - 1 &&
+      prevLastTimeRef.current !== null;
+
+    if (isLiveTick || isNewCandle) {
+      // Patch only last candle — no full redraw
+      const o = parseFloat(last.open);
+      const c = parseFloat(last.close);
+      candlestickSeriesRef.current.update({
+        time: lastTime as UTCTimestamp,
+        open: o,
+        high: parseFloat(last.high),
+        low: parseFloat(last.low),
+        close: c,
+      });
+      volumeSeriesRef.current.update({
+        time: lastTime as UTCTimestamp,
+        value: parseFloat(last.volume),
+        color: c >= o ? "rgba(14, 203, 129, 0.15)" : "rgba(246, 70, 93, 0.15)",
+      });
+    } else {
+      // Full reload — symbol/interval change or initial load
+      const chartData = data.map((d) => ({
+        time: (d.openTime / 1000) as UTCTimestamp,
         open: parseFloat(d.open),
         high: parseFloat(d.high),
         low: parseFloat(d.low),
         close: parseFloat(d.close),
-      };
-    });
-
-    const volumeData = data.map((d) => {
-      const time = (d.openTime / 1000) as UTCTimestamp;
-      const open = parseFloat(d.open);
-      const close = parseFloat(d.close);
-      return {
-        time,
-        value: parseFloat(d.volume),
-        color: close >= open ? "rgba(14, 203, 129, 0.15)" : "rgba(246, 70, 93, 0.15)",
-      };
-    });
-
-    candlestickSeriesRef.current.setData(chartData);
-    volumeSeriesRef.current.setData(volumeData);
-
-    // Initial HUD data
-    const last = data[data.length - 1];
-    if (last) {
-      const o = parseFloat(last.open);
-      const c = parseFloat(last.close);
-      const pct = ((c - o) / o) * 100;
-      setHudData({
-        time: new Date(last.openTime).toLocaleString(),
-        open: o.toFixed(2),
-        high: parseFloat(last.high).toFixed(2),
-        low: parseFloat(last.low).toFixed(2),
-        close: c.toFixed(2),
-        volume: parseFloat(last.volume).toFixed(2),
-        pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
-        isGreen: c >= o,
+      }));
+      const volumeData = data.map((d) => {
+        const o = parseFloat(d.open);
+        const c = parseFloat(d.close);
+        return {
+          time: (d.openTime / 1000) as UTCTimestamp,
+          value: parseFloat(d.volume),
+          color: c >= o ? "rgba(14, 203, 129, 0.15)" : "rgba(246, 70, 93, 0.15)",
+        };
       });
+      candlestickSeriesRef.current.setData(chartData);
+      volumeSeriesRef.current.setData(volumeData);
+      if (chartRef.current) chartRef.current.timeScale().fitContent();
     }
 
-    // Fit content on initial load only
-    if (chartRef.current) {
-      chartRef.current.timeScale().fitContent();
-    }
+    prevDataLenRef.current = data.length;
+    prevLastTimeRef.current = lastTime;
+
+    // Update HUD with live last candle
+    const o = parseFloat(last.open);
+    const c = parseFloat(last.close);
+    const pct = ((c - o) / o) * 100;
+    setHudData({
+      time: new Date(last.openTime).toLocaleString(),
+      open: o.toFixed(2),
+      high: parseFloat(last.high).toFixed(2),
+      low: parseFloat(last.low).toFixed(2),
+      close: c.toFixed(2),
+      volume: parseFloat(last.volume).toFixed(2),
+      pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
+      isGreen: c >= o,
+    });
   }, [data]);
 
   return (
@@ -487,7 +506,10 @@ const Dashboard = () => {
 
   const { data: initialKlines } = trpc.market.klines.useQuery(
     { symbol: selectedSymbol, interval, limit: 150 },
-    { staleTime: Infinity }
+    {
+      staleTime: interval === "1m" ? Infinity : 0,
+      refetchInterval: interval === "1m" ? false : 30_000,
+    }
   );
 
   const { data: initialTicker } = trpc.market.ticker24h.useQuery(
@@ -496,7 +518,10 @@ const Dashboard = () => {
   );
 
   useEffect(() => {
-    if (initialKlines) setKlines(initialKlines);
+    if (initialKlines) {
+      // Reset chart update tracking refs on symbol/interval change
+      setKlines(initialKlines);
+    }
   }, [initialKlines, selectedSymbol, interval]);
 
   useEffect(() => {
@@ -509,6 +534,8 @@ const Dashboard = () => {
     { symbol: selectedSymbol },
     {
       onData(data: any) {
+        // Stream is hardcoded 1m — only patch chart on 1m interval
+        if (interval !== "1m") return;
         const kline = data as KlineData;
         setKlines((prev) => {
           if (prev.length === 0) return [kline];
