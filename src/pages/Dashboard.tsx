@@ -34,6 +34,40 @@ const MiniChart = ({ data }: { data: KlineData[] }) => {
   const prevLastTimeRef = useRef<number | null>(null);
   const prevDataLenRef = useRef<number>(0);
 
+  // ─── Tick animation: persistent lerp loop chasing target ───
+  const animFrameRef = useRef<number | null>(null);
+  const animTarget = useRef({ time: 0, open: 0, high: 0, low: 0, close: 0, vol: 0 });
+  const animCurrent = useRef({ close: 0 });
+  const animLoopRunning = useRef(false);
+
+  const startAnimLoop = useCallback(() => {
+    if (animLoopRunning.current) return;
+    animLoopRunning.current = true;
+    const LERP = 0.18; // per-frame factor (~60fps → smooth ~250ms settle)
+    const loop = () => {
+      if (!candlestickSeriesRef.current) { animLoopRunning.current = false; return; }
+      const t = animTarget.current;
+      const diff = t.close - animCurrent.current.close;
+      if (Math.abs(diff) < 0.0005) {
+        animCurrent.current.close = t.close;
+        animLoopRunning.current = false;
+        candlestickSeriesRef.current.update({ time: t.time as UTCTimestamp, open: t.open, high: t.high, low: t.low, close: t.close });
+        return;
+      }
+      animCurrent.current.close += diff * LERP;
+      const c = animCurrent.current.close;
+      candlestickSeriesRef.current.update({
+        time: t.time as UTCTimestamp,
+        open: t.open,
+        high: Math.max(t.high, c),
+        low: Math.min(t.low, c),
+        close: c,
+      });
+      animFrameRef.current = requestAnimationFrame(loop);
+    };
+    animFrameRef.current = requestAnimationFrame(loop);
+  }, []);
+
   // Keep dataRef updated
   useEffect(() => {
     dataRef.current = data;
@@ -169,6 +203,7 @@ const MiniChart = ({ data }: { data: KlineData[] }) => {
     resizeObserver.observe(container);
 
     return () => {
+      if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current);
       resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
@@ -189,21 +224,27 @@ const MiniChart = ({ data }: { data: KlineData[] }) => {
       prevLastTimeRef.current !== null;
 
     if (isLiveTick || isNewCandle) {
-      // Patch only last candle — no full redraw
       const o = parseFloat(last.open);
-      const c = parseFloat(last.close);
-      candlestickSeriesRef.current.update({
-        time: lastTime as UTCTimestamp,
-        open: o,
-        high: parseFloat(last.high),
-        low: parseFloat(last.low),
-        close: c,
-      });
+      const targetClose = parseFloat(last.close);
+      const h = parseFloat(last.high);
+      const l = parseFloat(last.low);
+      const vol = parseFloat(last.volume);
+
+      // If this is the first tick, seed current position so there's no jump
+      if (animCurrent.current.close === 0) animCurrent.current.close = targetClose;
+
+      // Update target — the lerp loop will smoothly chase it
+      animTarget.current = { time: lastTime, open: o, high: h, low: l, close: targetClose, vol };
+
+      // Volume update is immediate
       volumeSeriesRef.current.update({
         time: lastTime as UTCTimestamp,
-        value: parseFloat(last.volume),
-        color: c >= o ? "rgba(14, 203, 129, 0.15)" : "rgba(246, 70, 93, 0.15)",
+        value: vol,
+        color: targetClose >= o ? "rgba(14,203,129,0.15)" : "rgba(246,70,93,0.15)",
       });
+
+      // Kick off the lerp loop (no-op if already running)
+      startAnimLoop();
     } else {
       // Full reload — symbol/interval change or initial load
       const chartData = data.map((d) => ({
@@ -225,6 +266,10 @@ const MiniChart = ({ data }: { data: KlineData[] }) => {
       candlestickSeriesRef.current.setData(chartData);
       volumeSeriesRef.current.setData(volumeData);
       if (chartRef.current) chartRef.current.timeScale().fitContent();
+      // Reset animation state on full reload
+      animCurrent.current.close = 0;
+      animLoopRunning.current = false;
+      if (animFrameRef.current) { cancelAnimationFrame(animFrameRef.current); animFrameRef.current = null; }
     }
 
     prevDataLenRef.current = data.length;
