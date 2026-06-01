@@ -11,6 +11,7 @@ import {
   ArrowUpRight,
   ArrowDownRight,
   Layers,
+  Shield,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -18,6 +19,14 @@ import { cn } from "@/lib/utils";
 const PositionRow = ({ position }: { position: any }) => {
   const pnl = parseFloat(position.unrealizedPnl || "0");
   const isProfit = pnl >= 0;
+  const marginMode = position.marginMode || "isolated";
+  const marginCurrency = position.marginCurrency || "USDT";
+  const liqDistance = position.liquidationPrice && position.currentPrice
+    ? Math.abs(parseFloat(position.currentPrice) - parseFloat(position.liquidationPrice))
+    : 0;
+  const liqPercent = position.liquidationPrice && position.currentPrice && parseFloat(position.currentPrice) > 0
+    ? (liqDistance / parseFloat(position.currentPrice)) * 100
+    : 0;
 
   return (
     <tr className="border-b border-[#27272a] hover:bg-[#18181b] transition-colors">
@@ -56,8 +65,31 @@ const PositionRow = ({ position }: { position: any }) => {
       <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
         {position.leverage}x
       </td>
+      <td className="px-3 py-2">
+        <div className="flex items-center gap-1">
+          <span className={cn(
+            "text-[9px] px-1 py-0.5 rounded",
+            marginMode === "cross"
+              ? "bg-[#3b82f6]/10 text-[#3b82f6]"
+              : "bg-[#71717a]/10 text-[#71717a]"
+          )}>
+            {marginMode === "cross" ? "CROSS" : "ISO"}
+          </span>
+          <span className={cn(
+            "text-[9px] px-1 py-0.5 rounded",
+            marginCurrency === "INR"
+              ? "bg-[#f59e0b]/10 text-[#f59e0b]"
+              : "bg-[#22c55e]/10 text-[#22c55e]"
+          )}>
+            {marginCurrency}
+          </span>
+        </div>
+      </td>
       <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
-        {parseFloat(position.margin).toFixed(2)}
+        {parseFloat(position.margin || "0").toFixed(2)}
+      </td>
+      <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
+        {position.maintenanceMargin ? parseFloat(position.maintenanceMargin).toFixed(2) : "--"}
       </td>
       <td className="px-3 py-2">
         <div className={cn("flex items-center gap-1 text-xs tabular-nums", isProfit ? "text-[#22c55e]" : "text-[#ef4444]")}>
@@ -65,6 +97,22 @@ const PositionRow = ({ position }: { position: any }) => {
           {isProfit ? "+" : ""}
           {pnl.toFixed(4)}
         </div>
+      </td>
+      <td className="px-3 py-2">
+        <span
+          className={cn(
+            "text-xs px-1.5 py-0.5 rounded",
+            liqPercent < 5
+              ? "bg-[#ef4444]/10 text-[#ef4444]"
+              : liqPercent < 15
+              ? "bg-[#f59e0b]/10 text-[#f59e0b]"
+              : "bg-[#22c55e]/10 text-[#22c55e]"
+          )}
+          title={`Liq: ${position.liquidationPrice || "--"}`}
+        >
+          <Shield size={10} className="inline mr-0.5" />
+          {liqPercent.toFixed(1)}%
+        </span>
       </td>
       <td className="px-3 py-2">
         <span
@@ -87,19 +135,14 @@ const PositionRow = ({ position }: { position: any }) => {
 // ─── Main Portfolio Page ───
 export default function Portfolio() {
   const [statusFilter, setStatusFilter] = useState<string>("open");
-  const [portfolio, setPortfolio] = useState<any>(null);
-
-  // Subscribe to real-time client-to-server portfolio WebSocket stream
-  trpc.trading.portfolioStream.useSubscription(
+  const { data: portfolio } = trpc.trading.portfolio.useQuery(
     { userId: 1 },
-    {
-      onData(data) {
-        setPortfolio(data);
-      },
-      onError(err) {
-        console.error("[portfolio-ws] Subscription error:", err);
-      }
-    }
+    { refetchInterval: 5000 }
+  );
+
+  const { data: conversion } = trpc.trading.currencyConversion.useQuery(
+    undefined,
+    { staleTime: 5 * 60 * 1000 }
   );
 
   // Query historical positions only when viewing non-open filters
@@ -112,6 +155,7 @@ export default function Portfolio() {
 
   const totalPnl = parseFloat(portfolio?.totalUnrealizedPnl || "0") + parseFloat(portfolio?.totalRealizedPnl || "0");
   const isProfit = totalPnl >= 0;
+  const usdtInrRate = conversion?.conversion_price ?? 89.0;
 
   return (
     <div className="flex flex-col h-full p-4 gap-4">
@@ -220,8 +264,11 @@ export default function Portfolio() {
                 <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Current</th>
                 <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Size</th>
                 <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Lev</th>
+                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Mode</th>
                 <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Margin</th>
+                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Maint.</th>
                 <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">PnL</th>
+                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Liq%</th>
                 <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Status</th>
               </tr>
             </thead>
@@ -231,7 +278,7 @@ export default function Portfolio() {
               ))}
               {(!allPositions || allPositions.length === 0) && (
                 <tr>
-                  <td colSpan={9} className="px-3 py-8 text-center text-xs text-[#71717a]">
+                  <td colSpan={12} className="px-3 py-8 text-center text-xs text-[#71717a]">
                     <Target size={20} className="mx-auto mb-2 opacity-30" />
                     No {statusFilter} positions found
                   </td>

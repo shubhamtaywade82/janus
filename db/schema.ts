@@ -210,3 +210,18 @@ export const futuresWallets = pgTable("futures_wallets", {
 });
 
 export type FuturesWallet = typeof futuresWallets.$inferSelect;
+
+// ─── Transactions (Audit Trail & PnL Ledger) ───
+export const transactions = pgTable("transactions", {
+  id: serial("id").primaryKey(),
+  positionId: integer("position_id").references(() => positions.id),
+  symbol: varchar("symbol", { length: 20 }),
+  stage: varchar("stage", { length: 20 }), // Funding, Exit, Liquidation, etc.
+  amount: decimal("amount", { precision: 18, scale: 8 }), // PnL amount
+  feeAmount: decimal("fee_amount", { precision: 18, scale: 8 }),
+  priceReference: decimal("price_reference", { precision: 18, scale: 8 }),
+  source: varchar("source", { length: 10 }), // 'user' or 'system'
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type Transaction = typeof transactions.$inferSelect;

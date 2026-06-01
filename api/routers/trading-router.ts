@@ -1,12 +1,24 @@
 import { z } from "zod";
 import { createRouter, publicQuery } from "../middleware";
 import { getDb } from "../queries/connection";
-import { positions, trades, exchangeCredentials } from "@db/schema";
+import { positions, trades, exchangeCredentials, futuresWallets } from "@db/schema";
 import { desc, eq, and } from "drizzle-orm";
-import { createFuturesOrder, getFuturesPositions, getCoinDCXTicker, calculateLiquidationPrice } from "../services/coindcx";
+import {
+  createFuturesOrder,
+  getFuturesPositions,
+  getFuturesWallet,
+  getCoinDCXTicker,
+  calculateLiquidationPrice,
+  getCrossMarginDetails,
+  walletTransfer,
+  addRemoveMargin,
+  getFuturesOrders,
+  getUsdtInrRate,
+  getCurrencyConversions,
+} from "../services/coindcx";
 import { TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
-import { tradingEvents, initCoinDCXPrivateWs } from "../services/coindcx-ws";
+import { tradingEvents, initCoinDCXPrivateWs, userBalancesCache } from "../services/coindcx-ws";
 
 export async function fetchPortfolioData(userId: number) {
   const db = getDb();
@@ -29,12 +41,12 @@ export async function fetchPortfolioData(userId: number) {
 
   if (creds && creds[0]) {
     try {
-      const livePositions = await getFuturesPositions({
-        apiKey: creds[0].apiKey,
-        apiSecret: creds[0].apiSecret,
-      });
+      const [livePositions, tickers, usdtInrRate] = await Promise.all([
+        getFuturesPositions({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret }),
+        getCoinDCXTicker(),
+        getUsdtInrRate(),
+      ]);
 
-      const tickers = await getCoinDCXTicker();
       const tickerMap = new Map<string, number>();
       if (Array.isArray(tickers)) {
         tickers.forEach((t: any) => {
@@ -51,10 +63,11 @@ export async function fetchPortfolioData(userId: number) {
           const side = sizeVal >= 0 ? "long" : "short";
           const absSize = Math.abs(sizeVal);
           const symbol = p.pair.replace("B-", "").replace("_", "");
-          
+          const isInrMargin = (p.margin_currency || "USDT") === "INR";
+
           const lastPrice = tickerMap.get(p.pair) || parseFloat(p.avg_price);
           const entryPrice = parseFloat(p.avg_price);
-          
+
           let unrealizedPnl = 0;
           if (side === "long") {
             unrealizedPnl = (lastPrice - entryPrice) * absSize;
@@ -62,8 +75,13 @@ export async function fetchPortfolioData(userId: number) {
             unrealizedPnl = (entryPrice - lastPrice) * absSize;
           }
 
-          totalMargin += parseFloat(p.locked_margin || "0");
-          totalUnrealizedPnl += unrealizedPnl;
+          // Normalize INR values to USDT for unified display
+          const lockedMarginRaw = parseFloat(p.locked_margin || "0");
+          const lockedMarginUsdt = isInrMargin ? lockedMarginRaw / usdtInrRate : lockedMarginRaw;
+          const unrealizedPnlUsdt = isInrMargin ? unrealizedPnl / usdtInrRate : unrealizedPnl;
+
+          totalMargin += lockedMarginUsdt;
+          totalUnrealizedPnl += unrealizedPnlUsdt;
 
           return {
             id: idx + 10000,
@@ -80,6 +98,16 @@ export async function fetchPortfolioData(userId: number) {
             liquidationPrice: p.liquidation_price || null,
             stopLoss: p.stop_loss_trigger || null,
             takeProfit: p.take_profit_trigger || null,
+            lockedMargin: p.locked_margin || null,
+            maintenanceMargin: p.maintenance_margin || null,
+            lockedOrderMargin: p.locked_order_margin || null,
+            crossUserMargin: p.cross_user_margin || null,
+            crossOrderMargin: p.cross_order_margin || null,
+            marginMode: p.margin_mode || "isolated",
+            marginCurrency: p.margin_currency || "USDT",
+            settlementCurrencyConversionPrice: p.settlement_currency_conversion_price || null,
+            settlementCurrencyAvgPrice: p.settlement_currency_avg_price || null,
+            priceInInr: p.price_in_inr || null,
             status: "open",
             createdAt: new Date(),
             updatedAt: new Date(),
@@ -99,12 +127,35 @@ export async function fetchPortfolioData(userId: number) {
         0
       );
 
+      let walletUsdt = 0;
+      // 1. Try live REST (GET /futures/wallets — now works)
+      try {
+        const wallets = await getFuturesWallet({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret });
+        for (const w of wallets) {
+          const currency = w.currency_short_name || "";
+          const bal = parseFloat(w.balance || "0");
+          if (currency === "USDT") walletUsdt += bal;
+          else if (currency === "INR") walletUsdt += bal / usdtInrRate;
+        }
+      } catch {
+        // 2. Fallback: WS in-memory cache
+        const cachedBalances = userBalancesCache.get(userId);
+        if (cachedBalances) {
+          for (const b of cachedBalances) {
+            const currency = b.currency_short_name || b.currency || "";
+            const bal = parseFloat(b.balance || "0");
+            if (currency === "USDT") walletUsdt += bal;
+            else if (currency === "INR") walletUsdt += bal / usdtInrRate;
+          }
+        }
+      }
+
       return {
         openPositionsCount: openPositions.length,
         totalUnrealizedPnl: totalUnrealizedPnl.toFixed(4),
         totalRealizedPnl: totalRealizedPnl.toFixed(4),
         totalMargin: totalMargin.toFixed(4),
-        totalEquity: totalMargin + totalUnrealizedPnl,
+        totalEquity: walletUsdt + totalMargin + totalUnrealizedPnl,
         positions: openPositions,
         recentTrades,
       };
@@ -515,6 +566,13 @@ export const tradingRouter = createRouter({
       return fetchPortfolioData(input.userId);
     }),
 
+  // ─── USDT/INR Currency Conversion Rate ───
+  currencyConversion: publicQuery
+    .query(async () => {
+      const conversions = await getCurrencyConversions();
+      return conversions[0] ?? { symbol: "USDTINR", conversion_price: 89.0 };
+    }),
+
   // ─── Portfolio Subscription Stream ───
   portfolioStream: publicQuery
     .input(z.object({ userId: z.number() }))
@@ -585,5 +643,153 @@ export const tradingRouter = createRouter({
         .select()
         .from(exchangeCredentials)
         .where(eq(exchangeCredentials.userId, input.userId));
+    }),
+
+  // ─── Get futures wallet ───
+  futuresWallet: publicQuery
+    .input(z.object({ userId: z.number(), marginCurrency: z.enum(["USDT", "INR"]).optional() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const cached = await db
+        .select()
+        .from(futuresWallets)
+        .where(
+          and(
+            eq(futuresWallets.userId, input.userId),
+            eq(futuresWallets.exchange, "coindcx"),
+            input.marginCurrency ? eq(futuresWallets.marginCurrency, input.marginCurrency) : undefined
+          )
+        )
+        .orderBy(desc(futuresWallets.updatedAt))
+        .limit(1);
+      return cached[0] || null;
+    }),
+
+  // ─── Get cross margin details (live from CoinDCX) ───
+  crossMarginDetails: publicQuery
+    .input(z.object({ userId: z.number() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const creds = await db
+        .select()
+        .from(exchangeCredentials)
+        .where(
+          and(
+            eq(exchangeCredentials.userId, input.userId),
+            eq(exchangeCredentials.exchange, "coindcx")
+          )
+        )
+        .limit(1);
+      if (!creds || !creds[0]) return null;
+      return getCrossMarginDetails({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret });
+    }),
+
+  // ─── Wallet transfer (Spot <-> Futures) ───
+  walletTransfer: publicQuery
+    .input(
+      z.object({
+        userId: z.number(),
+        currencyShortName: z.string(),
+        amount: z.number().positive(),
+        fromWallet: z.enum(["spot", "futures"]),
+        toWallet: z.enum(["spot", "futures"]),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const db = getDb();
+      const creds = await db
+        .select()
+        .from(exchangeCredentials)
+        .where(
+          and(
+            eq(exchangeCredentials.userId, input.userId),
+            eq(exchangeCredentials.exchange, "coindcx")
+          )
+        )
+        .limit(1);
+      if (!creds || !creds[0]) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "CoinDCX credentials not found" });
+      }
+      const result = await walletTransfer(
+        { apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret },
+        {
+          currency_short_name: input.currencyShortName,
+          amount: input.amount,
+          from_wallet: input.fromWallet,
+          to_wallet: input.toWallet,
+        }
+      );
+      tradingEvents.emit(`portfolio-update:${input.userId}`);
+      return result;
+    }),
+
+  // ─── Add / Remove margin ───
+  addRemoveMargin: publicQuery
+    .input(
+      z.object({
+        userId: z.number(),
+        positionId: z.string(),
+        amount: z.number().positive(),
+        type: z.enum(["add", "remove"]),
+      })
+    )
+    .mutation(async ({ input }) => {
+      const db = getDb();
+      const creds = await db
+        .select()
+        .from(exchangeCredentials)
+        .where(
+          and(
+            eq(exchangeCredentials.userId, input.userId),
+            eq(exchangeCredentials.exchange, "coindcx")
+          )
+        )
+        .limit(1);
+      if (!creds || !creds[0]) {
+        throw new TRPCError({ code: "NOT_FOUND", message: "CoinDCX credentials not found" });
+      }
+      const result = await addRemoveMargin(
+        { apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret },
+        {
+          position_id: input.positionId,
+          amount: input.amount,
+          type: input.type,
+        }
+      );
+      tradingEvents.emit(`portfolio-update:${input.userId}`);
+      return result;
+    }),
+
+  // ─── List futures orders ───
+  futuresOrders: publicQuery
+    .input(
+      z.object({
+        userId: z.number(),
+        status: z.enum(["open", "closed", "cancelled"]).optional(),
+        marginCurrency: z.enum(["USDT", "INR"]).optional(),
+        market: z.string().optional(),
+      })
+    )
+    .query(async ({ input }) => {
+      const db = getDb();
+      const creds = await db
+        .select()
+        .from(exchangeCredentials)
+        .where(
+          and(
+            eq(exchangeCredentials.userId, input.userId),
+            eq(exchangeCredentials.exchange, "coindcx")
+          )
+        )
+        .limit(1);
+      if (!creds || !creds[0]) return [];
+      return getFuturesOrders(
+        { apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret },
+        {
+          status: input.status,
+          margin_currency_short_name: input.marginCurrency ? [input.marginCurrency] : undefined,
+          market: input.market,
+        }
+      );
     }),
 });

@@ -6,6 +6,7 @@ import Portfolio from "./pages/Portfolio";
 import Logs from "./pages/Logs";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
+import RiskMetrics from "./pages/RiskMetrics";
 
 const App = () => {
   return (
@@ -40,6 +41,14 @@ const App = () => {
         element={
           <Layout>
             <Logs />
+          </Layout>
+        }
+      />
+      <Route
+        path="/risk"
+        element={
+          <Layout>
+            <RiskMetrics />
           </Layout>
         }
       />

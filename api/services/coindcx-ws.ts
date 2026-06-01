@@ -1,12 +1,14 @@
 import io from "socket.io-client";
 import { createHmac } from "crypto";
 import { getDb } from "../queries/connection";
-import { exchangeCredentials, positions } from "@db/schema";
+import { exchangeCredentials, positions, futuresWallets } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { EventEmitter } from "events";
 
 export const tradingEvents = new EventEmitter();
 tradingEvents.setMaxListeners(100);
+
+export const userBalancesCache = new Map<number, any[]>();
 
 let socket: any = null;
 
@@ -83,8 +85,51 @@ export async function initCoinDCXPrivateWs() {
   });
 
   // Handle incoming balance updates
-  socket.on("balance-update", (data: any) => {
-    console.log("[coindcx-ws] Received balance-update:", data);
+  socket.on("balance-update", async (response: any) => {
+    console.log("[coindcx-ws] Received balance-update:", response);
+    const balanceList = Array.isArray(response)
+      ? response
+      : (response && Array.isArray(response.data) ? response.data : null);
+
+    if (balanceList) {
+      userBalancesCache.set(1, balanceList);
+      // Persist each currency balance to DB so it survives server restarts
+      try {
+        const db = getDb();
+        for (const b of balanceList) {
+          const currency = (b.currency_short_name || b.currency || "").toUpperCase();
+          if (currency !== "INR" && currency !== "USDT") continue;
+          const existing = await db
+            .select()
+            .from(futuresWallets)
+            .where(and(
+              eq(futuresWallets.userId, 1),
+              eq(futuresWallets.exchange, "coindcx"),
+              eq(futuresWallets.marginCurrency, currency as "INR" | "USDT")
+            ))
+            .limit(1);
+          const walletData = {
+            balance: String(b.balance || "0"),
+            lockedBalance: String(b.locked_balance || "0"),
+            crossUserMargin: String(b.cross_user_margin || "0"),
+            crossOrderMargin: String(b.cross_order_margin || "0"),
+            updatedAt: new Date(),
+          };
+          if (existing[0]) {
+            await db.update(futuresWallets).set(walletData).where(eq(futuresWallets.id, existing[0].id));
+          } else {
+            await db.insert(futuresWallets).values({
+              userId: 1,
+              exchange: "coindcx",
+              marginCurrency: currency as "INR" | "USDT",
+              ...walletData,
+            });
+          }
+        }
+      } catch (err) {
+        console.error("[coindcx-ws] Failed to persist balance to DB:", err);
+      }
+    }
     tradingEvents.emit("portfolio-update:1");
   });
 

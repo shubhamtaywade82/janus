@@ -5,9 +5,37 @@
  */
 
 import { createHmac } from "crypto";
+import { request as httpsRequest } from "https";
 
 const COINDCX_API_HOST = "api.coindcx.com";
 const COINDCX_PUBLIC_HOST = "public.coindcx.com";
+
+// ─── USDT/INR Conversion Rate Cache ───
+let cachedConversionRate = 89.0; // default fallback from CoinDCX docs
+let conversionRateLastFetched = 0;
+const CONVERSION_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+export async function getUsdtInrRate(): Promise<number> {
+  const now = Date.now();
+  if (now - conversionRateLastFetched < CONVERSION_CACHE_TTL_MS) {
+    return cachedConversionRate;
+  }
+  try {
+    const res = await fetch("https://api.coindcx.com/exchange/ticker");
+    if (res.ok) {
+      const tickers: any[] = await res.json();
+      const usdtInr = tickers.find((t: any) => t.market === "USDTINR");
+      if (usdtInr && usdtInr.last_price) {
+        cachedConversionRate = parseFloat(usdtInr.last_price);
+        conversionRateLastFetched = now;
+        console.log(`[coindcx] USDT/INR rate updated: ${cachedConversionRate}`);
+      }
+    }
+  } catch (err) {
+    console.error("[coindcx] Failed to fetch USDT/INR rate, using cached:", cachedConversionRate);
+  }
+  return cachedConversionRate;
+}
 
 // ─── Types ───
 export interface CoinDCXCredentials {
@@ -47,32 +75,27 @@ function getTimestamp(): number {
   return Date.now();
 }
 
-// ─── Authenticated Request Helper ───
+// ─── Authenticated Request Helper (POST) ───
 async function authenticatedRequest<T>(
   credentials: CoinDCXCredentials,
   path: string,
   body: Record<string, any> = {}
 ): Promise<T> {
   const timestamp = getTimestamp();
-  const payload = {
-    ...body,
-    timestamp,
-  };
+  const payload = { ...body, timestamp };
 
   // Compact JSON - NO SPACES (critical for signature validity)
   const compactJson = JSON.stringify(payload, Object.keys(payload).sort());
   const signature = generateSignature(compactJson, credentials.apiSecret);
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    "X-AUTH-APIKEY": credentials.apiKey,
-    "X-AUTH-SIGNATURE": signature,
-  };
-
   const url = `https://${COINDCX_API_HOST}${path}`;
   const res = await fetch(url, {
     method: "POST",
-    headers,
+    headers: {
+      "Content-Type": "application/json",
+      "X-AUTH-APIKEY": credentials.apiKey,
+      "X-AUTH-SIGNATURE": signature,
+    },
     body: compactJson,
   });
 
@@ -84,7 +107,56 @@ async function authenticatedRequest<T>(
   return res.json() as Promise<T>;
 }
 
+// ─── Authenticated GET-with-body Helper ───
+// CoinDCX uses GET+body (via Node 'request' lib). fetch API blocks this.
+// Use Node's https module directly to bypass the restriction.
+function authenticatedGetRequest<T>(
+  credentials: CoinDCXCredentials,
+  path: string,
+  body: Record<string, any> = {}
+): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const timestamp = getTimestamp();
+    const payload = { ...body, timestamp };
+    const json = JSON.stringify(payload);
+    const signature = generateSignature(json, credentials.apiSecret);
+
+    // Strip query string from path for hostname options
+    const [pathname, search] = path.split("?");
+    const fullPath = search ? `${pathname}?${search}` : pathname;
+
+    const options = {
+      hostname: COINDCX_API_HOST,
+      path: fullPath,
+      method: "GET",
+      headers: {
+        "Content-Type": "application/json",
+        "X-AUTH-APIKEY": credentials.apiKey,
+        "X-AUTH-SIGNATURE": signature,
+        "Content-Length": Buffer.byteLength(json),
+      },
+    };
+
+    const req = httpsRequest(options, (res) => {
+      let data = "";
+      res.on("data", (chunk) => { data += chunk; });
+      res.on("end", () => {
+        if (res.statusCode && res.statusCode >= 400) {
+          reject(new Error(`CoinDCX API error (${res.statusCode}): ${data}`));
+        } else {
+          try { resolve(JSON.parse(data)); } catch { reject(new Error(`Invalid JSON: ${data}`)); }
+        }
+      });
+    });
+
+    req.on("error", reject);
+    req.write(json);
+    req.end();
+  });
+}
+
 // ─── Public Request Helper ───
+
 async function publicRequest<T>(path: string, params?: Record<string, string>): Promise<T> {
   const query = params ? "?" + new URLSearchParams(params).toString() : "";
   const url = `https://${COINDCX_PUBLIC_HOST}${path}${query}`;
@@ -196,6 +268,82 @@ export async function createFuturesOrder(
   );
 }
 
+// ─── Futures Wallet ───
+export async function getFuturesWallet(
+  credentials: CoinDCXCredentials,
+  marginCurrency?: "USDT" | "INR"
+): Promise<any[]> {
+  const wallets = await authenticatedGetRequest<any[]>(credentials, "/exchange/v1/derivatives/futures/wallets");
+  if (marginCurrency) return wallets.filter((w: any) => w.currency_short_name === marginCurrency);
+  return wallets;
+}
+
+// ─── Futures Wallet Transactions ───
+export async function getFuturesWalletTransactions(
+  credentials: CoinDCXCredentials,
+  page = 1,
+  size = 100
+): Promise<any[]> {
+  return authenticatedGetRequest<any[]>(
+    credentials,
+    `/exchange/v1/derivatives/futures/wallets/transactions?page=${page}&size=${size}`
+  );
+}
+
+// ─── Cross Margin Details ───
+export async function getCrossMarginDetails(credentials: CoinDCXCredentials): Promise<any> {
+  return authenticatedRequest<any>(credentials, "/exchange/v1/derivatives/futures/cross_margin_details", {
+    timestamp: getTimestamp(),
+  });
+}
+
+// ─── Wallet Transfer (Spot <-> Futures) ───
+export async function walletTransfer(
+  credentials: CoinDCXCredentials,
+  params: {
+    currency_short_name: string;
+    amount: number;
+    from_wallet: "spot" | "futures";
+    to_wallet: "spot" | "futures";
+  }
+): Promise<any> {
+  return authenticatedRequest<any>(credentials, "/exchange/v1/derivatives/futures/wallet_transfer", {
+    ...params,
+    timestamp: getTimestamp(),
+  });
+}
+
+// ─── Add / Remove Margin ───
+export async function addRemoveMargin(
+  credentials: CoinDCXCredentials,
+  params: {
+    position_id: string;
+    amount: number;
+    type: "add" | "remove";
+  }
+): Promise<any> {
+  return authenticatedRequest<any>(credentials, "/exchange/v1/derivatives/futures/positions/add_remove_margin", {
+    ...params,
+    timestamp: getTimestamp(),
+  });
+}
+
+// ─── List Futures Orders ───
+export async function getFuturesOrders(
+  credentials: CoinDCXCredentials,
+  params?: {
+    status?: "open" | "closed" | "cancelled";
+    margin_currency_short_name?: ("USDT" | "INR")[];
+    market?: string;
+  }
+): Promise<any[]> {
+  const body: Record<string, any> = { timestamp: getTimestamp() };
+  if (params?.status) body.status = params.status;
+  if (params?.margin_currency_short_name) body.margin_currency_short_name = params.margin_currency_short_name;
+  if (params?.market) body.market = params.market;
+  return authenticatedRequest<any[]>(credentials, "/exchange/v1/derivatives/futures/orders", body);
+}
+
 // ─── Margin Ratio Calculator ───
 export function calculateMarginRatio(maintenanceMargin: number, equity: number): number {
   if (equity <= 0) return Infinity;
@@ -217,4 +365,20 @@ export function calculateLiquidationPrice(
   } else {
     return entryPrice * (1 + (margin - mm) / (entryPrice * size));
   }
+}
+
+// ─── Currency Conversion ───
+// NOTE: CoinDCX /api/v1/derivatives/futures/data/conversions requires HFT API access.
+// We derive the same rate from the public USDTINR market ticker instead.
+export async function getCurrencyConversions(_credentials?: CoinDCXCredentials): Promise<any[]> {
+  const rate = await getUsdtInrRate();
+  return [
+    {
+      symbol: "USDTINR",
+      margin_currency_short_name: "INR",
+      target_currency_short_name: "USDT",
+      conversion_price: rate,
+      last_updated_at: conversionRateLastFetched || Date.now(),
+    },
+  ];
 }
