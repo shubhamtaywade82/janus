@@ -23,7 +23,7 @@ export async function getUsdtInrRate(): Promise<number> {
   try {
     const res = await fetch("https://api.coindcx.com/exchange/ticker");
     if (res.ok) {
-      const tickers: any[] = await res.json();
+      const tickers = (await res.json()) as any[];
       const usdtInr = tickers.find((t: any) => t.market === "USDTINR");
       if (usdtInr && usdtInr.last_price) {
         cachedConversionRate = parseFloat(usdtInr.last_price);

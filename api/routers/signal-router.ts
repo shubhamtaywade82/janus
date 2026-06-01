@@ -314,7 +314,7 @@ export const signalRouter = createRouter({
     )
     .query(async ({ input }) => {
       try {
-        const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = await getConfluenceInput(input.symbol);
+        const { obMetrics, tapeMetrics, prices, volumes, extraMetrics } = await getConfluenceInput(input.symbol);
 
         // Run confluence analysis
         const coindcxSymbol = `B-${input.symbol.replace("USDT", "_USDT")}`;
@@ -365,7 +365,7 @@ export const signalRouter = createRouter({
     const results = [];
     for (const pair of SUPPORTED_PAIRS) {
       try {
-        const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = await getConfluenceInput(pair.binance);
+        const { obMetrics, tapeMetrics, prices, volumes, extraMetrics } = await getConfluenceInput(pair.binance);
         const analysis = analyzeConfluence(pair.coindcx, obMetrics, tapeMetrics, prices, volumes, extraMetrics);
 
         // Store in DB

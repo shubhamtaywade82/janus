@@ -8,10 +8,13 @@ export class RingBuffer<T> {
   private pointer = 0;
   private count = 0;
 
-  constructor(private readonly capacity: number) {
+  private readonly capacity: number;
+
+  constructor(capacity: number) {
     if (capacity <= 0) {
       throw new Error("RingBuffer capacity must be greater than 0");
     }
+    this.capacity = capacity;
     this.buffer = new Array(capacity);
   }
 
