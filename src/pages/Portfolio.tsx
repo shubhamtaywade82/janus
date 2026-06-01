@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
 import { trpc } from "@/providers/trpc";
 import {
   Wallet,
@@ -140,17 +140,22 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
   );
 }
 
-// ─── Per-symbol ticker subscription (one component = one hook, avoids Rules of Hooks violation) ───
-const SymbolTicker = ({ symbol, onPrice }: { symbol: string; onPrice: (sym: string, price: number) => void }) => {
+// ─── Per-symbol ticker subscription ───
+// memo + stable optsRef → prevents re-subscription on every parent re-render
+const SymbolTicker = memo(({ symbol, onPrice }: { symbol: string; onPrice: (sym: string, price: number) => void }) => {
   const onPriceRef = useRef(onPrice);
   onPriceRef.current = onPrice;
 
-  trpc.market.tickerStream.useSubscription(
-    { symbol },
-    { onData(t: any) { if (t?.lastPrice) onPriceRef.current(symbol, parseFloat(t.lastPrice)); } }
-  );
+  // Keep options object stable — never recreated after mount
+  const optsRef = useRef({
+    onData(t: any) {
+      if (t?.lastPrice) onPriceRef.current(symbol, parseFloat(t.lastPrice));
+    },
+  });
+
+  trpc.market.tickerStream.useSubscription({ symbol }, optsRef.current);
   return null;
-};
+});
 
 // ─── Main Portfolio Page ───
 export default function Portfolio() {
@@ -178,10 +183,11 @@ export default function Portfolio() {
     portfolioRef.current = data;
   });
 
-  trpc.trading.portfolioStream.useSubscription(
-    { userId: 1 },
-    { onData: (data) => onPortfolioData.current(data) }
-  );
+  const portfolioStreamOpts = useRef({
+    onData: (data: any) => onPortfolioData.current(data),
+  });
+
+  trpc.trading.portfolioStream.useSubscription({ userId: 1 }, portfolioStreamOpts.current);
 
   const { data: conversion } = trpc.trading.currencyConversion.useQuery(
     undefined,
