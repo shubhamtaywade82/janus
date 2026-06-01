@@ -9,6 +9,7 @@ export const tradingEvents = new EventEmitter();
 tradingEvents.setMaxListeners(100);
 
 export const userBalancesCache = new Map<number, any[]>();
+export const userPositionsCache = new Map<number, any[]>();
 
 let socket: any = null;
 
@@ -75,6 +76,21 @@ export async function initCoinDCXPrivateWs() {
   // Handle incoming private ticks / position updates
   socket.on("df-position-update", (data: any) => {
     console.log("[coindcx-ws] Received df-position-update:", data);
+    const posList = Array.isArray(data)
+      ? data
+      : (data && Array.isArray(data.data) ? data.data : null);
+
+    if (posList) {
+      // Merge into cache: update matching pairs, keep others
+      const existing = userPositionsCache.get(1) || [];
+      const updated = [...existing];
+      for (const p of posList) {
+        const idx = updated.findIndex((e: any) => e.pair === p.pair);
+        if (idx >= 0) updated[idx] = p;
+        else updated.push(p);
+      }
+      userPositionsCache.set(1, updated);
+    }
     tradingEvents.emit("portfolio-update:1");
   });
 

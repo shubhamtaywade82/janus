@@ -4,9 +4,10 @@ import { getDb } from "../queries/connection";
 import { marketData, orderBookSnapshots, recentTicks } from "@db/schema";
 
 export const marketEvents = new EventEmitter();
-
-// Limit event listener warning
 marketEvents.setMaxListeners(100);
+
+// Latest ticker per symbol — populated by streaming WS, read by portfolio/signal logic
+export const latestTickerCache = new Map<string, { lastPrice: number; symbol: string }>();
 
 interface ActiveSymbolStream {
   ws: WebSocket | null;
@@ -121,6 +122,7 @@ export function subscribeToSymbol(symbol: string) {
           count: data.n,
         };
 
+        latestTickerCache.set(symbol, { lastPrice: parseFloat(data.c), symbol: data.s });
         marketEvents.emit(`${symbol}:ticker`, formattedTicker);
       } 
       else if (stream.endsWith("@kline_1m")) {

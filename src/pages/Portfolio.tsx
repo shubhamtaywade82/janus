@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { trpc } from "@/providers/trpc";
 import {
   Wallet,
@@ -16,16 +16,24 @@ import {
 import { cn } from "@/lib/utils";
 
 // ─── Position Row ───
-const PositionRow = ({ position }: { position: any }) => {
-  const pnl = parseFloat(position.unrealizedPnl || "0");
+const PositionRow = ({ position, livePrice }: { position: any; livePrice?: number }) => {
+  const currentPrice = livePrice ?? parseFloat(position.currentPrice || "0");
+  const entryPrice = parseFloat(position.entryPrice || "0");
+  const size = parseFloat(position.size || "0");
+  const marginCurrency = position.marginCurrency || "USDT";
+
+  // Recalculate PnL from live price
+  const rawPnl = position.side === "long"
+    ? (currentPrice - entryPrice) * size
+    : (entryPrice - currentPrice) * size;
+  const pnl = rawPnl;
   const isProfit = pnl >= 0;
   const marginMode = position.marginMode || "isolated";
-  const marginCurrency = position.marginCurrency || "USDT";
-  const liqDistance = position.liquidationPrice && position.currentPrice
-    ? Math.abs(parseFloat(position.currentPrice) - parseFloat(position.liquidationPrice))
+  const liqDistance = position.liquidationPrice && currentPrice > 0
+    ? Math.abs(currentPrice - parseFloat(position.liquidationPrice))
     : 0;
-  const liqPercent = position.liquidationPrice && position.currentPrice && parseFloat(position.currentPrice) > 0
-    ? (liqDistance / parseFloat(position.currentPrice)) * 100
+  const liqPercent = position.liquidationPrice && currentPrice > 0
+    ? (liqDistance / currentPrice) * 100
     : 0;
 
   return (
@@ -57,7 +65,7 @@ const PositionRow = ({ position }: { position: any }) => {
         {parseFloat(position.entryPrice).toFixed(2)}
       </td>
       <td className="px-3 py-2 text-xs text-[#f4f4f5] tabular-nums">
-        {parseFloat(position.currentPrice).toFixed(2)}
+        {currentPrice.toFixed(2)}
       </td>
       <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
         {parseFloat(position.size).toFixed(4)}
@@ -132,12 +140,47 @@ const PositionRow = ({ position }: { position: any }) => {
   );
 }
 
+// ─── Per-symbol ticker subscription (one component = one hook, avoids Rules of Hooks violation) ───
+const SymbolTicker = ({ symbol, onPrice }: { symbol: string; onPrice: (sym: string, price: number) => void }) => {
+  const onPriceRef = useRef(onPrice);
+  onPriceRef.current = onPrice;
+
+  trpc.market.tickerStream.useSubscription(
+    { symbol },
+    { onData(t: any) { if (t?.lastPrice) onPriceRef.current(symbol, parseFloat(t.lastPrice)); } }
+  );
+  return null;
+};
+
 // ─── Main Portfolio Page ───
 export default function Portfolio() {
   const [statusFilter, setStatusFilter] = useState<string>("open");
-  const { data: portfolio } = trpc.trading.portfolio.useQuery(
+
+  // Use portfolioStream subscription for live push updates
+  const [portfolio, setPortfolio] = useState<any>(null);
+  const portfolioRef = useRef<any>(null);
+
+  // Initial fetch
+  const { data: initialPortfolio } = trpc.trading.portfolio.useQuery(
     { userId: 1 },
-    { refetchInterval: 5000 }
+    { staleTime: Infinity }
+  );
+  useEffect(() => {
+    if (initialPortfolio && !portfolioRef.current) {
+      setPortfolio(initialPortfolio);
+      portfolioRef.current = initialPortfolio;
+    }
+  }, [initialPortfolio]);
+
+  // Stable callback ref — prevents re-subscription on every render
+  const onPortfolioData = useRef((data: any) => {
+    setPortfolio(data);
+    portfolioRef.current = data;
+  });
+
+  trpc.trading.portfolioStream.useSubscription(
+    { userId: 1 },
+    { onData: (data) => onPortfolioData.current(data) }
   );
 
   const { data: conversion } = trpc.trading.currencyConversion.useQuery(
@@ -148,14 +191,36 @@ export default function Portfolio() {
   // Query historical positions only when viewing non-open filters
   const { data: dbPositions } = trpc.trading.positions.useQuery(
     { userId: 1, status: statusFilter as any },
-    { enabled: statusFilter !== "open", refetchInterval: 5000 }
+    { enabled: statusFilter !== "open", refetchInterval: 10000 }
   );
 
-  const allPositions = statusFilter === "open" ? (portfolio?.positions || []) : (dbPositions || []);
+  const openPositions: any[] = portfolio?.positions || [];
+  const symbols = useMemo(
+    () => [...new Set(openPositions.map((p: any) => p.symbol as string))],
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [openPositions.map((p: any) => p.symbol).join(",")]
+  );
 
-  const totalPnl = parseFloat(portfolio?.totalUnrealizedPnl || "0") + parseFloat(portfolio?.totalRealizedPnl || "0");
-  const isProfit = totalPnl >= 0;
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
+  const handlePrice = useCallback((sym: string, price: number) => {
+    setLivePrices((prev) => prev[sym] === price ? prev : { ...prev, [sym]: price });
+  }, []);
+
+  const allPositions = statusFilter === "open" ? openPositions : (dbPositions || []);
+
+  // Recalculate totals using live prices
   const usdtInrRate = conversion?.conversion_price ?? 89.0;
+  const liveTotalUnrealizedPnl = openPositions.reduce((sum: number, p: any) => {
+    const lp = livePrices[p.symbol] ?? parseFloat(p.currentPrice || "0");
+    const entry = parseFloat(p.entryPrice || "0");
+    const size = parseFloat(p.size || "0");
+    const raw = p.side === "long" ? (lp - entry) * size : (entry - lp) * size;
+    const isInr = (p.marginCurrency || "USDT") === "INR";
+    return sum + (isInr ? raw / usdtInrRate : raw);
+  }, 0);
+
+  const totalPnl = liveTotalUnrealizedPnl + parseFloat(portfolio?.totalRealizedPnl || "0");
+  const isProfit = totalPnl >= 0;
 
   return (
     <div className="flex flex-col h-full p-4 gap-4">
@@ -218,8 +283,8 @@ export default function Portfolio() {
             <span className="text-[10px] text-[#71717a]">Unrealized PnL</span>
           </div>
           <div className={cn("text-2xl font-bold tabular-nums", isProfit ? "text-[#22c55e]" : "text-[#ef4444]")}>
-            {isProfit ? "+" : ""}
-            ${parseFloat(portfolio?.totalUnrealizedPnl || "0").toFixed(4)}
+            {liveTotalUnrealizedPnl >= 0 ? "+" : ""}
+            ${liveTotalUnrealizedPnl.toFixed(4)}
           </div>
         </div>
 
@@ -229,13 +294,13 @@ export default function Portfolio() {
             <span className="text-[10px] text-[#71717a]">Total Equity</span>
           </div>
           <div className="text-2xl font-bold text-[#f4f4f5] tabular-nums">
-            ${(portfolio?.totalEquity || 0).toFixed(2)}
+            ${((portfolio?.totalEquity || 0) - parseFloat(portfolio?.totalUnrealizedPnl || "0") + liveTotalUnrealizedPnl).toFixed(2)}
           </div>
         </div>
       </div>
 
       {/* Risk Warning */}
-      {portfolio && parseFloat(portfolio.totalUnrealizedPnl) < -parseFloat(portfolio.totalMargin) * 0.5 && (
+      {portfolio && liveTotalUnrealizedPnl < -parseFloat(portfolio.totalMargin) * 0.5 && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#ef4444]/10 border border-[#ef4444]/30">
           <AlertTriangle size={14} className="text-[#ef4444]" />
           <span className="text-xs text-[#ef4444]">
@@ -274,7 +339,7 @@ export default function Portfolio() {
             </thead>
             <tbody>
               {allPositions?.map((pos: any) => (
-                <PositionRow key={pos.id} position={pos} />
+                <PositionRow key={pos.id} position={pos} livePrice={livePrices[pos.symbol]} />
               ))}
               {(!allPositions || allPositions.length === 0) && (
                 <tr>
@@ -338,6 +403,10 @@ export default function Portfolio() {
           </div>
         </div>
       )}
+      {/* Hidden ticker subscriptions — one component per open symbol */}
+      {symbols.map((sym) => (
+        <SymbolTicker key={sym} symbol={sym} onPrice={handlePrice} />
+      ))}
     </div>
   );
 }

@@ -7,6 +7,7 @@ import {
   createFuturesOrder,
   getFuturesPositions,
   getFuturesWallet,
+  getFuturesInstrumentInfo,
   getCoinDCXTicker,
   calculateLiquidationPrice,
   getCrossMarginDetails,
@@ -18,7 +19,8 @@ import {
 } from "../services/coindcx";
 import { TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
-import { tradingEvents, initCoinDCXPrivateWs, userBalancesCache } from "../services/coindcx-ws";
+import { tradingEvents, initCoinDCXPrivateWs, userBalancesCache, userPositionsCache } from "../services/coindcx-ws";
+import { latestTickerCache, subscribeToSymbol } from "../services/streaming";
 
 export async function fetchPortfolioData(userId: number) {
   const db = getDb();
@@ -41,19 +43,25 @@ export async function fetchPortfolioData(userId: number) {
 
   if (creds && creds[0]) {
     try {
-      const [livePositions, tickers, usdtInrRate] = await Promise.all([
-        getFuturesPositions({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret }),
-        getCoinDCXTicker(),
+      // WS cache is fresher — use it if populated, else REST
+      const wsPositions = userPositionsCache.get(userId);
+      const [livePositions, usdtInrRate] = await Promise.all([
+        wsPositions && wsPositions.length > 0
+          ? Promise.resolve(wsPositions)
+          : getFuturesPositions({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret }),
         getUsdtInrRate(),
       ]);
 
+      // Build ticker map: in-memory streaming cache first (Binance WS), REST fallback
       const tickerMap = new Map<string, number>();
-      if (Array.isArray(tickers)) {
-        tickers.forEach((t: any) => {
-          if (t.market && t.last_price) {
-            tickerMap.set(t.market, parseFloat(t.last_price));
-          }
-        });
+      latestTickerCache.forEach((t, sym) => tickerMap.set(sym, t.lastPrice));
+
+      // Ensure open positions' symbols are streaming — subscribe if not already
+      for (const p of livePositions) {
+        if (parseFloat(p.active_pos) !== 0) {
+          const binanceSym = (p.pair || "").replace("B-", "").replace("_", "");
+          if (binanceSym) subscribeToSymbol(binanceSym);
+        }
       }
 
       openPositions = livePositions
@@ -63,9 +71,12 @@ export async function fetchPortfolioData(userId: number) {
           const side = sizeVal >= 0 ? "long" : "short";
           const absSize = Math.abs(sizeVal);
           const symbol = p.pair.replace("B-", "").replace("_", "");
-          const isInrMargin = (p.margin_currency || "USDT") === "INR";
+          // Real field: margin_currency_short_name (not margin_currency)
+          const marginCurrency = p.margin_currency_short_name || p.margin_currency || "USDT";
+          const isInrMargin = marginCurrency === "INR";
 
-          const lastPrice = tickerMap.get(p.pair) || parseFloat(p.avg_price);
+          // tickerMap keyed by Binance symbol (ETHUSDT), not CoinDCX pair (B-ETH_USDT)
+          const lastPrice = tickerMap.get(symbol) || parseFloat(p.mark_price || p.avg_price);
           const entryPrice = parseFloat(p.avg_price);
 
           let unrealizedPnl = 0;
@@ -75,8 +86,7 @@ export async function fetchPortfolioData(userId: number) {
             unrealizedPnl = (entryPrice - lastPrice) * absSize;
           }
 
-          // Normalize INR values to USDT for unified display
-          const lockedMarginRaw = parseFloat(p.locked_margin || "0");
+          const lockedMarginRaw = parseFloat(p.locked_margin || p.locked_user_margin || "0");
           const lockedMarginUsdt = isInrMargin ? lockedMarginRaw / usdtInrRate : lockedMarginRaw;
           const unrealizedPnlUsdt = isInrMargin ? unrealizedPnl / usdtInrRate : unrealizedPnl;
 
@@ -88,26 +98,27 @@ export async function fetchPortfolioData(userId: number) {
             userId,
             symbol,
             side,
-            entryPrice: p.avg_price,
+            entryPrice: String(p.avg_price),
             currentPrice: String(lastPrice),
             size: String(absSize),
             leverage: p.leverage,
-            margin: p.locked_margin,
+            margin: String(lockedMarginRaw),
             unrealizedPnl: String(unrealizedPnl),
             realizedPnl: "0.00",
-            liquidationPrice: p.liquidation_price || null,
-            stopLoss: p.stop_loss_trigger || null,
-            takeProfit: p.take_profit_trigger || null,
-            lockedMargin: p.locked_margin || null,
-            maintenanceMargin: p.maintenance_margin || null,
-            lockedOrderMargin: p.locked_order_margin || null,
-            crossUserMargin: p.cross_user_margin || null,
-            crossOrderMargin: p.cross_order_margin || null,
-            marginMode: p.margin_mode || "isolated",
-            marginCurrency: p.margin_currency || "USDT",
-            settlementCurrencyConversionPrice: p.settlement_currency_conversion_price || null,
-            settlementCurrencyAvgPrice: p.settlement_currency_avg_price || null,
-            priceInInr: p.price_in_inr || null,
+            liquidationPrice: p.liquidation_price ? String(p.liquidation_price) : null,
+            stopLoss: p.stop_loss_trigger ? String(p.stop_loss_trigger) : null,
+            takeProfit: p.take_profit_trigger ? String(p.take_profit_trigger) : null,
+            lockedMargin: String(lockedMarginRaw),
+            maintenanceMargin: p.maintenance_margin ? String(p.maintenance_margin) : null,
+            lockedOrderMargin: p.locked_order_margin ? String(p.locked_order_margin) : null,
+            crossUserMargin: null,
+            crossOrderMargin: null,
+            // Real field: margin_type (not margin_mode)
+            marginMode: p.margin_type || p.margin_mode || "isolated",
+            marginCurrency,
+            settlementCurrencyConversionPrice: p.settlement_currency_avg_price ? String(p.settlement_currency_avg_price) : null,
+            settlementCurrencyAvgPrice: p.settlement_currency_avg_price ? String(p.settlement_currency_avg_price) : null,
+            priceInInr: null,
             status: "open",
             createdAt: new Date(),
             updatedAt: new Date(),
@@ -252,16 +263,9 @@ export const tradingRouter = createRouter({
             apiSecret: creds[0].apiSecret,
           });
 
-          // Fetch live tickers to calculate currentPrice and PnL
-          const tickers = await getCoinDCXTicker();
+          // Use in-memory streaming cache (Binance WS) for live prices
           const tickerMap = new Map<string, number>();
-          if (Array.isArray(tickers)) {
-            tickers.forEach((t: any) => {
-              if (t.market && t.last_price) {
-                tickerMap.set(t.market, parseFloat(t.last_price));
-              }
-            });
-          }
+          latestTickerCache.forEach((t, sym) => tickerMap.set(sym, t.lastPrice));
 
           // Map positions to DB schema format
           const mapped = livePositions
@@ -271,10 +275,11 @@ export const tradingRouter = createRouter({
               const side = sizeVal >= 0 ? "long" : "short";
               const absSize = Math.abs(sizeVal);
               const symbol = p.pair.replace("B-", "").replace("_", "");
-              
-              const lastPrice = tickerMap.get(p.pair) || parseFloat(p.avg_price);
+              const marginCurrency = p.margin_currency_short_name || p.margin_currency || "USDT";
+
+              const lastPrice = tickerMap.get(symbol) || parseFloat(p.mark_price || p.avg_price);
               const entryPrice = parseFloat(p.avg_price);
-              
+
               let unrealizedPnl = 0;
               if (side === "long") {
                 unrealizedPnl = (lastPrice - entryPrice) * absSize;
@@ -283,20 +288,22 @@ export const tradingRouter = createRouter({
               }
 
               return {
-                id: idx + 10000, // Safe temporary key
+                id: idx + 10000,
                 userId,
                 symbol,
                 side,
-                entryPrice: p.avg_price,
+                entryPrice: String(p.avg_price),
                 currentPrice: String(lastPrice),
                 size: String(absSize),
                 leverage: p.leverage,
-                margin: p.locked_margin,
+                margin: String(p.locked_margin || p.locked_user_margin || "0"),
                 unrealizedPnl: String(unrealizedPnl),
                 realizedPnl: "0.00",
-                liquidationPrice: p.liquidation_price || null,
-                stopLoss: p.stop_loss_trigger || null,
-                takeProfit: p.take_profit_trigger || null,
+                liquidationPrice: p.liquidation_price ? String(p.liquidation_price) : null,
+                stopLoss: p.stop_loss_trigger ? String(p.stop_loss_trigger) : null,
+                takeProfit: p.take_profit_trigger ? String(p.take_profit_trigger) : null,
+                marginMode: p.margin_type || p.margin_mode || "isolated",
+                marginCurrency,
                 status: "open",
                 createdAt: new Date(),
                 updatedAt: new Date(),
@@ -804,5 +811,70 @@ export const tradingRouter = createRouter({
           market: input.market,
         }
       );
+    }),
+
+  // ─── Instrument info + user context for trading sidebar ───
+  instrumentInfo: publicQuery
+    .input(z.object({ userId: z.number(), symbol: z.string() }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const [instrument, creds] = await Promise.all([
+        getFuturesInstrumentInfo(input.symbol).catch(() => null),
+        db.select().from(exchangeCredentials)
+          .where(and(eq(exchangeCredentials.userId, input.userId), eq(exchangeCredentials.exchange, "coindcx")))
+          .limit(1),
+      ]);
+
+      // Available futures wallet balance
+      let availableUsdt = 0;
+      let availableInr = 0;
+      let usdtInrRate = 89;
+      if (creds[0]) {
+        try {
+          const [wallets, rate] = await Promise.all([
+            getFuturesWallet({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret }),
+            getUsdtInrRate(),
+          ]);
+          usdtInrRate = rate;
+          for (const w of wallets) {
+            const avail = parseFloat(w.balance || "0") - parseFloat(w.locked_balance || "0");
+            if (w.currency_short_name === "USDT") availableUsdt += Math.max(0, avail);
+            if (w.currency_short_name === "INR") availableInr += Math.max(0, avail);
+          }
+        } catch {}
+      }
+
+      // Current leverage from open position for this pair (best proxy)
+      let currentLeverage: number | null = null;
+      if (creds[0]) {
+        try {
+          const positions = await getFuturesPositions({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret });
+          const coindcxPair = `B-${input.symbol.replace("USDT", "_USDT")}`;
+          const pos = positions.find((p: any) => p.pair === coindcxPair && parseFloat(p.active_pos) !== 0);
+          if (pos) currentLeverage = pos.leverage;
+        } catch {}
+      }
+
+      const maxLeverage = instrument?.max_leverage || 10;
+
+      return {
+        symbol: input.symbol,
+        pair: instrument?.pair ?? `B-${input.symbol.replace("USDT", "_USDT")}`,
+        minQuantity: instrument?.min_quantity ?? 0.001,
+        maxQuantity: instrument?.max_quantity ?? 1000000,
+        maxQuantityMarket: instrument?.max_quantity_market ?? null,
+        minNotional: instrument?.min_notional ?? 5.5,
+        step: instrument?.step ?? 0.001,
+        basePrecision: instrument?.base_currency_precision ?? 2,
+        targetPrecision: instrument?.target_currency_precision ?? 4,
+        orderTypes: instrument?.order_types ?? ["market_order", "limit_order"],
+        maxLeverage: maxLeverage > 0 ? maxLeverage : 10,
+        currentLeverage,
+        availableUsdt,
+        availableInr,
+        availableUsdtEquivalent: availableUsdt + availableInr / usdtInrRate,
+        usdtInrRate,
+        marginCurrency: availableInr > availableUsdt * usdtInrRate ? "INR" : "USDT",
+      };
     }),
 });

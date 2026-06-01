@@ -30,11 +30,12 @@ export const signalRouter = createRouter({
           .limit(1);
       }
       // DISTINCT ON returns one row per symbol — the latest by created_at
-      return db.execute(sql`
+      const result = await db.execute(sql`
         SELECT DISTINCT ON (symbol) *
         FROM signals
         ORDER BY symbol, created_at DESC
-      `).then((r) => r.rows as typeof signals.$inferSelect[]);
+      `);
+      return Array.from(result) as unknown as typeof signals.$inferSelect[];
     }),
 
   // ─── Get gated signals only ───

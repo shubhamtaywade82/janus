@@ -560,12 +560,30 @@ const Dashboard = () => {
     }
   );
 
+  const { data: instrInfo } = trpc.trading.instrumentInfo.useQuery(
+    { userId: 1, symbol: selectedSymbol },
+    { staleTime: 60_000, refetchOnWindowFocus: false }
+  );
+
+  // Sync leverage to current position leverage when instrument changes
+  useEffect(() => {
+    if (instrInfo?.currentLeverage) setLeverage(instrInfo.currentLeverage);
+  }, [instrInfo?.currentLeverage]);
+
   const createPosition = trpc.trading.createPosition.useMutation();
   const utils = trpc.useUtils();
 
   const tickerData = ticker && !Array.isArray(ticker) && !("error" in ticker) ? ticker : null;
   const lastPrice = tickerData ? parseFloat(tickerData.lastPrice) : 0;
   const priceChange = tickerData ? parseFloat(tickerData.priceChangePercent) : 0;
+
+  const maxLeverage = instrInfo?.maxLeverage ?? 10;
+  const availableBalance = instrInfo?.availableUsdtEquivalent ?? 0;
+  const marginCurrency = instrInfo?.marginCurrency ?? "USDT";
+  const minQty = instrInfo?.minQuantity ?? 0.001;
+  const minNotional = instrInfo?.minNotional ?? 5.5;
+  const qtyStep = instrInfo?.step ?? 0.001;
+  const qtyPrecision = instrInfo?.targetPrecision ?? 4;
 
   const handlePlaceOrder = useCallback(() => {
     if (!orderSize || !lastPrice) return;
@@ -594,7 +612,6 @@ const Dashboard = () => {
   }, [orderSize, lastPrice, side, leverage, selectedSymbol, createPosition, utils]);
 
   const intervals = ["1m", "5m", "15m", "1h", "4h", "1d"];
-  const leverages = [1, 2, 5, 10, 20, 50, 100];
 
   return (
     <div className="flex flex-col h-full">
@@ -728,19 +745,41 @@ const Dashboard = () => {
             </button>
           </div>
 
+          {/* Available Balance */}
+          <div className="px-3 py-2 border-b border-[#27272a]">
+            <div className="flex items-center justify-between">
+              <span className="text-[10px] text-[#71717a]">Available ({marginCurrency})</span>
+              <span className="text-[10px] text-[#f4f4f5] tabular-nums font-medium">
+                {marginCurrency === "INR"
+                  ? `₹${(instrInfo?.availableInr ?? 0).toFixed(2)}`
+                  : `$${availableBalance.toFixed(2)}`}
+              </span>
+            </div>
+            {marginCurrency === "INR" && (
+              <div className="text-[9px] text-[#52525b] text-right tabular-nums">
+                ≈ ${availableBalance.toFixed(2)} USDT
+              </div>
+            )}
+          </div>
+
           {/* Leverage */}
           <div className="px-3 py-2 border-b border-[#27272a]">
             <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-[#71717a]">Leverage</span>
+              <span className="text-[10px] text-[#71717a]">
+                Leverage
+                <span className="text-[#52525b] ml-1">(max {maxLeverage}x)</span>
+              </span>
               <span className="text-xs text-[#22c55e] font-medium">{leverage}x</span>
             </div>
-            <div className="flex gap-1">
-              {leverages.map((l) => (
+            <div className="flex gap-1 flex-wrap">
+              {[1, 2, 3, 5, 10].filter((l) => l <= maxLeverage).concat(
+                maxLeverage > 10 ? [Math.min(25, maxLeverage)] : []
+              ).map((l) => (
                 <button
                   key={l}
                   onClick={() => setLeverage(l)}
                   className={cn(
-                    "flex-1 py-1 rounded text-[9px] transition-colors",
+                    "flex-1 py-1 rounded text-[9px] transition-colors min-w-[28px]",
                     leverage === l
                       ? "bg-[#22c55e]/10 text-[#22c55e] border border-[#22c55e]/30"
                       : "bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5]"
@@ -755,79 +794,106 @@ const Dashboard = () => {
           {/* Order Size */}
           <div className="px-3 py-2 border-b border-[#27272a]">
             <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-[#71717a]">Size ({selectedSymbol.replace("USDT", "")})</span>
               <span className="text-[10px] text-[#71717a]">
-                @ {lastPrice.toFixed(2)}
+                Size ({selectedSymbol.replace("USDT", "")})
+              </span>
+              <span className="text-[10px] text-[#71717a] tabular-nums">
+                min {minQty} · step {qtyStep}
               </span>
             </div>
             <input
               type="number"
               value={orderSize}
               onChange={(e) => setOrderSize(e.target.value)}
-              placeholder="0.00"
+              placeholder={`0.${"0".repeat(qtyPrecision)}`}
+              step={qtyStep}
+              min={minQty}
               className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1.5 text-xs text-[#f4f4f5] outline-none focus:border-[#22c55e] tabular-nums"
             />
+            {/* % of available balance */}
             <div className="flex gap-1 mt-1">
-              {["25%", "50%", "75%", "Max"].map((pct) => (
-                <button
-                  key={pct}
-                  onClick={() => setOrderSize(String((0.1 * parseInt(pct)) / 100))}
-                  className="flex-1 py-0.5 rounded text-[9px] bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5] transition-colors"
-                >
-                  {pct}
-                </button>
-              ))}
+              {[25, 50, 75, 100].map((pct) => {
+                const notional = availableBalance * leverage * (pct / 100);
+                const qty = lastPrice > 0 ? notional / lastPrice : 0;
+                return (
+                  <button
+                    key={pct}
+                    onClick={() => setOrderSize(qty > 0 ? qty.toFixed(qtyPrecision) : "")}
+                    className="flex-1 py-0.5 rounded text-[9px] bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5] transition-colors"
+                  >
+                    {pct}%
+                  </button>
+                );
+              })}
             </div>
           </div>
 
           {/* Order Summary */}
           <div className="px-3 py-2 border-b border-[#27272a]">
-            <div className="flex justify-between text-[10px] mb-1">
-              <span className="text-[#71717a]">Margin Required</span>
-              <span className="text-[#f4f4f5] tabular-nums">
-                {orderSize && lastPrice
-                  ? ((parseFloat(orderSize) * lastPrice) / leverage).toFixed(2)
-                  : "0.00"} USDT
-              </span>
-            </div>
-            <div className="flex justify-between text-[10px] mb-1">
-              <span className="text-[#71717a]">Est. Fee (0.05%)</span>
-              <span className="text-[#71717a] tabular-nums">
-                {orderSize && lastPrice
-                  ? (parseFloat(orderSize) * lastPrice * 0.0005).toFixed(4)
-                  : "0.0000"} USDT
-              </span>
-            </div>
-            <div className="flex justify-between text-[10px]">
-              <span className="text-[#71717a]">Total</span>
-              <span className="text-[#f4f4f5] tabular-nums">
-                {orderSize && lastPrice
-                  ? (parseFloat(orderSize) * lastPrice).toFixed(2)
-                  : "0.00"} USDT
-              </span>
-            </div>
+            {(() => {
+              const size = parseFloat(orderSize) || 0;
+              const notional = size * lastPrice;
+              const margin = leverage > 0 ? notional / leverage : 0;
+              const fee = notional * 0.0005;
+              const belowMin = size > 0 && (size < minQty || notional < minNotional);
+              return (
+                <>
+                  <div className="flex justify-between text-[10px] mb-1">
+                    <span className="text-[#71717a]">Margin Required</span>
+                    <span className="text-[#f4f4f5] tabular-nums">
+                      {margin > 0 ? `${margin.toFixed(2)} ${marginCurrency}` : "--"}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-[10px] mb-1">
+                    <span className="text-[#71717a]">Est. Fee (0.05%)</span>
+                    <span className="text-[#71717a] tabular-nums">
+                      {fee > 0 ? fee.toFixed(4) : "--"} {marginCurrency}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-[10px] mb-1">
+                    <span className="text-[#71717a]">Notional</span>
+                    <span className="text-[#f4f4f5] tabular-nums">
+                      {notional > 0 ? `$${notional.toFixed(2)}` : "--"}
+                    </span>
+                  </div>
+                  {belowMin && (
+                    <div className="text-[9px] text-[#ef4444] mt-1">
+                      Min qty {minQty} · min notional ${minNotional}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
           </div>
 
           {/* Place Order Button */}
           <div className="px-3 py-3 mt-auto">
-            <button
-              onClick={handlePlaceOrder}
-              disabled={!orderSize || createPosition.isPending}
-              className={cn(
-                "w-full py-2.5 rounded-lg text-xs font-semibold transition-all",
-                side === "buy"
-                  ? "bg-[#22c55e] hover:bg-[#16a34a] text-white"
-                  : "bg-[#ef4444] hover:bg-[#dc2626] text-white",
-                (!orderSize || createPosition.isPending) && "opacity-50 cursor-not-allowed"
-              )}
-            >
-              {createPosition.isPending ? (
-                <RefreshCw size={14} className="inline animate-spin mr-1" />
-              ) : (
-                <>{side === "buy" ? <Plus size={14} className="inline mr-1" /> : <Minus size={14} className="inline mr-1" />}</>
-              )}
-              {side === "buy" ? "Buy / Long" : "Sell / Short"} {selectedSymbol}
-            </button>
+            {(() => {
+              const size = parseFloat(orderSize) || 0;
+              const notional = size * lastPrice;
+              const margin = leverage > 0 ? notional / leverage : 0;
+              const invalid = !orderSize || size < minQty || notional < minNotional || margin > availableBalance;
+              return (
+                <button
+                  onClick={handlePlaceOrder}
+                  disabled={invalid || createPosition.isPending}
+                  className={cn(
+                    "w-full py-2.5 rounded-lg text-xs font-semibold transition-all",
+                    side === "buy"
+                      ? "bg-[#22c55e] hover:bg-[#16a34a] text-white"
+                      : "bg-[#ef4444] hover:bg-[#dc2626] text-white",
+                    (invalid || createPosition.isPending) && "opacity-50 cursor-not-allowed"
+                  )}
+                >
+                  {createPosition.isPending ? (
+                    <RefreshCw size={14} className="inline animate-spin mr-1" />
+                  ) : (
+                    <>{side === "buy" ? <Plus size={14} className="inline mr-1" /> : <Minus size={14} className="inline mr-1" />}</>
+                  )}
+                  {side === "buy" ? "Buy / Long" : "Sell / Short"} {selectedSymbol}
+                </button>
+              );
+            })()}
           </div>
         </div>
       </div>

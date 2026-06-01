@@ -174,6 +174,28 @@ export async function getUserInfo(credentials: CoinDCXCredentials): Promise<any>
   return authenticatedRequest<any>(credentials, "/exchange/v1/users/info");
 }
 
+// ─── Markets Details Cache ───
+let marketsCache: any[] | null = null;
+let marketsCacheTime = 0;
+const MARKETS_TTL = 10 * 60 * 1000; // 10 min
+
+export async function getMarketsDetails(): Promise<any[]> {
+  if (marketsCache && Date.now() - marketsCacheTime < MARKETS_TTL) return marketsCache;
+  const res = await fetch("https://api.coindcx.com/exchange/v1/markets_details");
+  if (!res.ok) throw new Error(`markets_details failed: ${res.status}`);
+  const data = await res.json() as any[];
+  marketsCache = data;
+  marketsCacheTime = Date.now();
+  return data;
+}
+
+export async function getFuturesInstrumentInfo(symbol: string): Promise<any | null> {
+  const data = await getMarketsDetails();
+  // symbol like "BTCUSDT" → pair "B-BTC_USDT"
+  const coindcxPair = `B-${symbol.replace("USDT", "_USDT")}`;
+  return data.find((m: any) => m.pair === coindcxPair || m.symbol === symbol) ?? null;
+}
+
 // ─── Order Operations ───
 export async function createOrder(
   credentials: CoinDCXCredentials,
@@ -247,7 +269,10 @@ export async function getCoinDCXTicker(market?: string): Promise<any> {
 
 // ─── Futures Operations ───
 export async function getFuturesPositions(credentials: CoinDCXCredentials): Promise<any[]> {
-  return authenticatedRequest<any[]>(credentials, "/exchange/v1/derivatives/futures/positions");
+  // Must pass margin_currency_short_name — omitting it returns empty array
+  return authenticatedRequest<any[]>(credentials, "/exchange/v1/derivatives/futures/positions", {
+    margin_currency_short_name: ["INR", "USDT"],
+  });
 }
 
 export async function createFuturesOrder(
@@ -332,7 +357,7 @@ export async function addRemoveMargin(
 export async function getFuturesOrders(
   credentials: CoinDCXCredentials,
   params?: {
-    status?: "open" | "closed" | "cancelled";
+    status?: "open" | "closed" | "cancelled" | "filled";
     margin_currency_short_name?: ("USDT" | "INR")[];
     market?: string;
   }
