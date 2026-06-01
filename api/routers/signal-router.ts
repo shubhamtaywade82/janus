@@ -3,12 +3,59 @@ import { createRouter, publicQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { signals } from "@db/schema";
 import { desc, eq, sql } from "drizzle-orm";
+import { EventEmitter } from "events";
+import { observable } from "@trpc/server/observable";
 import {
   analyzeConfluence,
   aggregateOrderBookMetrics,
   aggregateTradeTape,
 } from "../services/confluence";
 import { fetchOrderBook, fetchRecentTrades, fetchKlines, SUPPORTED_PAIRS } from "../services/binance";
+
+// ─── Signal update event bus ───
+export const signalEvents = new EventEmitter();
+signalEvents.setMaxListeners(50);
+
+// ─── Auto-analysis loop — runs every 30s on the server ───
+let autoAnalysisTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function runAutoAnalysis() {
+  try {
+    const db = getDb();
+    for (const pair of SUPPORTED_PAIRS) {
+      try {
+        const [orderBook, recentTrades, klines] = await Promise.all([
+          fetchOrderBook(pair.binance, 50),
+          fetchRecentTrades(pair.binance, 50),
+          fetchKlines(pair.binance, "1m", 150),
+        ]);
+        const obMetrics = aggregateOrderBookMetrics(orderBook.bids, orderBook.asks);
+        const tapeMetrics = aggregateTradeTape(recentTrades.map((t) => ({ price: t.price, qty: t.qty, isBuyerMaker: t.isBuyerMaker })));
+        const prices = klines.map((k) => parseFloat(k.close));
+        const volumes = klines.map((k) => parseFloat(k.volume));
+        const analysis = analyzeConfluence(pair.coindcx, obMetrics, tapeMetrics, prices, volumes);
+        await db.insert(signals).values({
+          symbol: pair.coindcx,
+          microScore: String(analysis.microScore),
+          intraScore: String(analysis.intraScore),
+          swingScore: String(analysis.swingScore),
+          compositeScore: String(analysis.compositeScore),
+          threshold: String(analysis.threshold),
+          isGated: analysis.isGated,
+          direction: analysis.direction,
+          metadata: analysis.indicators,
+        }).catch(() => {});
+      } catch { /* skip failed pairs */ }
+    }
+    signalEvents.emit("update");
+  } catch {}
+  autoAnalysisTimer = setTimeout(runAutoAnalysis, 30_000);
+}
+
+export function startAutoAnalysis() {
+  if (autoAnalysisTimer) return; // already running
+  runAutoAnalysis();
+}
 
 export const signalRouter = createRouter({
   // ─── Get latest signals — one per symbol ───
@@ -30,12 +77,25 @@ export const signalRouter = createRouter({
           .limit(1);
       }
       // DISTINCT ON returns one row per symbol — the latest by created_at
+      // db.execute returns snake_case columns; map to camelCase to match ORM schema
       const result = await db.execute(sql`
         SELECT DISTINCT ON (symbol) *
         FROM signals
         ORDER BY symbol, created_at DESC
       `);
-      return Array.from(result) as unknown as typeof signals.$inferSelect[];
+      return Array.from(result).map((r: any) => ({
+        id: r.id,
+        symbol: r.symbol,
+        microScore: r.micro_score,
+        intraScore: r.intra_score,
+        swingScore: r.swing_score,
+        compositeScore: r.composite_score,
+        threshold: r.threshold,
+        isGated: r.is_gated,
+        direction: r.direction,
+        metadata: r.metadata,
+        createdAt: r.created_at,
+      })) as typeof signals.$inferSelect[];
     }),
 
   // ─── Get gated signals only ───
@@ -218,5 +278,14 @@ export const signalRouter = createRouter({
         lastSignal: allSignals.find((s) => s.symbol === p.coindcx),
       })),
     };
+  }),
+
+  // ─── Real-time signal update stream ───
+  stream: publicQuery.subscription(() => {
+    return observable<{ updatedAt: number }>((emit) => {
+      const onUpdate = () => emit.next({ updatedAt: Date.now() });
+      signalEvents.on("update", onUpdate);
+      return () => signalEvents.off("update", onUpdate);
+    });
   }),
 });

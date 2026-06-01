@@ -114,3 +114,7 @@ import { initCoinDCXPrivateWs } from "./services/coindcx-ws";
 initCoinDCXPrivateWs().catch((err) => {
   console.error("[coindcx-ws] Failed to initialize private WS:", err);
 });
+
+// Start auto signal analysis loop (runs every 30s)
+import { startAutoAnalysis } from "./routers/signal-router";
+startAutoAnalysis();

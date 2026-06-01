@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { trpc } from "@/providers/trpc";
 import {
   Signal,
@@ -90,87 +90,226 @@ const ScoreRing = ({ score, label, color }: { score: number; label: string; colo
   );
 }
 
+// ─── Score bar ───
+const ScoreBar = ({ score, color, label, weight }: { score: number; color: string; label: string; weight: string }) => (
+  <div className="flex flex-col gap-1 flex-1">
+    <div className="flex items-center justify-between">
+      <span className="text-xs text-[#71717a]">{label}</span>
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] text-[#52525b]">{weight}</span>
+        <span className="text-sm font-bold tabular-nums" style={{ color }}>{isNaN(score) ? "--" : score.toFixed(0)}</span>
+      </div>
+    </div>
+    <div className="h-1.5 rounded-full bg-[#27272a] overflow-hidden">
+      <div className="h-full rounded-full transition-all duration-500" style={{ width: `${Math.min(100, Math.max(0, isNaN(score) ? 0 : score))}%`, background: color }} />
+    </div>
+  </div>
+);
+
 // ─── Signal Card ───
 const SignalCard = ({ signal }: { signal: any }) => {
   const indicators = signal.metadata ? (typeof signal.metadata === "string" ? JSON.parse(signal.metadata) : signal.metadata) : {};
   const regime = getRegime(signal);
+  const composite = parseFloat(signal.compositeScore);
+  const micro = parseFloat(signal.microScore);
+  const intra = parseFloat(signal.intraScore);
+  const swing = parseFloat(signal.swingScore);
+  const ts = signal.createdAt ? new Date(signal.createdAt) : null;
+  const age = ts ? Math.floor((Date.now() - ts.getTime()) / 60000) : null;
+  const sym = (signal.symbol || "").replace("B-", "").replace("_", "");
+  const rsi = indicators.rsi ?? 50;
+  const imbalance = indicators.imbalance ?? 0;
 
   return (
     <div
-      className="rounded-lg border p-3 transition-all"
+      className="rounded-lg border p-3 transition-all hover:brightness-110"
       style={{ background: regime.bg, borderColor: regime.border }}
     >
-      <div className="flex items-center justify-between mb-2">
+      {/* Header */}
+      <div className="flex items-center justify-between mb-2.5">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-semibold text-[#f4f4f5]">{signal.symbol.replace("B-", "").replace("_", "")}</span>
+          <span className="text-sm font-bold text-[#f4f4f5]">{sym}</span>
           <span
-            className="flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded font-semibold"
-            style={{ color: regime.color, background: `${regime.color}18` }}
+            className="inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full font-semibold"
+            style={{ color: regime.color, background: `${regime.color}22` }}
           >
             {signal.isGated ? <Unlock size={9} /> : <Lock size={9} />}
             {regime.label}
           </span>
         </div>
-        <div className="flex items-center gap-1">
-          <Target size={10} style={{ color: regime.color }} />
-          <span className="text-lg font-bold tabular-nums" style={{ color: regime.color }}>
-            {parseFloat(signal.compositeScore).toFixed(1)}
+        <div className="text-right">
+          <span className="text-xl font-black tabular-nums" style={{ color: isNaN(composite) ? "#71717a" : regime.color }}>
+            {isNaN(composite) ? "--" : composite.toFixed(1)}
           </span>
+          <span className="text-[9px] text-[#52525b] ml-0.5">/100</span>
         </div>
       </div>
 
-      <div className="flex items-center justify-around mb-2">
-        <ScoreRing score={parseFloat(signal.microScore)} label="Micro" color="#3b82f6" />
-        <ScoreRing score={parseFloat(signal.intraScore)} label="Intra" color="#8b5cf6" />
-        <ScoreRing score={parseFloat(signal.swingScore)} label="Swing" color="#f59e0b" />
+      {/* Composite bar */}
+      <div className="mb-2.5">
+        <div className="h-1.5 rounded-full bg-[#27272a] overflow-hidden relative">
+          <div className="h-full rounded-full transition-all duration-700" style={{ width: `${Math.min(100, isNaN(composite) ? 0 : composite)}%`, background: regime.color }} />
+          <div className="absolute top-0 bottom-0 w-px bg-white/25" style={{ left: "75%" }} />
+        </div>
+        <div className="flex justify-between text-[9px] text-[#52525b] mt-0.5">
+          <span>0</span><span className="text-white/25">Gate 75</span><span>100</span>
+        </div>
       </div>
 
-      {indicators && (
-        <div className="grid grid-cols-3 gap-1 text-[9px] text-[#71717a]">
-          <div className="flex justify-between">
-            <span>Spread</span>
-            <span className="text-[#f4f4f5] tabular-nums">{indicators.spread?.toFixed(4) || "--"}</span>
-          </div>
-          <div className="flex justify-between">
-            <span>Imbal</span>
-            <span
-              className={cn(
-                "tabular-nums",
-                (indicators.imbalance || 0) > 0 ? "text-[#22c55e]" : "text-[#ef4444]"
-              )}
-            >
-              {(indicators.imbalance || 0) > 0 ? "+" : ""}
-              {(indicators.imbalance || 0).toFixed(2)}
-            </span>
-          </div>
-          <div className="flex justify-between">
-            <span>RSI</span>
-            <span className="text-[#f4f4f5] tabular-nums">{(indicators.rsi || 50).toFixed(1)}</span>
+      {/* Score bars */}
+      <div className="flex flex-col gap-1.5 mb-2.5">
+        <ScoreBar score={micro} color="#3b82f6" label="Micro" weight="20%" />
+        <ScoreBar score={intra} color="#8b5cf6" label="Intraday" weight="45%" />
+        <ScoreBar score={swing} color="#f59e0b" label="Swing" weight="35%" />
+      </div>
+
+      {/* Indicators */}
+      <div className="grid grid-cols-3 gap-x-2 border-t border-[#27272a]/50 pt-2">
+        <div>
+          <div className="text-[9px] text-[#71717a]">Spread</div>
+          <div className="text-xs text-[#f4f4f5] tabular-nums">{indicators.spread?.toFixed(4) ?? "--"}</div>
+        </div>
+        <div>
+          <div className="text-[9px] text-[#71717a]">Imbalance</div>
+          <div className={cn("text-xs tabular-nums", imbalance >= 0 ? "text-[#22c55e]" : "text-[#ef4444]")}>
+            {imbalance >= 0 ? "+" : ""}{imbalance.toFixed(2)}
           </div>
         </div>
-      )}
+        <div>
+          <div className="text-[9px] text-[#71717a]">RSI</div>
+          <div className={cn("text-xs tabular-nums", rsi > 70 ? "text-[#ef4444]" : rsi < 30 ? "text-[#22c55e]" : "text-[#f4f4f5]")}>
+            {rsi.toFixed(1)}
+          </div>
+        </div>
+      </div>
 
-      <div className="mt-2 text-[9px] text-[#52525b]">
-        {new Date(signal.createdAt).toLocaleTimeString()}
+      <div className="mt-1.5 flex items-center justify-between text-[9px] text-[#52525b]">
+        <span>{ts ? ts.toLocaleTimeString() : "--"}</span>
+        <span className={cn(age !== null && age < 2 ? "text-[#22c55e]" : "")}>
+          {age !== null ? (age === 0 ? "just now" : `${age}m ago`) : ""}
+        </span>
       </div>
     </div>
   );
 }
+
+// ─── Market Sentiment Gauge ───
+const SentimentGauge = ({ signals }: { signals: any[] }) => {
+  if (!signals || signals.length === 0) return null;
+
+  // Compute weighted sentiment: long=+1, short=-1, neutral=0, weighted by composite score
+  let weightedSum = 0;
+  let totalWeight = 0;
+  let bullCount = 0, bearCount = 0, neutCount = 0;
+
+  for (const s of signals) {
+    const score = parseFloat(s.compositeScore) || 0;
+    const dir = s.direction;
+    const regime = getRegime(s);
+    totalWeight += score;
+    if (regime.label === "BULLISH") { weightedSum += score; bullCount++; }
+    else if (regime.label === "BEARISH") { weightedSum -= score; bearCount++; }
+    else if (regime.label === "ACCUMULATION") { weightedSum += score * 0.5; neutCount++; }
+    else if (regime.label === "DISTRIBUTION") { weightedSum -= score * 0.5; neutCount++; }
+    else neutCount++;
+    void dir;
+  }
+
+  // Normalize to -100..+100
+  const raw = totalWeight > 0 ? (weightedSum / totalWeight) * 100 : 0;
+  const sentiment = Math.max(-100, Math.min(100, raw));
+  // Map to 0..100 for gauge position
+  const pct = (sentiment + 100) / 2;
+
+  const label = sentiment > 30 ? "BULLISH" : sentiment < -30 ? "BEARISH" : "NEUTRAL";
+  const color = sentiment > 30 ? "#0ecb81" : sentiment < -30 ? "#f6465d" : "#f59e0b";
+  const bgGrad = `linear-gradient(to right, #f6465d 0%, #f59e0b 50%, #0ecb81 100%)`;
+
+  return (
+    <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-5">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <div className="text-xs text-[#71717a] mb-0.5">Market Sentiment</div>
+          <div className="text-2xl font-black tracking-wide" style={{ color }}>{label}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-xs text-[#71717a] mb-0.5">Score</div>
+          <div className="text-2xl font-black tabular-nums" style={{ color }}>
+            {sentiment > 0 ? "+" : ""}{sentiment.toFixed(0)}
+          </div>
+        </div>
+      </div>
+
+      {/* Gauge bar */}
+      <div className="relative mb-3">
+        <div className="h-4 rounded-full overflow-hidden" style={{ background: bgGrad, opacity: 0.3 }} />
+        <div className="absolute inset-0 h-4 rounded-full overflow-hidden" style={{ background: bgGrad, clipPath: `inset(0 ${100 - pct}% 0 0 round 9999px)` }} />
+        {/* Needle */}
+        <div
+          className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 border-[#09090b] shadow-lg transition-all duration-700"
+          style={{ left: `calc(${pct}% - 6px)`, background: color }}
+        />
+        {/* Center line */}
+        <div className="absolute top-0 bottom-0 w-px bg-[#52525b]/60" style={{ left: "50%" }} />
+      </div>
+
+      {/* Labels */}
+      <div className="flex justify-between text-[10px] text-[#52525b] mb-3">
+        <span className="text-[#f6465d]">◀ BEARISH</span>
+        <span className="text-[#52525b]">NEUTRAL</span>
+        <span className="text-[#0ecb81]">BULLISH ▶</span>
+      </div>
+
+      {/* Distribution pills */}
+      <div className="flex items-center gap-2">
+        <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-[#0ecb81]/10 text-[#0ecb81]">
+          <span className="font-bold">{bullCount}</span> Bull
+        </span>
+        <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-[#52525b]/10 text-[#71717a]">
+          <span className="font-bold">{neutCount}</span> Neutral
+        </span>
+        <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-[#f6465d]/10 text-[#f6465d]">
+          <span className="font-bold">{bearCount}</span> Bear
+        </span>
+        <span className="ml-auto text-[10px] text-[#52525b]">{signals.length} pairs</span>
+      </div>
+    </div>
+  );
+};
 
 // ─── Main Signals Page ───
 const Signals = () => {
   const [selectedSymbol, setSelectedSymbol] = useState("BTCUSDT");
   const [analyzeTrigger, setAnalyzeTrigger] = useState(0);
   const [analyzeAllTrigger, setAnalyzeAllTrigger] = useState(0);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+  const [refreshInterval, setRefreshInterval] = useState(30); // seconds
 
   const { data: signals, isLoading, refetch } = trpc.signal.latest.useQuery(
     { limit: 50 },
-    { refetchInterval: 10000 }
+    { staleTime: 0 }
   );
 
-  const { data: stats } = trpc.signal.stats.useQuery(undefined, {
-    refetchInterval: 30000,
+  const { data: stats, refetch: refetchStats } = trpc.signal.stats.useQuery(undefined, {
+    staleTime: 0,
   });
+
+  const streamOptsRef = useRef({
+    onData: (_: any) => {
+      refetch();
+      refetchStats();
+      setLastUpdate(new Date());
+    },
+  });
+  trpc.signal.stream.useSubscription(undefined, streamOptsRef.current);
+
+  // Client-side interval trigger — fires analyzeAll at user-selected rate
+  useEffect(() => {
+    const id = setInterval(() => {
+      setAnalyzeAllTrigger((prev) => prev + 1);
+    }, refreshInterval * 1000);
+    return () => clearInterval(id);
+  }, [refreshInterval]);
 
   const { isFetching: isAnalyzing } = trpc.signal.analyze.useQuery(
     { symbol: selectedSymbol },
@@ -184,7 +323,7 @@ const Signals = () => {
 
   const handleAnalyze = () => {
     setAnalyzeTrigger((prev) => prev + 1);
-    setTimeout(() => refetch(), 2000);
+    setTimeout(() => refetch(), 1500);
   };
 
   const handleAnalyzeAll = () => {
@@ -209,8 +348,10 @@ const Signals = () => {
           <Signal size={18} className="text-[#22c55e]" />
           <div>
             <h2 className="text-sm font-semibold text-[#f4f4f5]">Confluence Signal Engine</h2>
-            <p className="text-[10px] text-[#71717a]">
-              Multi-timeframe analysis with 75-point threshold gating
+            <p className="text-[10px] text-[#71717a] flex items-center gap-1.5">
+              <span className="w-1.5 h-1.5 rounded-full bg-[#22c55e] animate-pulse inline-block" />
+              Auto-refresh every {refreshInterval}s
+              {lastUpdate && <span className="text-[#52525b]">· {lastUpdate.toLocaleTimeString()}</span>}
             </p>
           </div>
         </div>
@@ -226,6 +367,21 @@ const Signals = () => {
             <option value="BNBUSDT">BNBUSDT</option>
             <option value="XRPUSDT">XRPUSDT</option>
           </select>
+          {/* Interval selector */}
+          <div className="flex items-center gap-1 bg-[#18181b] border border-[#27272a] rounded px-2 py-1">
+            <RefreshCw size={10} className="text-[#71717a]" />
+            <select
+              value={refreshInterval}
+              onChange={(e) => setRefreshInterval(Number(e.target.value))}
+              className="bg-transparent text-[10px] text-[#f4f4f5] outline-none"
+            >
+              <option value={10}>10s</option>
+              <option value={30}>30s</option>
+              <option value={60}>60s</option>
+              <option value={120}>2m</option>
+              <option value={300}>5m</option>
+            </select>
+          </div>
           <button
             onClick={handleAnalyze}
             disabled={isAnalyzing}
@@ -245,45 +401,91 @@ const Signals = () => {
         </div>
       </div>
 
-      {/* Stats Row */}
+      {/* Stats + Gauge Row */}
       {stats && (
-        <div className="grid grid-cols-4 gap-3">
+        <div className="grid grid-cols-5 gap-3">
+          {/* Sentiment Gauge — spans 2 cols */}
+          <div className="col-span-2 bg-[#18181b] border border-[#27272a] rounded-lg p-3">
+            {signals && signals.length > 0
+              ? (() => {
+                  let ws = 0, tw = 0, bull = 0, bear = 0, neut = 0;
+                  for (const s of signals) {
+                    const score = parseFloat(s.compositeScore) || 0;
+                    const r = getRegime(s).label;
+                    tw += score;
+                    if (r === "BULLISH") { ws += score; bull++; }
+                    else if (r === "BEARISH") { ws -= score; bear++; }
+                    else if (r === "ACCUMULATION") { ws += score * 0.5; neut++; }
+                    else if (r === "DISTRIBUTION") { ws -= score * 0.5; neut++; }
+                    else neut++;
+                  }
+                  const sentiment = tw > 0 ? Math.max(-100, Math.min(100, (ws / tw) * 100)) : 0;
+                  const pct = (sentiment + 100) / 2;
+                  const slabel = sentiment > 30 ? "BULLISH" : sentiment < -30 ? "BEARISH" : "NEUTRAL";
+                  const scolor = sentiment > 30 ? "#0ecb81" : sentiment < -30 ? "#f6465d" : "#f59e0b";
+                  return (
+                    <>
+                      <div className="flex items-center justify-between mb-2">
+                        <div className="text-[10px] text-[#71717a]">Market Sentiment</div>
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] tabular-nums text-[#52525b]">{sentiment > 0 ? "+" : ""}{sentiment.toFixed(0)}</span>
+                          <span className="text-xs font-bold" style={{ color: scolor }}>{slabel}</span>
+                        </div>
+                      </div>
+                      {/* Gauge bar */}
+                      <div className="relative mb-1.5">
+                        <div className="h-3 rounded-full overflow-hidden" style={{ background: "linear-gradient(to right,#f6465d,#f59e0b 50%,#0ecb81)", opacity: 0.25 }} />
+                        <div className="absolute inset-0 h-3 rounded-full overflow-hidden" style={{ background: "linear-gradient(to right,#f6465d,#f59e0b 50%,#0ecb81)", clipPath: `inset(0 ${100 - pct}% 0 0 round 9999px)` }} />
+                        <div className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full border-2 border-[#09090b] transition-all duration-700" style={{ left: `calc(${pct}% - 5px)`, background: scolor }} />
+                        <div className="absolute top-0 bottom-0 w-px bg-[#52525b]/50" style={{ left: "50%" }} />
+                      </div>
+                      <div className="flex justify-between text-[9px] text-[#52525b] mb-2">
+                        <span className="text-[#f6465d]">Bear</span>
+                        <span>Neutral</span>
+                        <span className="text-[#0ecb81]">Bull</span>
+                      </div>
+                      <div className="flex gap-1.5">
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#0ecb81]/10 text-[#0ecb81]">{bull} Bull</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#52525b]/10 text-[#71717a]">{neut} Neutral</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#f6465d]/10 text-[#f6465d]">{bear} Bear</span>
+                      </div>
+                    </>
+                  );
+                })()
+              : <div className="text-[10px] text-[#52525b] flex items-center h-full">No signals yet</div>
+            }
+          </div>
+
+          {/* Total Signals */}
           <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-3">
             <div className="text-[10px] text-[#71717a] mb-1">Total Signals</div>
             <div className="text-lg font-bold text-[#f4f4f5] tabular-nums">{stats.total}</div>
             <div className="text-[9px] text-[#71717a]">avg {stats.avgComposite}</div>
+            <div className="mt-1 text-[9px] text-[#0ecb81]">{stats.gated} gated · {stats.gatedPercent.toFixed(1)}%</div>
           </div>
-          <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-3">
-            <div className="text-[10px] text-[#71717a] mb-1">Gated (≥75)</div>
-            <div className="text-lg font-bold text-[#0ecb81] tabular-nums">{stats.gated}</div>
-            <div className="text-[9px] text-[#71717a]">{stats.gatedPercent.toFixed(1)}% pass rate</div>
-          </div>
+
+          {/* Regime Breakdown */}
           <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-3">
             <div className="text-[10px] text-[#71717a] mb-2">Regime Breakdown</div>
-            <div className="flex flex-wrap gap-x-3 gap-y-1">
-              {[
-                ["BULLISH", "#0ecb81"],
-                ["BEARISH", "#f6465d"],
-                ["ACCUMULATION", "#3b82f6"],
-                ["DISTRIBUTION", "#f59e0b"],
-              ].map(([label, color]) => (
-                <span key={label} className="text-[9px] tabular-nums" style={{ color }}>
-                  {label.slice(0, 4)} {regimeCounts[label] || 0}
-                </span>
+            <div className="flex flex-col gap-1">
+              {([["BULLISH","#0ecb81"],["BEARISH","#f6465d"],["ACCUMULATION","#3b82f6"],["DISTRIBUTION","#f59e0b"]] as [string,string][]).map(([l,c]) => (
+                <div key={l} className="flex items-center justify-between">
+                  <span className="text-[9px]" style={{ color: c }}>{l.slice(0,5)}</span>
+                  <span className="text-[9px] font-bold text-[#f4f4f5] tabular-nums">{regimeCounts[l] || 0}</span>
+                </div>
               ))}
             </div>
           </div>
+
+          {/* Low Signal */}
           <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-3">
             <div className="text-[10px] text-[#71717a] mb-2">Low-Signal</div>
-            <div className="flex flex-wrap gap-x-3 gap-y-1">
-              {[
-                ["RANGE", "#71717a"],
-                ["NEUTRAL", "#a1a1aa"],
-                ["AVOID", "#ef4444"],
-              ].map(([label, color]) => (
-                <span key={label} className="text-[9px] tabular-nums" style={{ color }}>
-                  {label.slice(0, 5)} {regimeCounts[label] || 0}
-                </span>
+            <div className="flex flex-col gap-1">
+              {([["RANGE","#71717a"],["NEUTRAL","#a1a1aa"],["AVOID","#ef4444"]] as [string,string][]).map(([l,c]) => (
+                <div key={l} className="flex items-center justify-between">
+                  <span className="text-[9px]" style={{ color: c }}>{l.slice(0,5)}</span>
+                  <span className="text-[9px] font-bold text-[#f4f4f5] tabular-nums">{regimeCounts[l] || 0}</span>
+                </div>
               ))}
             </div>
           </div>
