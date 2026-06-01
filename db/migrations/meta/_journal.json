@@ -8,6 +8,13 @@
       "when": 1780291551938,
       "tag": "0000_white_saracen",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1780299790770,
+      "tag": "0001_dizzy_wendigo",
+      "breakpoints": true
     }
   ]
 }

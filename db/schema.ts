@@ -21,6 +21,8 @@ export const orderTypeEnum = pgEnum("order_type", ["market", "limit", "stop"]);
 export const tradeStatusEnum = pgEnum("trade_status", ["pending", "filled", "partial", "cancelled", "rejected"]);
 export const logLevelEnum = pgEnum("log_level", ["info", "warn", "error", "critical", "debug"]);
 export const exchangeEnum = pgEnum("exchange", ["coindcx", "binance"]);
+export const marginModeEnum = pgEnum("margin_mode", ["isolated", "cross"]);
+export const marginCurrencyEnum = pgEnum("margin_currency", ["USDT", "INR"]);
 
 // ─── Users Table (Auth) ───
 export const users = pgTable("users", {
@@ -95,6 +97,17 @@ export const positions = pgTable("positions", {
   status: positionStatusEnum("status").default("open").notNull(),
   exchangeOrderId: varchar("exchange_order_id", { length: 255 }),
   signalId: integer("signal_id"),
+  // ─── CoinDCX Futures Margin Fields ───
+  lockedMargin: decimal("locked_margin", { precision: 18, scale: 8 }),
+  maintenanceMargin: decimal("maintenance_margin", { precision: 18, scale: 8 }),
+  lockedOrderMargin: decimal("locked_order_margin", { precision: 18, scale: 8 }),
+  crossUserMargin: decimal("cross_user_margin", { precision: 18, scale: 8 }),
+  crossOrderMargin: decimal("cross_order_margin", { precision: 18, scale: 8 }),
+  marginMode: marginModeEnum("margin_mode").default("isolated"),
+  marginCurrency: marginCurrencyEnum("margin_currency").default("USDT"),
+  settlementCurrencyConversionPrice: decimal("settlement_currency_conversion_price", { precision: 18, scale: 8 }),
+  settlementCurrencyAvgPrice: decimal("settlement_currency_avg_price", { precision: 18, scale: 8 }),
+  priceInInr: decimal("price_in_inr", { precision: 18, scale: 8 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
   closedAt: timestamp("closed_at"),
@@ -177,3 +190,23 @@ export const recentTicks = pgTable("recent_ticks", {
 });
 
 export type RecentTick = typeof recentTicks.$inferSelect;
+
+// ─── Futures Wallets (CoinDCX INR/USDT Margined) ───
+export const futuresWallets = pgTable("futures_wallets", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  exchange: exchangeEnum("exchange").notNull(),
+  marginCurrency: marginCurrencyEnum("margin_currency").default("USDT").notNull(),
+  balance: decimal("balance", { precision: 18, scale: 8 }).default("0").notNull(),
+  lockedBalance: decimal("locked_balance", { precision: 18, scale: 8 }).default("0").notNull(),
+  totalAccountEquity: decimal("total_account_equity", { precision: 18, scale: 8 }).default("0").notNull(),
+  availableBalanceCross: decimal("available_balance_cross", { precision: 18, scale: 8 }).default("0").notNull(),
+  marginRatioCross: decimal("margin_ratio_cross", { precision: 5, scale: 4 }).default("0").notNull(),
+  withdrawableBalance: decimal("withdrawable_balance", { precision: 18, scale: 8 }).default("0").notNull(),
+  crossUserMargin: decimal("cross_user_margin", { precision: 18, scale: 8 }).default("0").notNull(),
+  crossOrderMargin: decimal("cross_order_margin", { precision: 18, scale: 8 }).default("0").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type FuturesWallet = typeof futuresWallets.$inferSelect;
