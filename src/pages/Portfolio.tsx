@@ -486,8 +486,8 @@ export default function Portfolio() {
         </div>
       </div>
 
-      {/* Risk Warning — trigger when PnL > 10% of total wallet equity */}
-      {portfolio && totalEquityUsdt > 0 && liveTotalUnrealizedPnl < -(totalEquityUsdt * 0.1) && (
+      {/* Risk Warning — trigger when PnL < -50% of total margin */}
+      {portfolio && parseFloat(portfolio.totalMargin || "0") > 0 && liveTotalUnrealizedPnl < -(parseFloat(portfolio.totalMargin || "0") * 0.5) && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#ef4444]/10 border border-[#ef4444]/30">
           <AlertTriangle size={14} className="text-[#ef4444]" />
           <span className="text-xs text-[#ef4444]">

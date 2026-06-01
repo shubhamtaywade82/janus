@@ -95,7 +95,11 @@ export async function fetchPortfolioData(userId: number) {
 
           // Margin is posted in marginCurrency (INR/USDT) — convert to USDT
           const lockedMarginRaw = parseFloat(p.locked_margin || p.locked_user_margin || "0");
-          const lockedMarginUsdt = isInrMargin ? lockedMarginRaw / usdtInrRate : lockedMarginRaw;
+          const lockedMarginUsdt = lockedMarginRaw; // Exchange returns locked_margin in USDT
+          const displayLockedMargin = isInrMargin ? lockedMarginRaw * usdtInrRate : lockedMarginRaw;
+
+          const maintMarginRaw = parseFloat(p.maintenance_margin || "0");
+          const displayMaintMargin = isInrMargin ? maintMarginRaw * usdtInrRate : maintMarginRaw;
 
           // PnL currency = pair QUOTE currency (B-ETH_USDT → USDT), NOT margin currency
           // INR-margined B-ETH_USDT still has PnL in USDT
@@ -115,14 +119,14 @@ export async function fetchPortfolioData(userId: number) {
             currentPrice: String(lastPrice),
             size: String(absSize),
             leverage: p.leverage,
-            margin: String(lockedMarginRaw),
+            margin: String(displayLockedMargin),
             unrealizedPnl: String(unrealizedPnl),
             realizedPnl: "0.00",
             liquidationPrice: p.liquidation_price ? String(p.liquidation_price) : null,
             stopLoss: p.stop_loss_trigger ? String(p.stop_loss_trigger) : null,
             takeProfit: p.take_profit_trigger ? String(p.take_profit_trigger) : null,
-            lockedMargin: String(lockedMarginRaw),
-            maintenanceMargin: p.maintenance_margin ? String(p.maintenance_margin) : null,
+            lockedMargin: String(displayLockedMargin),
+            maintenanceMargin: p.maintenance_margin ? String(displayMaintMargin) : null,
             lockedOrderMargin: p.locked_order_margin ? String(p.locked_order_margin) : null,
             crossUserMargin: null,
             crossOrderMargin: null,
@@ -302,10 +306,13 @@ export const tradingRouter = createRouter({
       if (creds && creds[0] && input.status === "open") {
         try {
           // Fetch live CoinDCX futures positions
-          const livePositions = await getFuturesPositions({
-            apiKey: creds[0].apiKey,
-            apiSecret: creds[0].apiSecret,
-          });
+          const [livePositions, usdtInrRate] = await Promise.all([
+            getFuturesPositions({
+              apiKey: creds[0].apiKey,
+              apiSecret: creds[0].apiSecret,
+            }),
+            getUsdtInrRate(),
+          ]);
 
           const tickerMap = new Map<string, number>();
           latestTickerCache.forEach((t, sym) => tickerMap.set(sym, t.lastPrice));
@@ -320,6 +327,7 @@ export const tradingRouter = createRouter({
               const absSize = Math.abs(sizeVal);
               const symbol = p.pair.replace("B-", "").replace("_", "");
               const marginCurrency = p.margin_currency_short_name || p.margin_currency || "USDT";
+              const isInrMargin = marginCurrency === "INR";
 
               const lastPrice = tickerMap.get(symbol) || parseFloat(p.mark_price || p.avg_price);
               const entryPrice = parseFloat(p.avg_price);
@@ -331,6 +339,9 @@ export const tradingRouter = createRouter({
                 unrealizedPnl = (entryPrice - lastPrice) * absSize;
               }
 
+              const lockedMarginRaw = parseFloat(p.locked_margin || p.locked_user_margin || "0");
+              const displayLockedMargin = isInrMargin ? lockedMarginRaw * usdtInrRate : lockedMarginRaw;
+
               return {
                 id: idx + 10000,
                 userId,
@@ -340,7 +351,7 @@ export const tradingRouter = createRouter({
                 currentPrice: String(lastPrice),
                 size: String(absSize),
                 leverage: p.leverage,
-                margin: String(p.locked_margin || p.locked_user_margin || "0"),
+                margin: String(displayLockedMargin),
                 unrealizedPnl: String(unrealizedPnl),
                 realizedPnl: "0.00",
                 liquidationPrice: p.liquidation_price ? String(p.liquidation_price) : null,
