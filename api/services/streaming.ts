@@ -15,7 +15,7 @@ interface ActiveSymbolStream {
   subscribers: number;
 }
 
-const activeStreams = new Map<string, ActiveSymbolStream>();
+export const activeStreams = new Map<string, ActiveSymbolStream>();
 
 function getBinanceWsUrl(symbol: string): string {
   const s = symbol.toLowerCase();

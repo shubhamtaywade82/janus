@@ -4,7 +4,7 @@ import { getDb } from "../queries/connection";
 import { exchangeCredentials, positions, futuresWallets } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { EventEmitter } from "events";
-import { latestTickerCache, marketEvents } from "./streaming";
+import { latestTickerCache, marketEvents, activeStreams } from "./streaming";
 
 export const tradingEvents = new EventEmitter();
 tradingEvents.setMaxListeners(100);
@@ -145,6 +145,27 @@ export async function initCoinDCXPrivateWs() {
     if (c.close) {
       const price = parseFloat(c.close);
       latestTickerCache.set(symbol, { lastPrice: price, symbol });
+
+      // Emit ticker update to UI as fallback if Binance stream is down/inactive
+      const binanceActive = activeStreams.get(symbol)?.ws?.readyState === 1;
+      if (!binanceActive) {
+        marketEvents.emit(`${symbol}:ticker`, {
+          symbol,
+          priceChange: "0.00",
+          priceChangePercent: "0.00",
+          weightedAvgPrice: c.close,
+          lastPrice: c.close,
+          lastQty: "0.00",
+          openPrice: c.open,
+          highPrice: c.high,
+          lowPrice: c.low,
+          volume: c.volume,
+          quoteVolume: c.quote_volume,
+          openTime: c.open_time * 1000,
+          closeTime: c.close_time * 1000,
+          count: 0,
+        });
+      }
     }
   });
 
