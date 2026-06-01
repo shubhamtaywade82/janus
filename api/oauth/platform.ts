@@ -10,7 +10,7 @@ async function platformRequest<T>(
     return {
       user_id: env.ownerUnionId || "mock-user-id",
       name: "Local Administrator",
-      avatar_url: "https://avatar.iran.liara.run/public/boy",
+      avatar_url: "/avatar.jpg",
     } as unknown as T;
   }
 

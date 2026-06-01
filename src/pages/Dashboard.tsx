@@ -8,6 +8,8 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { createChart, ColorType, CandlestickSeries, HistogramSeries } from "lightweight-charts";
+import type { UTCTimestamp } from "lightweight-charts";
 
 // ─── Types ───
 interface KlineData {
@@ -19,389 +21,220 @@ interface KlineData {
   volume: string;
 }
 
-// ─── Interactive Candlestick Chart Component (Canvas) ───
+// ─── TradingView Lightweight Chart Component ───
 function MiniChart({ data }: { data: KlineData[] }) {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const [dimensions, setDimensions] = useState({ width: 800, height: 450 });
-  const [visibleCount, setVisibleCount] = useState(80); // Number of candles in view
-  const [scrollOffset, setScrollOffset] = useState(0); // How many candles scrolled from the right
-  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
-  const [mousePos, setMousePos] = useState<{ x: number; y: number } | null>(null);
+  const chartContainerRef = useRef<HTMLDivElement>(null);
+  const [hudData, setHudData] = useState<any>(null);
 
-  const isDragging = useRef(false);
-  const dragStartX = useRef(0);
-  const dragStartScrollOffset = useRef(0);
-
-  // Auto-resize handler
   useEffect(() => {
-    if (!containerRef.current) return;
-    const resizeObserver = new ResizeObserver((entries) => {
-      for (const entry of entries) {
-        if (entry.contentRect.width && entry.contentRect.height) {
-          setDimensions({
-            width: entry.contentRect.width,
-            height: entry.contentRect.height,
+    if (!chartContainerRef.current || data.length === 0) return;
+
+    const container = chartContainerRef.current;
+
+    const chart = createChart(container, {
+      layout: {
+        background: { type: ColorType.Solid, color: "#09090b" },
+        textColor: "#71717a",
+      },
+      grid: {
+        vertLines: { color: "rgba(39, 39, 42, 0.25)" },
+        horzLines: { color: "rgba(39, 39, 42, 0.25)" },
+      },
+      crosshair: {
+        mode: 1, // Normal mode
+        vertLine: {
+          color: "rgba(113, 113, 122, 0.5)",
+          width: 1,
+          style: 3, // dashed
+          labelBackgroundColor: "#18181b",
+        },
+        horzLine: {
+          color: "rgba(113, 113, 122, 0.5)",
+          width: 1,
+          style: 3, // dashed
+          labelBackgroundColor: "#18181b",
+        },
+      },
+      timeScale: {
+        borderColor: "rgba(39, 39, 42, 0.25)",
+        timeVisible: true,
+        secondsVisible: false,
+      },
+      rightPriceScale: {
+        borderColor: "rgba(39, 39, 42, 0.25)",
+      },
+      width: container.clientWidth,
+      height: container.clientHeight || 450,
+    });
+
+    const candlestickSeries = chart.addSeries(CandlestickSeries, {
+      upColor: "#0ecb81",
+      downColor: "#f6465d",
+      borderUpColor: "#0ecb81",
+      borderDownColor: "#f6465d",
+      wickUpColor: "#0ecb81",
+      wickDownColor: "#f6465d",
+    });
+
+    const volumeSeries = chart.addSeries(HistogramSeries, {
+      priceFormat: {
+        type: "volume",
+      },
+      priceScaleId: "", // Overlay on the main pane
+    });
+    
+    // Scale volume pane down
+    volumeSeries.priceScale().applyOptions({
+      scaleMargins: {
+        top: 0.8, // volume will occupy only the bottom 20%
+        bottom: 0,
+      },
+    });
+
+    // Format data
+    const chartData = data.map((d) => {
+      const time = (d.openTime / 1000) as UTCTimestamp;
+      return {
+        time,
+        open: parseFloat(d.open),
+        high: parseFloat(d.high),
+        low: parseFloat(d.low),
+        close: parseFloat(d.close),
+      };
+    });
+
+    const volumeData = data.map((d) => {
+      const time = (d.openTime / 1000) as UTCTimestamp;
+      const open = parseFloat(d.open);
+      const close = parseFloat(d.close);
+      return {
+        time,
+        value: parseFloat(d.volume),
+        color: close >= open ? "rgba(14, 203, 129, 0.15)" : "rgba(246, 70, 93, 0.15)",
+      };
+    });
+
+    candlestickSeries.setData(chartData);
+    volumeSeries.setData(volumeData);
+
+    // Sync HUD with crosshair movement
+    chart.subscribeCrosshairMove((param) => {
+      if (
+        !param.time ||
+        param.point === undefined ||
+        param.point.x < 0 ||
+        param.point.y < 0
+      ) {
+        // Show latest data if cursor is out of bounds
+        const last = data[data.length - 1];
+        if (last) {
+          const o = parseFloat(last.open);
+          const c = parseFloat(last.close);
+          const pct = ((c - o) / o) * 100;
+          setHudData({
+            time: new Date(last.openTime).toLocaleString(),
+            open: o.toFixed(2),
+            high: parseFloat(last.high).toFixed(2),
+            low: parseFloat(last.low).toFixed(2),
+            close: c.toFixed(2),
+            volume: parseFloat(last.volume).toFixed(2),
+            pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
+            isGreen: c >= o,
           });
         }
+        return;
+      }
+
+      const candle = param.seriesData.get(candlestickSeries) as any;
+      const volume = param.seriesData.get(volumeSeries) as any;
+
+      if (candle) {
+        const o = candle.open;
+        const c = candle.close;
+        const pct = ((c - o) / o) * 100;
+        setHudData({
+          time: new Date((param.time as number) * 1000).toLocaleString(),
+          open: o.toFixed(2),
+          high: candle.high.toFixed(2),
+          low: candle.low.toFixed(2),
+          close: c.toFixed(2),
+          volume: volume ? volume.value.toFixed(2) : "0.00",
+          pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
+          isGreen: c >= o,
+        });
       }
     });
-    resizeObserver.observe(containerRef.current);
-    return () => resizeObserver.disconnect();
-  }, []);
 
-  // Compute indices
-  const totalLength = data.length;
-  const maxScroll = Math.max(0, totalLength - visibleCount);
-  const currentScrollOffset = Math.min(scrollOffset, maxScroll);
-
-  const endIndex = Math.max(0, totalLength - currentScrollOffset);
-  const startIndex = Math.max(0, endIndex - visibleCount);
-  const visibleData = data.slice(startIndex, endIndex);
-
-  // Handle Dragging / Panning
-  const handleMouseDown = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    isDragging.current = true;
-    dragStartX.current = e.clientX;
-    dragStartScrollOffset.current = scrollOffset;
-  };
-
-  const handleMouseMove = (e: React.MouseEvent<HTMLCanvasElement>) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    const rect = canvas.getBoundingClientRect();
-    const x = e.clientX - rect.left;
-    const y = e.clientY - rect.top;
-    setMousePos({ x, y });
-
-    if (isDragging.current) {
-      const deltaX = e.clientX - dragStartX.current;
-      const candleWidth = (dimensions.width - 90) / visibleCount;
-      const candlesMoved = Math.round(deltaX / candleWidth);
-      setScrollOffset(Math.max(0, Math.min(maxScroll, dragStartScrollOffset.current + candlesMoved)));
-    } else {
-      // Find hovered candle
-      const padding = { top: 30, right: 80, bottom: 25, left: 15 };
-      const chartW = dimensions.width - padding.left - padding.right;
-      const colW = chartW / visibleData.length;
-      const index = Math.floor((x - padding.left) / colW);
-      if (index >= 0 && index < visibleData.length) {
-        setHoverIndex(startIndex + index);
-      } else {
-        setHoverIndex(null);
-      }
+    // Initial HUD data
+    const last = data[data.length - 1];
+    if (last) {
+      const o = parseFloat(last.open);
+      const c = parseFloat(last.close);
+      const pct = ((c - o) / o) * 100;
+      setHudData({
+        time: new Date(last.openTime).toLocaleString(),
+        open: o.toFixed(2),
+        high: parseFloat(last.high).toFixed(2),
+        low: parseFloat(last.low).toFixed(2),
+        close: c.toFixed(2),
+        volume: parseFloat(last.volume).toFixed(2),
+        pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
+        isGreen: c >= o,
+      });
     }
-  };
 
-  const handleMouseUp = () => {
-    isDragging.current = false;
-  };
-
-  const handleMouseLeave = () => {
-    isDragging.current = false;
-    setHoverIndex(null);
-    setMousePos(null);
-  };
-
-  // Handle Zooming
-  const handleWheel = (e: React.WheelEvent<HTMLCanvasElement>) => {
-    e.preventDefault();
-    const zoomFactor = e.deltaY > 0 ? 1.1 : 0.9;
-    setVisibleCount((prev) => {
-      const next = Math.max(20, Math.min(250, Math.round(prev * zoomFactor)));
-      return next;
-    });
-  };
-
-  // Rendering
-  useEffect(() => {
-    if (!canvasRef.current || data.length === 0) return;
-    const canvas = canvasRef.current;
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const { width, height } = dimensions;
-    const dpr = window.devicePixelRatio || 1;
-    canvas.width = width * dpr;
-    canvas.height = height * dpr;
-    ctx.scale(dpr, dpr);
-
-    // Color definitions
-    const colors = {
-      bg: "#09090b",
-      grid: "rgba(39, 39, 42, 0.4)",
-      green: "#0ecb81",
-      red: "#f6465d",
-      greenVolume: "rgba(14, 203, 129, 0.15)",
-      redVolume: "rgba(246, 70, 93, 0.15)",
-      textMuted: "#71717a",
-      textLight: "#f4f4f5",
-      crosshair: "rgba(113, 113, 122, 0.4)",
+    // Resize handler
+    const handleResize = () => {
+      chart.applyOptions({
+        width: container.clientWidth,
+        height: container.clientHeight,
+      });
     };
 
-    // Clean canvas background
-    ctx.fillStyle = colors.bg;
-    ctx.fillRect(0, 0, width, height);
+    const resizeObserver = new ResizeObserver(handleResize);
+    resizeObserver.observe(container);
 
-    // Padding configuration
-    const padding = { top: 30, right: 80, bottom: 25, left: 15 };
-    const chartW = width - padding.left - padding.right;
-    const chartH = height - padding.top - padding.bottom;
+    // Fit content on initial load
+    chart.timeScale().fitContent();
 
-    if (visibleData.length === 0) return;
-
-    // Calculate pricing bounds
-    const prices = visibleData.flatMap((d) => [parseFloat(d.high), parseFloat(d.low)]);
-    const minPrice = Math.min(...prices);
-    const maxPrice = Math.max(...prices);
-    const priceRange = (maxPrice - minPrice) || 1;
-    const padRange = priceRange * 0.05; // 5% spacing top/bottom
-    const finalMax = maxPrice + padRange;
-    const finalMin = minPrice - padRange;
-    const finalRange = finalMax - finalMin;
-
-    const getX = (idx: number) => padding.left + idx * (chartW / visibleData.length) + (chartW / visibleData.length) / 2;
-    const getY = (price: number) => padding.top + ((finalMax - price) / finalRange) * chartH;
-
-    // Draw Grid Lines (Horizontal & Vertical)
-    ctx.strokeStyle = colors.grid;
-    ctx.lineWidth = 1;
-    ctx.setLineDash([4, 4]);
-
-    // Horizontal grid and price labels
-    const gridCount = 5;
-    ctx.fillStyle = colors.textMuted;
-    ctx.font = "10px monospace";
-    ctx.textAlign = "left";
-    ctx.textBaseline = "middle";
-
-    for (let i = 0; i < gridCount; i++) {
-      const price = finalMin + (finalRange / (gridCount - 1)) * i;
-      const y = getY(price);
-
-      ctx.beginPath();
-      ctx.moveTo(padding.left, y);
-      ctx.lineTo(width - padding.right, y);
-      ctx.stroke();
-
-      // Right axis labels
-      ctx.fillText(price.toFixed(2), width - padding.right + 8, y);
-    }
-
-    // Vertical grid lines (Time-based spacing)
-    const timeStep = Math.max(1, Math.floor(visibleData.length / 5));
-    ctx.textAlign = "center";
-    ctx.textBaseline = "top";
-
-    visibleData.forEach((k, i) => {
-      if (i % timeStep === 0) {
-        const x = getX(i);
-        ctx.beginPath();
-        ctx.moveTo(x, padding.top);
-        ctx.lineTo(x, height - padding.bottom);
-        ctx.stroke();
-
-        // Bottom axis labels
-        const timeStr = new Date(k.openTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-        ctx.fillText(timeStr, x, height - padding.bottom + 6);
-      }
-    });
-
-    ctx.setLineDash([]); // Reset line dash
-
-    // Draw Volume Bars (Bottom Overlay)
-    const maxVol = Math.max(...visibleData.map((d) => parseFloat(d.volume)), 1);
-    const volH = chartH * 0.18; // Max 18% height of chart
-    const candleW = Math.max(1, (chartW / visibleData.length) * 0.7);
-
-    visibleData.forEach((k, i) => {
-      const x = getX(i);
-      const vol = parseFloat(k.volume);
-      const vh = (vol / maxVol) * volH;
-      const close = parseFloat(k.close);
-      const open = parseFloat(k.open);
-
-      ctx.fillStyle = close >= open ? colors.greenVolume : colors.redVolume;
-      ctx.fillRect(x - candleW / 2, height - padding.bottom - vh, candleW, vh);
-    });
-
-    // Draw Candlesticks (Wicks & Bodies)
-    visibleData.forEach((k, i) => {
-      const x = getX(i);
-      const open = parseFloat(k.open);
-      const high = parseFloat(k.high);
-      const low = parseFloat(k.low);
-      const close = parseFloat(k.close);
-
-      const yOpen = getY(open);
-      const yClose = getY(close);
-      const yHigh = getY(high);
-      const yLow = getY(low);
-
-      const isGreen = close >= open;
-      const themeColor = isGreen ? colors.green : colors.red;
-
-      ctx.strokeStyle = themeColor;
-      ctx.lineWidth = 1.2;
-
-      // Wick (shadow line)
-      ctx.beginPath();
-      ctx.moveTo(x, yHigh);
-      ctx.lineTo(x, yLow);
-      ctx.stroke();
-
-      // Candle body
-      ctx.fillStyle = themeColor;
-      const bodyTop = Math.min(yOpen, yClose);
-      const bodyH = Math.max(1.5, Math.abs(yClose - yOpen));
-      ctx.fillRect(x - candleW / 2, bodyTop, candleW, bodyH);
-    });
-
-    // Draw Last Price Line
-    const lastPriceVal = parseFloat(data[data.length - 1].close);
-    const yLast = getY(lastPriceVal);
-    if (yLast >= padding.top && yLast <= height - padding.bottom) {
-      ctx.strokeStyle = colors.green;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([2, 3]);
-      ctx.beginPath();
-      ctx.moveTo(padding.left, yLast);
-      ctx.lineTo(width - padding.right, yLast);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Draw last price badge on right axis
-      ctx.fillStyle = colors.green;
-      ctx.fillRect(width - padding.right + 2, yLast - 8, 70, 16);
-      ctx.fillStyle = colors.bg;
-      ctx.font = "bold 9px monospace";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillText(lastPriceVal.toFixed(2), width - padding.right + 6, yLast);
-    }
-
-    // Draw Crosshair (if hovering & mouse position is valid)
-    if (mousePos && mousePos.x >= padding.left && mousePos.x <= width - padding.right &&
-        mousePos.y >= padding.top && mousePos.y <= height - padding.bottom) {
-      
-      // Vertical line
-      ctx.strokeStyle = colors.crosshair;
-      ctx.lineWidth = 1;
-      ctx.setLineDash([3, 3]);
-      ctx.beginPath();
-      ctx.moveTo(mousePos.x, padding.top);
-      ctx.lineTo(mousePos.x, height - padding.bottom);
-      ctx.stroke();
-
-      // Horizontal line
-      ctx.beginPath();
-      ctx.moveTo(padding.left, mousePos.y);
-      ctx.lineTo(width - padding.right, mousePos.y);
-      ctx.stroke();
-      ctx.setLineDash([]);
-
-      // Price badge at horizontal line intersection
-      const priceAtY = finalMax - ((mousePos.y - padding.top) / chartH) * finalRange;
-      ctx.fillStyle = "#27272a";
-      ctx.fillRect(width - padding.right + 2, mousePos.y - 8, 70, 16);
-      ctx.fillStyle = colors.textLight;
-      ctx.font = "9px monospace";
-      ctx.textAlign = "left";
-      ctx.textBaseline = "middle";
-      ctx.fillText(priceAtY.toFixed(2), width - padding.right + 6, mousePos.y);
-
-      // Time badge at vertical line intersection
-      const colW = chartW / visibleData.length;
-      const index = Math.floor((mousePos.x - padding.left) / colW);
-      if (index >= 0 && index < visibleData.length) {
-        const k = visibleData[index];
-        const dateStr = new Date(k.openTime).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-        const textW = ctx.measureText(dateStr).width;
-        ctx.fillStyle = "#27272a";
-        ctx.fillRect(mousePos.x - textW / 2 - 6, height - padding.bottom + 2, textW + 12, 16);
-        ctx.fillStyle = colors.textLight;
-        ctx.textAlign = "center";
-        ctx.textBaseline = "middle";
-        ctx.fillText(dateStr, mousePos.x, height - padding.bottom + 10);
-      }
-    }
-  }, [dimensions, visibleData, mousePos, data, scrollOffset, visibleCount]);
-
-  // Selected or latest candle to show in HUD
-  const activeIndex = hoverIndex !== null ? hoverIndex : data.length - 1;
-  const activeCandle = data[activeIndex];
-
-  const getHudInfo = () => {
-    if (!activeCandle) return null;
-    const o = parseFloat(activeCandle.open);
-    const h = parseFloat(activeCandle.high);
-    const l = parseFloat(activeCandle.low);
-    const c = parseFloat(activeCandle.close);
-    const diff = c - o;
-    const pct = (diff / o) * 100;
-    const isGreen = c >= o;
-
-    return {
-      open: o.toFixed(2),
-      high: h.toFixed(2),
-      low: l.toFixed(2),
-      close: c.toFixed(2),
-      volume: parseFloat(activeCandle.volume).toFixed(2),
-      pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
-      isGreen,
-      time: new Date(activeCandle.openTime).toLocaleString(),
+    return () => {
+      resizeObserver.disconnect();
+      chart.remove();
     };
-  };
-
-  const hud = getHudInfo();
+  }, [data]);
 
   return (
-    <div ref={containerRef} className="w-full h-full relative select-none">
+    <div ref={chartContainerRef} className="w-full h-full relative select-none">
       {/* HUD Info Overlay */}
-      {hud && (
-        <div className="absolute top-2 left-4 z-10 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-md border border-white/5">
-          <span className="text-[#a1a1aa]">{hud.time}</span>
+      {hudData && (
+        <div className="absolute top-2 left-4 z-10 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-md border border-white/5 pointer-events-none">
+          <span className="text-[#a1a1aa]">{hudData.time}</span>
           <span>
             <span className="text-[#71717a] mr-0.5">O</span>
-            <span className={hud.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hud.open}</span>
+            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.open}</span>
           </span>
           <span>
             <span className="text-[#71717a] mr-0.5">H</span>
-            <span className={hud.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hud.high}</span>
+            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.high}</span>
           </span>
           <span>
             <span className="text-[#71717a] mr-0.5">L</span>
-            <span className={hud.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hud.low}</span>
+            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.low}</span>
           </span>
           <span>
             <span className="text-[#71717a] mr-0.5">C</span>
-            <span className={hud.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hud.close}</span>
+            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.close}</span>
           </span>
           <span>
             <span className="text-[#71717a] mr-0.5">Chg</span>
-            <span className={hud.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hud.pct}</span>
+            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.pct}</span>
           </span>
           <span className="hidden sm:inline">
             <span className="text-[#71717a] mr-0.5">Vol</span>
-            <span className="text-[#f4f4f5]">{hud.volume}</span>
+            <span className="text-[#f4f4f5]">{hudData.volume}</span>
           </span>
         </div>
       )}
-
-      {/* Instructions Overlay (e.g. Scroll to zoom, drag to pan) */}
-      <div className="absolute bottom-2 left-4 z-10 text-[9px] text-[#71717a] font-mono bg-black/40 px-2 py-0.5 rounded pointer-events-none">
-        Drag to Pan • Scroll to Zoom
-      </div>
-
-      <canvas
-        ref={canvasRef}
-        onMouseDown={handleMouseDown}
-        onMouseMove={handleMouseMove}
-        onMouseUp={handleMouseUp}
-        onMouseLeave={handleMouseLeave}
-        onWheel={handleWheel}
-        className="block cursor-crosshair w-full h-full"
-      />
     </div>
   );
 }
