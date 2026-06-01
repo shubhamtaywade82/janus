@@ -40,6 +40,8 @@ export const users = pgTable("users", {
     .notNull()
     .$onUpdate(() => new Date()),
   lastSignInAt: timestamp("lastSignInAt").defaultNow().notNull(),
+  telegramBotToken: varchar("telegram_bot_token", { length: 255 }),
+  telegramChatId: varchar("telegram_chat_id", { length: 50 }),
 });
 
 export type User = typeof users.$inferSelect;

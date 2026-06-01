@@ -2,6 +2,7 @@ import { z } from "zod";
 import { observable } from "@trpc/server/observable";
 import { createRouter, publicQuery } from "../middleware";
 import { subscribeToSymbol, unsubscribeFromSymbol, marketEvents } from "../services/streaming";
+import { marketStateManager } from "../services/market-state";
 import {
   fetchKlines,
   fetch24hTicker,
@@ -276,5 +277,44 @@ export const marketRouter = createRouter({
           unsubscribeFromSymbol(symbol);
         };
       });
+    }),
+
+  // ─── Get Live State & Derived Metrics from Memory ───
+  liveState: publicQuery
+    .input(z.object({ symbol: z.string().default("BTCUSDT") }))
+    .query(({ input }) => {
+      const state = marketStateManager.get(input.symbol);
+      if (!state) return null;
+
+      return {
+        symbol: state.symbol,
+        ltp: state.ltp,
+        previousLtp: state.previousLtp,
+        metrics: state.metrics,
+        updatedAt: state.updatedAt,
+        sequenceNo: state.sequenceNo,
+        recentLtp: state.ltpWindow.values().slice(-50),
+        recentTrades: state.tradeWindow.values().slice(-50),
+        recentDeltas: state.deltaWindow.values().slice(-20),
+      };
+    }),
+
+  // ─── Get Live State & Derived Metrics for All Supported Symbols ───
+  allLiveStates: publicQuery
+    .query(() => {
+      const results: Record<string, any> = {};
+      for (const pair of SUPPORTED_PAIRS) {
+        const state = marketStateManager.get(pair.binance);
+        if (state) {
+          results[pair.binance] = {
+            symbol: state.symbol,
+            ltp: state.ltp,
+            metrics: state.metrics,
+            updatedAt: state.updatedAt,
+            sequenceNo: state.sequenceNo,
+          };
+        }
+      }
+      return results;
     }),
 });

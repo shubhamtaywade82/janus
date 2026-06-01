@@ -2,6 +2,7 @@ import { EventEmitter } from "events";
 import WebSocket from "ws";
 import { getDb } from "../queries/connection";
 import { marketData, orderBookSnapshots, recentTicks } from "@db/schema";
+import { marketStateManager } from "./market-state";
 
 export const marketEvents = new EventEmitter();
 marketEvents.setMaxListeners(100);
@@ -63,6 +64,13 @@ export function subscribeToSymbol(symbol: string) {
 
         marketEvents.emit(`${symbol}:depth`, formattedDepth);
 
+        // Update in-memory state manager
+        marketStateManager.updateOrderBook(symbol, {
+          bids: bids.map(([p, q]: any) => [parseFloat(String(p)), parseFloat(String(q))]),
+          asks: asks.map(([p, q]: any) => [parseFloat(String(p)), parseFloat(String(q))]),
+          timestamp: data.E || Date.now(),
+        });
+
         // Throttle DB writes to once every 2 seconds
         const now = Date.now();
         if (now - lastDbSave.depth > 2000) {
@@ -89,6 +97,16 @@ export function subscribeToSymbol(symbol: string) {
         };
 
         marketEvents.emit(`${symbol}:trade`, formattedTrade);
+
+        // Update in-memory state manager
+        marketStateManager.updateTrade(symbol, {
+          id: Number(data.t),
+          price: parseFloat(String(data.p)),
+          quantity: parseFloat(String(data.q)),
+          side: data.m ? "SELL" : "BUY",
+          timestamp: data.T,
+        });
+        marketStateManager.updateLtp(symbol, parseFloat(String(data.p)), data.T);
 
         // Save trade to DB
         const now = Date.now();
@@ -127,6 +145,9 @@ export function subscribeToSymbol(symbol: string) {
 
         latestTickerCache.set(symbol, { lastPrice: parseFloat(data.c), symbol: data.s });
         marketEvents.emit(`${symbol}:ticker`, formattedTicker);
+
+        // Update in-memory state manager LTP
+        marketStateManager.updateLtp(symbol, parseFloat(String(data.c)), data.E || Date.now());
       } 
       else if (stream.endsWith("@kline_1m")) {
         const k = data.k;

@@ -7,6 +7,11 @@ import {
   Plus,
   Minus,
   RefreshCw,
+  Activity,
+  ShieldAlert,
+  Sparkles,
+  Zap,
+  Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineStyle } from "lightweight-charts";
@@ -23,12 +28,60 @@ interface KlineData {
 }
 
 // ─── TradingView Lightweight Chart Component ───
-const MiniChart = ({ data, positions, lastPrice }: { data: KlineData[]; positions: any[]; lastPrice: number }) => {
+const MiniChart = ({ data, positions, lastPrice, symbol }: { data: KlineData[]; positions: any[]; lastPrice: number; symbol: string }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
   const [chartInitialized, setChartInitialized] = useState(false);
   const [positionsY, setPositionsY] = useState<Record<number, { entryY: number | null; liqY: number | null }>>({});
   const priceLinesRef = useRef<any[]>([]);
+
+  const [isAlertMode, setIsAlertMode] = useState(false);
+  const [alertRules, setAlertRules] = useState<any[]>([]);
+  const customAlertLinesRef = useRef<any[]>([]);
+  const isAlertModeRef = useRef(false);
+
+  useEffect(() => {
+    isAlertModeRef.current = isAlertMode;
+  }, [isAlertMode]);
+
+  const loadAlertRules = useCallback(() => {
+    const stored = localStorage.getItem("janus_alert_rules");
+    if (stored) {
+      try {
+        setAlertRules(JSON.parse(stored));
+      } catch (err) {
+        console.error(err);
+      }
+    } else {
+      setAlertRules([]);
+    }
+  }, []);
+
+  const handleDeleteRule = (id: string) => {
+    const stored = localStorage.getItem("janus_alert_rules");
+    if (stored) {
+      try {
+        const rules = JSON.parse(stored);
+        const updated = rules.filter((r: any) => r.id !== id);
+        localStorage.setItem("janus_alert_rules", JSON.stringify(updated));
+        window.dispatchEvent(new Event("janus_alerts_changed"));
+        toast.error("Price alert removed!");
+      } catch (err) {
+        console.error(err);
+      }
+    }
+  };
+
+  useEffect(() => {
+    loadAlertRules();
+    const handleAlertsChange = () => {
+      loadAlertRules();
+    };
+    window.addEventListener("janus_alerts_changed", handleAlertsChange);
+    return () => {
+      window.removeEventListener("janus_alerts_changed", handleAlertsChange);
+    };
+  }, [loadAlertRules]);
 
   const chartRef = useRef<any>(null);
   const candlestickSeriesRef = useRef<any>(null);
@@ -372,6 +425,92 @@ const MiniChart = ({ data, positions, lastPrice }: { data: KlineData[]; position
     priceLinesRef.current = [...newLines, ...liqLines];
   }, [positions, chartInitialized]);
 
+  // Draw custom price alert lines
+  useEffect(() => {
+    const series = candlestickSeriesRef.current;
+    if (!series || !chartInitialized) return;
+
+    customAlertLinesRef.current.forEach((line) => {
+      try {
+        series.removePriceLine(line);
+      } catch (err) {
+        console.error("Failed to remove custom price line", err);
+      }
+    });
+    customAlertLinesRef.current = [];
+
+    const activePriceAlerts = alertRules.filter(
+      (rule) => rule.symbol === symbol && rule.type === "price" && rule.isActive
+    );
+
+    const newAlertLines = activePriceAlerts.map((rule) => {
+      try {
+        const line = series.createPriceLine({
+          price: rule.value,
+          color: "#f59e0b",
+          lineWidth: 1.5,
+          lineStyle: LineStyle.Dotted,
+          axisLabelVisible: true,
+          title: `Alert @ ${rule.value.toFixed(2)}`,
+        });
+        return line;
+      } catch (err) {
+        console.error("Error creating custom price line", err);
+        return null;
+      }
+    }).filter(Boolean);
+
+    customAlertLinesRef.current = newAlertLines;
+  }, [alertRules, symbol, chartInitialized]);
+
+  // Subscribe to chart clicks for placing custom alerts
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart || !chartInitialized) return;
+
+    const handleChartClick = (param: any) => {
+      if (!isAlertModeRef.current) return;
+      if (!param.point) return;
+
+      const series = candlestickSeriesRef.current;
+      if (!series) return;
+
+      const price = series.coordinateToPrice(param.point.y);
+      if (price) {
+        const roundedPrice = parseFloat(price.toFixed(2));
+        const operator = roundedPrice > lastPrice ? ">" : "<";
+
+        const newRule = {
+          id: Math.random().toString(36).substring(2, 9),
+          symbol: symbol,
+          type: "price",
+          operator,
+          value: roundedPrice,
+          isActive: true,
+        };
+
+        const stored = localStorage.getItem("janus_alert_rules");
+        const currentRules = stored ? JSON.parse(stored) : [];
+        const updatedRules = [...currentRules, newRule];
+        localStorage.setItem("janus_alert_rules", JSON.stringify(updatedRules));
+
+        window.dispatchEvent(new Event("janus_alerts_changed"));
+        
+        setIsAlertMode(false);
+        toast.success(`Price alert created at $${roundedPrice.toFixed(2)}!`);
+      }
+    };
+
+    chart.subscribeClick(handleChartClick);
+    return () => {
+      try {
+        chart.unsubscribeClick(handleChartClick);
+      } catch (err) {
+        // Safe check
+      }
+    };
+  }, [chartInitialized, symbol, lastPrice]);
+
   // Recalculate vertical coordinates of active positions on the canvas
   const updatePositionsCoordinates = useCallback(() => {
     const chart = chartRef.current;
@@ -554,9 +693,65 @@ const MiniChart = ({ data, positions, lastPrice }: { data: KlineData[]; position
         </div>
       )}
 
+      {/* Interactive Alert controls */}
+      <div className="absolute top-2 right-4 z-20 flex gap-2 pointer-events-auto items-center">
+        <button
+          onClick={() => setIsAlertMode(!isAlertMode)}
+          className={cn(
+            "h-7 px-2.5 rounded-full text-[10px] font-bold flex items-center gap-1.5 shadow-lg border transition-all select-none cursor-pointer",
+            isAlertMode
+              ? "bg-[#ef4444] border-[#ef4444] text-white hover:bg-[#dc2626]"
+              : "bg-[#18181b]/80 backdrop-blur-md border-white/10 text-[#f59e0b] hover:bg-[#27272a]/90 hover:border-white/20"
+          )}
+        >
+          <Bell size={11} className={cn(isAlertMode && "animate-pulse")} />
+          {isAlertMode ? "Cancel Mode" : "Add Price Alert"}
+        </button>
+      </div>
+
+      {/* Alert Mode Banner */}
+      {isAlertMode && (
+        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-20 bg-[#f59e0b] text-[#09090b] text-[10px] font-bold px-4 py-1.5 rounded-full shadow-lg flex items-center gap-2 animate-bounce select-none pointer-events-auto border border-[#d97706]">
+          <Bell size={12} className="animate-pulse" />
+          <span>Click on the chart area to place a Price Alert line at that level.</span>
+          <button 
+            onClick={() => setIsAlertMode(false)}
+            className="ml-2 hover:bg-black/10 px-1.5 py-0.5 rounded font-bold text-[9px] uppercase cursor-pointer"
+          >
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {/* Custom Alerts List Overlay */}
+      {chartInitialized && alertRules.length > 0 && (
+        <div className="absolute bottom-2 right-4 z-10 flex flex-col gap-1 max-h-[120px] overflow-y-auto bg-[#09090b]/80 backdrop-blur-md p-2 rounded border border-[#27272a] font-mono text-[9px] pointer-events-auto max-w-[200px] shadow-lg">
+          <div className="text-[#71717a] font-bold mb-1 uppercase tracking-wider text-[8px]">Active Alert Lines</div>
+          {alertRules
+            .filter((rule) => rule.symbol === symbol && rule.type === "price")
+            .map((rule) => (
+              <div key={rule.id} className="flex items-center gap-2 justify-between bg-white/5 px-2 py-1 rounded hover:bg-white/10 transition-colors">
+                <span className="text-[#f59e0b] font-bold">
+                  {rule.operator} ${rule.value.toFixed(2)}
+                </span>
+                <span className={cn("text-[7px] uppercase font-bold px-1 rounded-sm", rule.isActive ? "bg-[#0ecb81]/15 text-[#0ecb81]" : "bg-white/15 text-[#a1a1aa]")}>
+                  {rule.isActive ? "ON" : "OFF"}
+                </span>
+                <button
+                  onClick={() => handleDeleteRule(rule.id)}
+                  className="text-[#71717a] hover:text-[#ef4444] transition-colors pl-1 font-bold text-xs cursor-pointer"
+                  title="Delete Alert"
+                >
+                  ✕
+                </button>
+              </div>
+            ))}
+        </div>
+      )}
+
       {/* Active Position Floating Capsule */}
       {positions && positions.length > 0 && lastPrice > 0 && (
-        <div className="absolute top-2 right-4 z-10 flex flex-col gap-1.5 pointer-events-none">
+        <div className="absolute top-11 right-4 z-10 flex flex-col gap-1.5 pointer-events-none">
           {positions.map((pos) => {
             const entry = parseFloat(pos.entryPrice);
             const size = parseFloat(pos.size);
@@ -606,11 +801,17 @@ const MiniChart = ({ data, positions, lastPrice }: { data: KlineData[]; position
 
 // ─── Order Book Component ───
 const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerData: any; markPrice?: number }) => {
+  const [activeTab, setActiveTab] = useState<"book" | "telemetry">("book");
   const [depth, setDepth] = useState<any>(null);
 
   const { data: initialDepth } = trpc.market.orderBook.useQuery(
     { symbol, limit: 20 },
     { staleTime: Infinity }
+  );
+
+  const { data: liveState } = trpc.market.liveState.useQuery(
+    { symbol },
+    { refetchInterval: 1000, enabled: activeTab === "telemetry" }
   );
 
   useEffect(() => {
@@ -683,56 +884,222 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
         </div>
       </div>
 
-      {/* Column headers */}
-      <div className="grid grid-cols-3 px-2 py-1 border-b border-[#27272a]/50 text-[9px] text-[#52525b]">
-        <span>BID QTY</span>
-        <span className="text-center">PRICE</span>
-        <span className="text-right">ASK QTY</span>
+      {/* Tab selector */}
+      <div className="flex border-b border-[#27272a] text-[10px]">
+        <button
+          onClick={() => setActiveTab("book")}
+          className={cn(
+            "flex-1 py-1.5 text-center font-bold border-b-2 transition-all",
+            activeTab === "book"
+              ? "text-[#f4f4f5] border-[#f59e0b] bg-[#27272a]/20"
+              : "text-[#71717a] border-transparent hover:text-[#a1a1aa]"
+          )}
+        >
+          Depth Book
+        </button>
+        <button
+          onClick={() => setActiveTab("telemetry")}
+          className={cn(
+            "flex-1 py-1.5 text-center font-bold border-b-2 transition-all flex items-center justify-center gap-1",
+            activeTab === "telemetry"
+              ? "text-[#f4f4f5] border-[#f59e0b] bg-[#27272a]/20"
+              : "text-[#71717a] border-transparent hover:text-[#a1a1aa]"
+          )}
+        >
+          <Activity size={10} className={cn(activeTab === "telemetry" && "text-[#f59e0b]")} />
+          Flow Telemetry
+        </button>
       </div>
 
-      {/* Rows: bid | price | ask */}
-      <div className="flex-1 overflow-auto scrollbar-thin">
-        {Array.from({ length: Math.max(rawBids.length, rawAsks.length) }).map((_, i) => {
-          const bid = rawBids[i];
-          const ask = rawAsks[i];
-          const bidSize = bid ? parseFloat(bid[1]) : 0;
-          const askSize = ask ? parseFloat(ask[1]) : 0;
-          const bidW = bid ? (bidSize / maxBidSize) * 100 : 0;
-          const askW = ask ? (askSize / maxAskSize) * 100 : 0;
-          // mid price for this row — use bid price if available, else ask
-          const rowPrice = bid ? parseFloat(bid[0]) : ask ? parseFloat(ask[0]) : 0;
-          void rowPrice;
+      {activeTab === "book" ? (
+        <>
+          {/* Column headers */}
+          <div className="grid grid-cols-3 px-2 py-1 border-b border-[#27272a]/50 text-[9px] text-[#52525b]">
+            <span>BID QTY</span>
+            <span className="text-center">PRICE</span>
+            <span className="text-right">ASK QTY</span>
+          </div>
 
-          return (
-            <div key={i} className="grid grid-cols-3 items-center py-0.5 px-2 hover:bg-[#27272a]/30">
-              {/* Bid qty + bar */}
-              <div className="relative flex items-center justify-start">
-                <div className="absolute inset-y-0 right-0 bg-[#0ecb81]/15 rounded-l" style={{ width: `${bidW}%` }} />
-                <span className="relative tabular-nums text-[#0ecb81]">
-                  {bid ? bidSize.toFixed(3) : ""}
-                </span>
-              </div>
+          {/* Rows: bid | price | ask */}
+          <div className="flex-1 overflow-auto scrollbar-thin">
+            {Array.from({ length: Math.max(rawBids.length, rawAsks.length) }).map((_, i) => {
+              const bid = rawBids[i];
+              const ask = rawAsks[i];
+              const bidSize = bid ? parseFloat(bid[1]) : 0;
+              const askSize = ask ? parseFloat(ask[1]) : 0;
+              const bidW = bid ? (bidSize / maxBidSize) * 100 : 0;
+              const askW = ask ? (askSize / maxAskSize) * 100 : 0;
 
-              {/* Price */}
-              <div className="text-center tabular-nums">
-                {bid ? (
-                  <span className="text-[#0ecb81] font-medium">{parseFloat(bid[0]).toFixed(2)}</span>
-                ) : ask ? (
-                  <span className="text-[#f6465d] font-medium">{parseFloat(ask[0]).toFixed(2)}</span>
-                ) : ""}
-              </div>
+              return (
+                <div key={i} className="grid grid-cols-3 items-center py-0.5 px-2 hover:bg-[#27272a]/30">
+                  {/* Bid qty + bar */}
+                  <div className="relative flex items-center justify-start">
+                    <div className="absolute inset-y-0 right-0 bg-[#0ecb81]/15 rounded-l" style={{ width: `${bidW}%` }} />
+                    <span className="relative tabular-nums text-[#0ecb81]">
+                      {bid ? bidSize.toFixed(3) : ""}
+                    </span>
+                  </div>
 
-              {/* Ask qty + bar */}
-              <div className="relative flex items-center justify-end">
-                <div className="absolute inset-y-0 left-0 bg-[#f6465d]/15 rounded-r" style={{ width: `${askW}%` }} />
-                <span className="relative tabular-nums text-[#f6465d]">
-                  {ask ? askSize.toFixed(3) : ""}
-                </span>
-              </div>
+                  {/* Price */}
+                  <div className="text-center tabular-nums">
+                    {bid ? (
+                      <span className="text-[#0ecb81] font-medium">{parseFloat(bid[0]).toFixed(2)}</span>
+                    ) : ask ? (
+                      <span className="text-[#f6465d] font-medium">{parseFloat(ask[0]).toFixed(2)}</span>
+                    ) : ""}
+                  </div>
+
+                  {/* Ask qty + bar */}
+                  <div className="relative flex items-center justify-end">
+                    <div className="absolute inset-y-0 left-0 bg-[#f6465d]/15 rounded-r" style={{ width: `${askW}%` }} />
+                    <span className="relative tabular-nums text-[#f6465d]">
+                      {ask ? askSize.toFixed(3) : ""}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <div className="flex-1 overflow-auto p-3 flex flex-col gap-3.5 scrollbar-thin">
+          {!liveState ? (
+            <div className="flex flex-col items-center justify-center h-full gap-2 text-[#71717a] py-8">
+              <RefreshCw size={16} className="animate-spin text-[#f59e0b]" />
+              <span>Loading telemetry...</span>
             </div>
-          );
-        })}
-      </div>
+          ) : (() => {
+            const metrics = liveState.metrics;
+            const netDelta = (metrics.liquidityAdded || 0) - (metrics.liquidityRemoved || 0);
+
+            // Volatility regime styling
+            const regime = metrics.volatilityRegime || "NORMAL";
+            const regimeColor = regime === "HIGH" ? "text-[#ef4444] border-[#ef4444]" : regime === "LOW" ? "text-[#3b82f6] border-[#3b82f6]" : "text-[#a1a1aa] border-[#27272a]";
+            const regimeBg = regime === "HIGH" ? "bg-[#ef4444]/10 animate-pulse" : regime === "LOW" ? "bg-[#3b82f6]/10" : "bg-[#27272a]/20";
+
+            // Imbalance calculations (cap at -1 to +1)
+            const imb = Math.max(-1, Math.min(1, metrics.bidAskImbalance || 0));
+            // Position percentage (0 to 100)
+            const imbPct = ((imb + 1) / 2) * 100;
+
+            // Sweep and absorption levels
+            const sweep = metrics.sweepScore || 0;
+            const absorb = metrics.absorptionScore || 0;
+
+            return (
+              <>
+                {/* Volatility & Net Delta Row */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className={cn("flex flex-col gap-1 p-2 rounded border text-center transition-all", regimeColor, regimeBg)}>
+                    <span className="text-[8px] uppercase tracking-wider text-[#71717a] font-medium">Volatility Regime</span>
+                    <span className="text-xs font-black tracking-widest">{regime}</span>
+                  </div>
+                  <div className="flex flex-col gap-1 p-2 rounded border border-[#27272a] bg-[#27272a]/10 text-center">
+                    <span className="text-[8px] uppercase tracking-wider text-[#71717a] font-medium">Net Liquidity Delta</span>
+                    <span className={cn("text-xs font-bold tabular-nums", netDelta >= 0 ? "text-[#0ecb81]" : "text-[#f6465d]")}>
+                      {netDelta >= 0 ? "+" : ""}{netDelta.toFixed(1)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Imbalance scale */}
+                <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40">
+                  <div className="flex justify-between items-center mb-1 text-[8px] uppercase text-[#71717a] font-semibold">
+                    <span>Seller Pressure</span>
+                    <span className={cn("font-bold text-[9px] tabular-nums", imb >= 0 ? "text-[#0ecb81]" : "text-[#f6465d]")}>
+                      OFI: {imb >= 0 ? "+" : ""}{imb.toFixed(2)}
+                    </span>
+                    <span>Buyer Pressure</span>
+                  </div>
+                  <div className="relative h-2 rounded bg-[#27272a]/40 overflow-hidden mb-1 flex">
+                    <div className="h-full bg-[#f6465d]/40" style={{ width: "50%" }} />
+                    <div className="h-full bg-[#0ecb81]/40" style={{ width: "50%" }} />
+                    {/* Imbalance Marker */}
+                    <div className="absolute top-0 bottom-0 w-1 bg-[#ffffff] shadow-[0_0_4px_rgba(255,255,255,0.8)] transition-all duration-300" style={{ left: `${imbPct}%`, transform: 'translateX(-50%)' }} />
+                  </div>
+                  <div className="flex justify-between text-[7px] text-[#52525b]">
+                    <span>100% ASKS</span>
+                    <span>MID</span>
+                    <span>100% BIDS</span>
+                  </div>
+                </div>
+
+                {/* Sweep Indicator */}
+                <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
+                  <div className="flex justify-between items-center text-[8px] uppercase text-[#71717a] font-semibold">
+                    <span className="flex items-center gap-1">
+                      <Zap size={9} className={cn(sweep > 50 ? "text-[#ef4444] animate-bounce" : "text-[#52525b]")} />
+                      Tape Sweep Intensity
+                    </span>
+                    <span className={cn("font-bold tabular-nums text-[9px]", sweep > 75 ? "text-[#ef4444]" : sweep > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
+                      {sweep.toFixed(0)}/100
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-[#27272a]/50 overflow-hidden">
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-all duration-500",
+                        sweep > 75 ? "bg-[#ef4444]" : sweep > 40 ? "bg-[#f59e0b]" : "bg-[#3b82f6]"
+                      )}
+                      style={{ width: `${sweep}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[7px] text-[#52525b]">
+                    <span>STABLE</span>
+                    <span className={cn(sweep > 50 && "text-[#ef4444] font-bold")}>
+                      {sweep > 75 ? "AGGRESSIVE BREAKOUT" : sweep > 40 ? "PRESSURE SWEEP" : "ORDER FLOW CALM"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Absorption Indicator */}
+                <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
+                  <div className="flex justify-between items-center text-[8px] uppercase text-[#71717a] font-semibold">
+                    <span className="flex items-center gap-1">
+                      <Sparkles size={9} className={cn(absorb > 50 ? "text-[#0ecb81]" : "text-[#52525b]")} />
+                      Micro Limit Absorption
+                    </span>
+                    <span className={cn("font-bold tabular-nums text-[9px]", absorb > 75 ? "text-[#0ecb81]" : absorb > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
+                      {absorb.toFixed(0)}/100
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-[#27272a]/50 overflow-hidden">
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-all duration-500",
+                        absorb > 75 ? "bg-[#0ecb81]" : absorb > 40 ? "bg-[#8b5cf6]" : "bg-[#71717a]"
+                      )}
+                      style={{ width: `${absorb}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[7px] text-[#52525b]">
+                    <span>NO WALL</span>
+                    <span className={cn(absorb > 50 && "text-[#0ecb81] font-bold")}>
+                      {absorb > 75 ? "HEAVY BLOCK ABSORPTION" : absorb > 40 ? "WALL RESISTING" : "TAPING DIRECTLY"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Liquidity Added & Removed Stats */}
+                <div className="grid grid-cols-2 gap-2 text-[8px] text-[#71717a] font-semibold mt-1">
+                  <div className="p-2 rounded border border-[#27272a]/50 bg-[#27272a]/5">
+                    <div className="mb-0.5 uppercase">Liquidity Added</div>
+                    <div className="text-[10px] text-[#0ecb81] font-bold tabular-nums">
+                      +{(metrics.liquidityAdded || 0).toFixed(1)}
+                    </div>
+                  </div>
+                  <div className="p-2 rounded border border-[#27272a]/50 bg-[#27272a]/5">
+                    <div className="mb-0.5 uppercase">Liquidity Removed</div>
+                    <div className="text-[10px] text-[#f6465d] font-bold tabular-nums">
+                      -{(metrics.liquidityRemoved || 0).toFixed(1)}
+                    </div>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
     </div>
   );
 }
@@ -1156,7 +1523,7 @@ const Dashboard = () => {
           {/* Chart Area */}
           <div className="flex-1 bg-[#09090b] border-b border-[#27272a] overflow-hidden">
             {klines && klines.length > 0 ? (
-              <MiniChart data={klines as KlineData[]} positions={symbolPositions} lastPrice={lastPrice} />
+              <MiniChart data={klines as KlineData[]} positions={symbolPositions} lastPrice={lastPrice} symbol={selectedSymbol} />
             ) : (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
                 <RefreshCw size={16} className="animate-spin mr-2" />
