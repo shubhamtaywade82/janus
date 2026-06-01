@@ -43,7 +43,7 @@ const MiniChart = ({ data }: { data: KlineData[] }) => {
   const startAnimLoop = useCallback(() => {
     if (animLoopRunning.current) return;
     animLoopRunning.current = true;
-    const LERP = 0.18; // per-frame factor (~60fps → smooth ~250ms settle)
+    const LERP = 0.09; // per-frame factor (~60fps → smooth ~250ms settle)
     const loop = () => {
       if (!candlestickSeriesRef.current) { animLoopRunning.current = false; return; }
       const t = animTarget.current;
