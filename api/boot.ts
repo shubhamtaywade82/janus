@@ -108,3 +108,9 @@ if (env.isProduction) {
   applyWSSHandler({ wss, router: appRouter, createContext: createContextWSS });
   console.log(`[ws] Production WebSocket Server attached to HTTP port ${port}`);
 }
+
+// Start CoinDCX Private WebSocket client
+import { initCoinDCXPrivateWs } from "./services/coindcx-ws";
+initCoinDCXPrivateWs().catch((err) => {
+  console.error("[coindcx-ws] Failed to initialize private WS:", err);
+});

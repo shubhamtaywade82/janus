@@ -201,7 +201,7 @@ export function calculateLiquidationPrice(
   margin: number,
   size: number,
   side: "long" | "short",
-  leverage: number
+  _leverage: number
 ): number {
   const maintenanceMarginRate = 0.005; // 0.5%
   const mm = entryPrice * size * maintenanceMarginRate;

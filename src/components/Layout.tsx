@@ -1,5 +1,6 @@
 import { Link, useLocation } from "react-router";
 import { useAuth } from "@/hooks/useAuth";
+import { useState } from "react";
 import {
   TrendingUp,
   Wallet,
@@ -9,8 +10,10 @@ import {
   Signal,
   ScrollText,
   ChevronRight,
+  Settings,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import SettingsModal from "./SettingsModal";
 
 const navItems = [
   { path: "/", label: "Dashboard", icon: TrendingUp },
@@ -22,6 +25,7 @@ const navItems = [
 export default function Layout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const { user, logout } = useAuth({ redirectOnUnauthenticated: true });
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
   return (
     <div className="flex h-screen w-screen bg-[#09090b] text-[#f4f4f5] overflow-hidden">
@@ -62,6 +66,15 @@ export default function Layout({ children }: { children: React.ReactNode }) {
 
         {/* Bottom Actions */}
         <div className="flex flex-col items-center gap-2 mt-auto">
+          <button
+            onClick={() => setIsSettingsOpen(true)}
+            className="w-10 h-10 rounded-lg flex items-center justify-center text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#18181b] transition-all relative group"
+          >
+            <Settings size={18} />
+            <div className="absolute left-12 bg-[#18181b] text-[#f4f4f5] text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 border border-[#27272a]">
+              Settings
+            </div>
+          </button>
           <button className="w-10 h-10 rounded-lg flex items-center justify-center text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#18181b] transition-all">
             <Search size={18} />
           </button>
@@ -86,6 +99,9 @@ export default function Layout({ children }: { children: React.ReactNode }) {
           )}
         </div>
       </aside>
+
+      {/* Settings Modal */}
+      <SettingsModal isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden">
