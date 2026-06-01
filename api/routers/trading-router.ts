@@ -19,7 +19,7 @@ import {
 } from "../services/coindcx";
 import { TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
-import { tradingEvents, initCoinDCXPrivateWs, userBalancesCache, userPositionsCache } from "../services/coindcx-ws";
+import { tradingEvents, initCoinDCXPrivateWs, userBalancesCache, userPositionsCache, markPriceCache } from "../services/coindcx-ws";
 import { latestTickerCache, subscribeToSymbol } from "../services/streaming";
 
 export async function fetchPortfolioData(userId: number) {
@@ -52,11 +52,18 @@ export async function fetchPortfolioData(userId: number) {
         getUsdtInrRate(),
       ]);
 
-      // Build ticker map: in-memory streaming cache first (Binance WS), REST fallback
+      // Price priority: CoinDCX mark price (exact) > Binance last price (fast fallback)
+      // tickerMap keyed by Binance symbol (ETHUSDT)
       const tickerMap = new Map<string, number>();
+      // 1. Binance prices as base
       latestTickerCache.forEach((t, sym) => tickerMap.set(sym, t.lastPrice));
+      // 2. CoinDCX mark price overrides (more accurate for CoinDCX futures PnL/liquidation)
+      markPriceCache.forEach((mp, pair) => {
+        const sym = pair.replace("B-", "").replace("_", ""); // B-ETH_USDT → ETHUSDT
+        tickerMap.set(sym, mp);
+      });
 
-      // Ensure open positions' symbols are streaming — subscribe if not already
+      // Ensure open positions' symbols are subscribed on Binance WS (fallback)
       for (const p of livePositions) {
         if (parseFloat(p.active_pos) !== 0) {
           const binanceSym = (p.pair || "").replace("B-", "").replace("_", "");
@@ -86,9 +93,15 @@ export async function fetchPortfolioData(userId: number) {
             unrealizedPnl = (entryPrice - lastPrice) * absSize;
           }
 
+          // Margin is posted in marginCurrency (INR/USDT) — convert to USDT
           const lockedMarginRaw = parseFloat(p.locked_margin || p.locked_user_margin || "0");
           const lockedMarginUsdt = isInrMargin ? lockedMarginRaw / usdtInrRate : lockedMarginRaw;
-          const unrealizedPnlUsdt = isInrMargin ? unrealizedPnl / usdtInrRate : unrealizedPnl;
+
+          // PnL currency = pair QUOTE currency (B-ETH_USDT → USDT), NOT margin currency
+          // INR-margined B-ETH_USDT still has PnL in USDT
+          const pairQuote = (p.pair as string).split("_").pop() ?? "USDT";
+          const pnlIsInr = pairQuote === "INR";
+          const unrealizedPnlUsdt = pnlIsInr ? unrealizedPnl / usdtInrRate : unrealizedPnl;
 
           totalMargin += lockedMarginUsdt;
           totalUnrealizedPnl += unrealizedPnlUsdt;
@@ -152,25 +165,50 @@ export async function fetchPortfolioData(userId: number) {
       }
 
       let walletUsdt = 0;
-      // 1. Try live REST (GET /futures/wallets — now works)
+      let availableInr = 0;
+      let lockedInr = 0;
+      let walletCurrency = "USDT";
+
       try {
         const wallets = await getFuturesWallet({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret });
         for (const w of wallets) {
           const currency = w.currency_short_name || "";
-          const bal = parseFloat(w.balance || "0");
-          if (currency === "USDT") walletUsdt += bal;
-          else if (currency === "INR") walletUsdt += bal / usdtInrRate;
+          const free = parseFloat(w.balance || "0");
+          const locked = parseFloat(w.locked_balance || "0");
+          const total = free + locked;
+          if (currency === "USDT") {
+            walletUsdt += total;
+            availableInr += free;   // in USDT here but reused field
+            lockedInr += locked;
+            walletCurrency = "USDT";
+          } else if (currency === "INR") {
+            walletUsdt += total / usdtInrRate;
+            availableInr += free;
+            lockedInr += locked;
+            walletCurrency = "INR";
+          }
         }
       } catch {
-        // 2. Fallback: WS in-memory cache
+        // Fallback 1: WS in-memory cache (futures balance-update events)
         const cachedBalances = userBalancesCache.get(userId);
-        if (cachedBalances) {
+        if (cachedBalances && cachedBalances.length > 0) {
           for (const b of cachedBalances) {
-            const currency = b.currency_short_name || b.currency || "";
-            const bal = parseFloat(b.balance || "0");
-            if (currency === "USDT") walletUsdt += bal;
-            else if (currency === "INR") walletUsdt += bal / usdtInrRate;
+            const currency = (b.currency_short_name || b.currency || "").toUpperCase();
+            const total = parseFloat(b.balance || "0") + parseFloat(b.locked_balance || "0");
+            if (currency === "USDT") { walletUsdt += total; availableInr += parseFloat(b.balance || "0"); lockedInr += parseFloat(b.locked_balance || "0"); walletCurrency = "USDT"; }
+            else if (currency === "INR") { walletUsdt += total / usdtInrRate; availableInr += parseFloat(b.balance || "0"); lockedInr += parseFloat(b.locked_balance || "0"); walletCurrency = "INR"; }
           }
+        } else {
+          // Fallback 2: DB persisted futures wallet
+          try {
+            const dbWallets = await db.select().from(futuresWallets)
+              .where(and(eq(futuresWallets.userId, userId), eq(futuresWallets.exchange, "coindcx")));
+            for (const w of dbWallets) {
+              const total = parseFloat(w.balance || "0") + parseFloat(w.lockedBalance || "0");
+              if (w.marginCurrency === "USDT") { walletUsdt += total; walletCurrency = "USDT"; }
+              else if (w.marginCurrency === "INR") { walletUsdt += total / usdtInrRate; walletCurrency = "INR"; }
+            }
+          } catch {}
         }
       }
 
@@ -179,7 +217,13 @@ export async function fetchPortfolioData(userId: number) {
         totalUnrealizedPnl: totalUnrealizedPnl.toFixed(4),
         totalRealizedPnl: totalRealizedPnl.toFixed(4),
         totalMargin: totalMargin.toFixed(4),
-        totalEquity: walletUsdt + totalMargin + totalUnrealizedPnl,
+        walletUsdt: walletUsdt.toFixed(4),
+        walletCurrency,
+        availableInr: availableInr.toFixed(4),   // free balance in native currency
+        lockedInr: lockedInr.toFixed(4),          // locked in positions/orders
+        usdtInrRate: usdtInrRate.toFixed(4),
+        // equity = wallet + unrealizedPnl; client swaps in live PnL
+        totalEquity: walletUsdt + totalUnrealizedPnl,
         positions: openPositions,
         recentTrades,
       };
@@ -263,9 +307,9 @@ export const tradingRouter = createRouter({
             apiSecret: creds[0].apiSecret,
           });
 
-          // Use in-memory streaming cache (Binance WS) for live prices
           const tickerMap = new Map<string, number>();
           latestTickerCache.forEach((t, sym) => tickerMap.set(sym, t.lastPrice));
+          markPriceCache.forEach((mp, pair) => tickerMap.set(pair.replace("B-", "").replace("_", ""), mp));
 
           // Map positions to DB schema format
           const mapped = livePositions

@@ -4,12 +4,24 @@ import { getDb } from "../queries/connection";
 import { exchangeCredentials, positions, futuresWallets } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { EventEmitter } from "events";
+import { latestTickerCache, marketEvents } from "./streaming";
 
 export const tradingEvents = new EventEmitter();
 tradingEvents.setMaxListeners(100);
 
 export const userBalancesCache = new Map<number, any[]>();
 export const userPositionsCache = new Map<number, any[]>();
+export const markPriceCache = new Map<string, number>();
+
+// Pairs to stream public data for (Dashboard symbols)
+const PUBLIC_PAIRS = [
+  "B-BTC_USDT", "B-ETH_USDT", "B-SOL_USDT",
+  "B-BNB_USDT", "B-XRP_USDT", "B-ADA_USDT",
+  "B-DOGE_USDT", "B-AVAX_USDT",
+];
+
+// Convert CoinDCX pair to Binance-style symbol (B-ETH_USDT → ETHUSDT)
+const toSymbol = (pair: string) => pair.replace("B-", "").replace("_", "");
 
 let socket: any = null;
 
@@ -78,6 +90,62 @@ export async function initCoinDCXPrivateWs() {
 
   socket.on("joined", (response: any) => {
     console.log("[coindcx-ws] Authenticated successfully joined 'coindcx' channel:", response);
+    // Mark prices (all pairs, ~1s)
+    socket.emit("join", { channelName: "currentPrices@futures@rt" });
+    // LTP + klines per pair (futures prices, correct for our positions)
+    for (const pair of PUBLIC_PAIRS) {
+      socket.emit("join", { channelName: `${pair}@prices-futures` });
+      socket.emit("join", { channelName: `${pair}_1m-futures` });
+    }
+    console.log("[coindcx-ws] Joined public futures channels for", PUBLIC_PAIRS.length, "pairs");
+  });
+
+  // Mark price updates (~1s, all pairs)
+  socket.on("currentPrices@futures#update", (raw: any) => {
+    const parsed = parseWsEvent(raw);
+    const prices = parsed?.prices ?? {};
+    for (const [pair, data] of Object.entries(prices) as [string, any][]) {
+      if (data?.mp) {
+        markPriceCache.set(pair, data.mp);
+        // Also update latestTickerCache so portfolio + UI get futures mark price
+        latestTickerCache.set(toSymbol(pair), { lastPrice: data.mp, symbol: toSymbol(pair) });
+      }
+    }
+  });
+
+  // LTP updates from CoinDCX futures (fires on every trade)
+  socket.on("price-change", (raw: any) => {
+    const parsed = parseWsEvent(raw);
+    if (!parsed?.p) return;
+    // Find which pair emitted this (CoinDCX sends pair in channel, not in payload)
+    // parsed.pr = "f" means futures. Update all matched mark prices.
+    // We rely on currentPrices@futures#update for pair-specific prices.
+  });
+
+  // CoinDCX 1m kline — emit as Binance-compatible kline event for the chart
+  socket.on("candlestick", (raw: any) => {
+    const parsed = parseWsEvent(raw);
+    const candles: any[] = parsed?.data ?? [];
+    const c = candles[0];
+    if (!c?.pair) return;
+    const symbol = toSymbol(c.pair);
+    const kline = {
+      openTime: c.open_time * 1000,
+      open: c.open,
+      high: c.high,
+      low: c.low,
+      close: c.close,
+      volume: c.volume,
+      closeTime: c.close_time * 1000,
+      quoteVolume: c.quote_volume,
+      trades: 0,
+    };
+    marketEvents.emit(`${symbol}:kline`, kline);
+    // Update ticker cache with latest close
+    if (c.close) {
+      const price = parseFloat(c.close);
+      latestTickerCache.set(symbol, { lastPrice: price, symbol });
+    }
   });
 
   socket.on("df-position-update", (raw: any) => {

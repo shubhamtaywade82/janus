@@ -18,7 +18,8 @@ const activeStreams = new Map<string, ActiveSymbolStream>();
 
 function getBinanceWsUrl(symbol: string): string {
   const s = symbol.toLowerCase();
-  return `wss://fstream.binance.com/stream?streams=${s}@depth20@100ms/${s}@trade/${s}@ticker/${s}@kline_1m`;
+  // Using spot stream (fstream.binance.com futures is geo-restricted in some regions)
+  return `wss://stream.binance.com:9443/stream?streams=${s}@depth20@100ms/${s}@trade/${s}@ticker/${s}@kline_1m`;
 }
 
 export function subscribeToSymbol(symbol: string) {
@@ -54,8 +55,10 @@ export function subscribeToSymbol(symbol: string) {
       if (!data) return;
 
       if (stream.endsWith("@depth20@100ms")) {
-        const bids = data.b;
-        const asks = data.a;
+        // Spot uses bids/asks, futures uses b/a
+        const bids = data.bids ?? data.b ?? [];
+        const asks = data.asks ?? data.a ?? [];
+        if (!Array.isArray(bids) || !Array.isArray(asks)) return;
         const formattedDepth = { bids, asks };
 
         marketEvents.emit(`${symbol}:depth`, formattedDepth);

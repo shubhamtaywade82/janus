@@ -303,8 +303,8 @@ const OrderBook = ({ symbol }: { symbol: string }) => {
     }
   );
 
-  const bids = (depth && "bids" in depth ? depth.bids.slice(0, 10).reverse() : []) as [string, string][];
-  const asks = (depth && "asks" in depth ? depth.asks.slice(0, 10) : []) as [string, string][];
+  const bids = (depth && Array.isArray(depth.bids) ? depth.bids.slice(0, 10).reverse() : []) as [string, string][];
+  const asks = (depth && Array.isArray(depth.asks) ? depth.asks.slice(0, 10) : []) as [string, string][];
 
   const maxBidSize = Math.max(...bids.map(([, q]) => parseFloat(q)), 1);
   const maxAskSize = Math.max(...asks.map(([, q]) => parseFloat(q)), 1);

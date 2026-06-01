@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, useMemo, memo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, memo, useLayoutEffect } from "react";
 import { trpc } from "@/providers/trpc";
 import {
   Wallet,
@@ -22,12 +22,14 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
   const size = parseFloat(position.size || "0");
   const marginCurrency = position.marginCurrency || "USDT";
 
-  // Recalculate PnL from live price
   const rawPnl = position.side === "long"
     ? (currentPrice - entryPrice) * size
     : (entryPrice - currentPrice) * size;
   const pnl = rawPnl;
   const isProfit = pnl >= 0;
+
+  const priceFlash = useFlash(currentPrice);
+  const pnlFlashRow = useFlash(pnl);
   const marginMode = position.marginMode || "isolated";
   const liqDistance = position.liquidationPrice && currentPrice > 0
     ? Math.abs(currentPrice - parseFloat(position.liquidationPrice))
@@ -64,7 +66,7 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
       <td className="px-3 py-2 text-xs text-[#f4f4f5] tabular-nums">
         {parseFloat(position.entryPrice).toFixed(2)}
       </td>
-      <td className="px-3 py-2 text-xs text-[#f4f4f5] tabular-nums">
+      <td className={cn("px-3 py-2 text-xs text-[#f4f4f5] tabular-nums rounded", priceFlash)}>
         {currentPrice.toFixed(2)}
       </td>
       <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
@@ -100,7 +102,7 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
         {position.maintenanceMargin ? parseFloat(position.maintenanceMargin).toFixed(2) : "--"}
       </td>
       <td className="px-3 py-2">
-        <div className={cn("flex items-center gap-1 text-xs tabular-nums", isProfit ? "text-[#22c55e]" : "text-[#ef4444]")}>
+        <div className={cn("flex items-center gap-1 text-xs tabular-nums rounded px-1 -mx-1", isProfit ? "text-[#22c55e]" : "text-[#ef4444]", pnlFlashRow)}>
           {isProfit ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
           {isProfit ? "+" : ""}
           {pnl.toFixed(4)}
@@ -138,6 +140,21 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
       </td>
     </tr>
   );
+}
+
+// ─── Flash on value change ───
+function useFlash(value: number, duration = 600): "flash-up" | "flash-down" | "" {
+  const [flash, setFlash] = useState<"flash-up" | "flash-down" | "">("");
+  const prev = useRef(value);
+  useLayoutEffect(() => {
+    if (prev.current === value) return;
+    const dir = value > prev.current ? "flash-up" : "flash-down";
+    prev.current = value;
+    setFlash(dir);
+    const t = setTimeout(() => setFlash(""), duration);
+    return () => clearTimeout(t);
+  }, [value, duration]);
+  return flash;
 }
 
 // ─── Per-symbol ticker subscription ───
@@ -221,12 +238,23 @@ export default function Portfolio() {
     const entry = parseFloat(p.entryPrice || "0");
     const size = parseFloat(p.size || "0");
     const raw = p.side === "long" ? (lp - entry) * size : (entry - lp) * size;
-    const isInr = (p.marginCurrency || "USDT") === "INR";
-    return sum + (isInr ? raw / usdtInrRate : raw);
+    // PnL currency = quote of symbol (ETHUSDT → USDT, never INR for current pairs)
+    // marginCurrency (INR) ≠ quote currency — margin is just collateral
+    const quoteIsInr = (p.symbol as string).endsWith("INR");
+    return sum + (quoteIsInr ? raw / usdtInrRate : raw);
   }, 0);
+
+  const walletBase = parseFloat((portfolio as any)?.walletUsdt || "0")
+    || ((portfolio?.totalEquity || 0) - parseFloat(portfolio?.totalUnrealizedPnl || "0"));
+  const totalEquityUsdt = walletBase + liveTotalUnrealizedPnl;
 
   const totalPnl = liveTotalUnrealizedPnl + parseFloat(portfolio?.totalRealizedPnl || "0");
   const isProfit = totalPnl >= 0;
+
+  const pnlFlash = useFlash(liveTotalUnrealizedPnl);
+  const marginFlash = useFlash(parseFloat(portfolio?.totalMargin || "0"));
+  const equityFlash = useFlash(totalEquityUsdt
+  );
 
   return (
     <div className="flex flex-col h-full p-4 gap-4">
@@ -257,56 +285,80 @@ export default function Portfolio() {
         </div>
       </div>
 
-      {/* Summary Cards */}
-      <div className="grid grid-cols-4 gap-3">
-        <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <Layers size={14} className="text-[#3b82f6]" />
-            <span className="text-[10px] text-[#71717a]">Open Positions</span>
-          </div>
-          <div className="text-2xl font-bold text-[#f4f4f5] tabular-nums">
-            {portfolio?.openPositionsCount || 0}
-          </div>
-        </div>
+      {/* Summary Cards — CoinDCX style */}
+      {(() => {
+        const walletBalanceUsdt = walletBase;
+        const walletBalanceInr = walletBalanceUsdt * usdtInrRate;
+        const currentValueUsdt = totalEquityUsdt;
+        const currentValueInr = currentValueUsdt * usdtInrRate;
+        const pnlUsdt = liveTotalUnrealizedPnl;
+        const pnlInr = pnlUsdt * usdtInrRate;
+        const pnlPct = walletBalanceUsdt > 0 ? (pnlUsdt / walletBalanceUsdt) * 100 : 0;
+        const availFree = parseFloat((portfolio as any)?.availableInr || "0");
+        const lockedMgn = parseFloat((portfolio as any)?.lockedInr || "0");
+        const walletCcy = (portfolio as any)?.walletCurrency ?? "INR";
+        const rate = parseFloat((portfolio as any)?.usdtInrRate || String(usdtInrRate));
+        return (
+          <div className="grid grid-cols-3 gap-3">
+            {/* Wallet Balance */}
+            <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <Wallet size={14} className="text-[#3b82f6]" />
+                <span className="text-[10px] text-[#71717a]">Wallet Balance</span>
+              </div>
+              <div className={cn("text-xl font-bold text-[#f4f4f5] tabular-nums rounded px-1 -mx-1", marginFlash)}>
+                {walletBalanceUsdt.toFixed(4)} USDT
+              </div>
+              <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
+                ₹{walletBalanceInr.toFixed(2)} · Rate ₹{rate.toFixed(2)}
+              </div>
+              <div className="mt-2 flex items-center justify-between text-[9px]">
+                <span className="text-[#22c55e]">Available ₹{availFree.toFixed(2)}</span>
+                <span className="text-[#f59e0b]">Locked ₹{lockedMgn.toFixed(2)}</span>
+              </div>
+            </div>
 
-        <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <DollarSign size={14} className="text-[#22c55e]" />
-            <span className="text-[10px] text-[#71717a]">Total Margin</span>
-          </div>
-          <div className="text-2xl font-bold text-[#f4f4f5] tabular-nums">
-            ${parseFloat(portfolio?.totalMargin || "0").toFixed(2)}
-          </div>
-        </div>
+            {/* Current Value (Equity) */}
+            <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-2">
+                <PieChart size={14} className="text-[#f59e0b]" />
+                <span className="text-[10px] text-[#71717a]">Current Value</span>
+              </div>
+              <div className={cn("text-xl font-bold text-[#f4f4f5] tabular-nums rounded px-1 -mx-1", equityFlash)}>
+                {currentValueUsdt.toFixed(4)} USDT
+              </div>
+              <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
+                ₹{currentValueInr.toFixed(2)}
+              </div>
+              <div className="mt-2 text-[9px] text-[#71717a]">
+                {portfolio?.openPositionsCount || 0} open position{portfolio?.openPositionsCount !== 1 ? "s" : ""}
+              </div>
+            </div>
 
-        <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-2">
-            {isProfit ? (
-              <TrendingUp size={14} className="text-[#22c55e]" />
-            ) : (
-              <TrendingDown size={14} className="text-[#ef4444]" />
-            )}
-            <span className="text-[10px] text-[#71717a]">Unrealized PnL</span>
+            {/* Active PnL */}
+            <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
+              <div className="flex items-center gap-2 mb-2">
+                {isProfit
+                  ? <TrendingUp size={14} className="text-[#22c55e]" />
+                  : <TrendingDown size={14} className="text-[#ef4444]" />}
+                <span className="text-[10px] text-[#71717a]">Active PnL</span>
+              </div>
+              <div className={cn("text-xl font-bold tabular-nums rounded px-1 -mx-1", isProfit ? "text-[#22c55e]" : "text-[#ef4444]", pnlFlash)}>
+                {pnlUsdt >= 0 ? "+" : ""}{pnlUsdt.toFixed(4)} USDT
+              </div>
+              <div className={cn("text-[10px] mt-1 tabular-nums", isProfit ? "text-[#22c55e]/70" : "text-[#ef4444]/70")}>
+                {pnlInr >= 0 ? "+" : ""}₹{pnlInr.toFixed(2)}
+              </div>
+              <div className={cn("mt-1 text-[9px] tabular-nums font-medium", isProfit ? "text-[#22c55e]" : "text-[#ef4444]")}>
+                {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%
+              </div>
+            </div>
           </div>
-          <div className={cn("text-2xl font-bold tabular-nums", isProfit ? "text-[#22c55e]" : "text-[#ef4444]")}>
-            {liveTotalUnrealizedPnl >= 0 ? "+" : ""}
-            ${liveTotalUnrealizedPnl.toFixed(4)}
-          </div>
-        </div>
+        );
+      })()}
 
-        <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
-          <div className="flex items-center gap-2 mb-2">
-            <PieChart size={14} className="text-[#f59e0b]" />
-            <span className="text-[10px] text-[#71717a]">Total Equity</span>
-          </div>
-          <div className="text-2xl font-bold text-[#f4f4f5] tabular-nums">
-            ${((portfolio?.totalEquity || 0) - parseFloat(portfolio?.totalUnrealizedPnl || "0") + liveTotalUnrealizedPnl).toFixed(2)}
-          </div>
-        </div>
-      </div>
-
-      {/* Risk Warning */}
-      {portfolio && liveTotalUnrealizedPnl < -parseFloat(portfolio.totalMargin) * 0.5 && (
+      {/* Risk Warning — trigger when PnL > 10% of total wallet equity */}
+      {portfolio && totalEquityUsdt > 0 && liveTotalUnrealizedPnl < -(totalEquityUsdt * 0.1) && (
         <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#ef4444]/10 border border-[#ef4444]/30">
           <AlertTriangle size={14} className="text-[#ef4444]" />
           <span className="text-xs text-[#ef4444]">
