@@ -120,6 +120,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
   const saveRules = (updatedRules: AlertRule[]) => {
     setRules(updatedRules);
     localStorage.setItem("janus_alert_rules", JSON.stringify(updatedRules));
+    window.dispatchEvent(new Event("janus_alerts_changed"));
   };
 
   const saveLogs = (updatedLogs: AlertLog[]) => {
