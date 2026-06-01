@@ -5,13 +5,11 @@ import {
   Wallet,
   TrendingUp,
   TrendingDown,
-  DollarSign,
   PieChart,
   AlertTriangle,
   Target,
   ArrowUpRight,
   ArrowDownRight,
-  Layers,
   Shield,
   Percent,
 } from "lucide-react";

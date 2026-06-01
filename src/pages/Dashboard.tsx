@@ -3,13 +3,11 @@ import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
 import { ExitSignalToast } from "@/components/ExitSignalToast";
 import {
-  ArrowUpDown,
   Clock,
   Plus,
   Minus,
   RefreshCw,
   Activity,
-  ShieldAlert,
   Sparkles,
   Zap,
   Bell,

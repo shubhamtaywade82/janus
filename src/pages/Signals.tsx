@@ -3,13 +3,9 @@ import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
 import {
   Signal,
-  Activity,
-  Zap,
   RefreshCw,
-  ChevronRight,
   Lock,
   Unlock,
-  Target,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -47,48 +43,6 @@ function getRegime(signal: any): { label: Regime; color: string; bg: string; bor
     return { label: "DISTRIBUTION", color: "#f59e0b", bg: "rgba(245,158,11,0.06)",  border: "rgba(245,158,11,0.2)"  };
   }
   return   { label: "NEUTRAL",      color: "#a1a1aa", bg: "rgba(161,161,170,0.05)", border: "rgba(161,161,170,0.15)"};
-}
-
-// ─── Score Ring Component ───
-const ScoreRing = ({ score, label, color }: { score: number; label: string; color: string }) => {
-  const radius = 36;
-  const circumference = 2 * Math.PI * radius;
-  const offset = circumference - (score / 100) * circumference;
-
-  return (
-    <div className="flex flex-col items-center gap-1">
-      <div className="relative w-20 h-20">
-        <svg className="w-full h-full -rotate-90" viewBox="0 0 80 80">
-          <circle
-            cx="40"
-            cy="40"
-            r={radius}
-            fill="none"
-            stroke="#27272a"
-            strokeWidth="6"
-          />
-          <circle
-            cx="40"
-            cy="40"
-            r={radius}
-            fill="none"
-            stroke={color}
-            strokeWidth="6"
-            strokeDasharray={circumference}
-            strokeDashoffset={offset}
-            strokeLinecap="round"
-            className="transition-all duration-700"
-          />
-        </svg>
-        <div className="absolute inset-0 flex flex-col items-center justify-center">
-          <span className="text-sm font-bold tabular-nums" style={{ color }}>
-            {score.toFixed(0)}
-          </span>
-        </div>
-      </div>
-      <span className="text-[10px] text-[#71717a]">{label}</span>
-    </div>
-  );
 }
 
 // ─── Score bar ───
@@ -158,57 +112,161 @@ const SignalCard = ({ signal }: { signal: any }) => {
       </div>
 
       {/* Score bars */}
-      <div className="flex flex-col gap-1.5 mb-2.5">
-        <ScoreBar score={micro} color="#3b82f6" label="Micro" weight="20%" />
-        <ScoreBar score={intra} color="#8b5cf6" label="Intraday" weight="45%" />
-        <ScoreBar score={swing} color="#f59e0b" label="Swing" weight="35%" />
-      </div>
+      {indicators.bbUpper === undefined && indicators.rmi === undefined && indicators.rangeHigh === undefined && indicators.predictedHigh === undefined && indicators.bidDepth === undefined ? (
+        <div className="flex flex-col gap-1.5 mb-2.5">
+          <ScoreBar score={micro} color="#3b82f6" label="Micro" weight="20%" />
+          <ScoreBar score={intra} color="#8b5cf6" label="Intraday" weight="45%" />
+          <ScoreBar score={swing} color="#f59e0b" label="Swing" weight="35%" />
+        </div>
+      ) : (
+        <div className="flex flex-col gap-1.5 mb-2.5">
+          <ScoreBar score={composite} color={regime.color} label="Strategy Confidence" weight="100%" />
+        </div>
+      )}
 
       {/* Indicators */}
-      <div className="grid grid-cols-3 gap-x-2 border-t border-[#27272a]/50 pt-2">
-        <div>
-          <div className="text-[9px] text-[#71717a]">Spread</div>
-          <div className="text-xs text-[#f4f4f5] tabular-nums">{indicators.spread?.toFixed(4) ?? "--"}</div>
-        </div>
-        <div>
-          <div className="text-[9px] text-[#71717a]">Imbalance</div>
-          <div className={cn("text-xs tabular-nums", imbalance >= 0 ? "text-[#22c55e]" : "text-[#ef4444]")}>
-            {imbalance >= 0 ? "+" : ""}{imbalance.toFixed(2)}
+      {indicators.bbUpper !== undefined ? (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 border-t border-[#27272a]/50 pt-2 text-[10px] text-zinc-400">
+          <div className="flex justify-between">
+            <span>BB Upper</span>
+            <span className="text-[#f4f4f5] font-mono">{indicators.bbUpper.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>BB Lower</span>
+            <span className="text-[#f4f4f5] font-mono">{indicators.bbLower.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>RSI(14)</span>
+            <span className={cn("font-mono font-bold", rsi > 70 ? "text-[#f6465d]" : rsi < 30 ? "text-[#0ecb81]" : "text-[#f4f4f5]")}>
+              {rsi.toFixed(1)}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span>MACD Hist</span>
+            <span className="text-[#f4f4f5] font-mono">{indicators.macdHistogram?.toFixed(4) ?? "--"}</span>
           </div>
         </div>
-        <div>
-          <div className="text-[9px] text-[#71717a]">RSI</div>
-          <div className={cn("text-xs tabular-nums", rsi > 70 ? "text-[#ef4444]" : rsi < 30 ? "text-[#22c55e]" : "text-[#f4f4f5]")}>
-            {rsi.toFixed(1)}
+      ) : indicators.rmi !== undefined ? (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 border-t border-[#27272a]/50 pt-2 text-[10px] text-zinc-400">
+          <div className="flex justify-between">
+            <span>RMI</span>
+            <span className={cn("font-mono font-bold", indicators.rmi > 70 ? "text-[#f6465d]" : indicators.rmi < 30 ? "text-[#0ecb81]" : "text-[#f4f4f5]")}>
+              {indicators.rmi.toFixed(1)}
+            </span>
+          </div>
+          <div className="flex justify-between">
+            <span>Trend EMA</span>
+            <span className="text-[#f4f4f5] font-mono">{indicators.trendEma?.toFixed(2) ?? "--"}</span>
+          </div>
+          <div className="flex justify-between col-span-2">
+            <span>Regime</span>
+            <span className={cn("font-bold uppercase", indicators.isUpTrend ? "text-[#0ecb81]" : "text-[#f6465d]")}>
+              {indicators.isUpTrend ? "Uptrend" : "Downtrend"}
+            </span>
           </div>
         </div>
-      </div>
-
-      {/* Microstructure Metrics */}
-      {indicators.sweepScore !== undefined && (
-        <div className="grid grid-cols-3 gap-x-2 border-t border-[#27272a]/30 pt-1.5 mt-1.5">
-          <div>
-            <div className="text-[8px] text-[#71717a] uppercase font-semibold">Sweep</div>
-            <div className={cn("text-xs tabular-nums font-semibold", parseFloat(indicators.sweepScore) > 50 ? "text-[#ef4444]" : "text-[#e4e4e7]")}>
-              {parseFloat(indicators.sweepScore).toFixed(0)}
+      ) : indicators.rangeHigh !== undefined ? (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 border-t border-[#27272a]/50 pt-2 text-[10px] text-zinc-400">
+          <div className="flex justify-between">
+            <span>Range High</span>
+            <span className="text-[#f4f4f5] font-mono">{indicators.rangeHigh.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Range Low</span>
+            <span className="text-[#f4f4f5] font-mono">{indicators.rangeLow.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Mid Price</span>
+            <span className="text-[#f4f4f5] font-mono">{indicators.midPrice.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Deviation</span>
+            <span className="text-[#f4f4f5] font-mono">{(indicators.deviation * 100).toFixed(2)}%</span>
+          </div>
+        </div>
+      ) : indicators.predictedHigh !== undefined ? (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 border-t border-[#27272a]/50 pt-2 text-[10px] text-zinc-400">
+          <div className="flex justify-between">
+            <span>ML Pred High</span>
+            <span className="text-[#0ecb81] font-mono font-bold">{indicators.predictedHigh.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>ML Pred Low</span>
+            <span className="text-[#f6465d] font-mono font-bold">{indicators.predictedLow.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between col-span-2">
+            <span>Predicted Range</span>
+            <span className="text-[#f4f4f5] font-mono font-bold">{indicators.predictedRange.toFixed(2)} USDT</span>
+          </div>
+        </div>
+      ) : indicators.bidDepth !== undefined ? (
+        <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 border-t border-[#27272a]/50 pt-2 text-[10px] text-zinc-400">
+          <div className="flex justify-between">
+            <span>Bid Depth</span>
+            <span className="text-[#0ecb81] font-mono">{indicators.bidDepth.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Ask Depth</span>
+            <span className="text-[#f6465d] font-mono">{indicators.askDepth.toFixed(2)}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Spread</span>
+            <span className="text-[#f4f4f5] font-mono">{indicators.spread?.toFixed(4) ?? "--"}</span>
+          </div>
+          <div className="flex justify-between">
+            <span>Imbalance</span>
+            <span className={cn("font-mono font-bold", indicators.imbalance >= 0 ? "text-[#0ecb81]" : "text-[#f6465d]")}>
+              {indicators.imbalance >= 0 ? "+" : ""}{indicators.imbalance.toFixed(2)}
+            </span>
+          </div>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-3 gap-x-2 border-t border-[#27272a]/50 pt-2">
+            <div>
+              <div className="text-[9px] text-[#71717a]">Spread</div>
+              <div className="text-xs text-[#f4f4f5] tabular-nums">{indicators.spread?.toFixed(4) ?? "--"}</div>
+            </div>
+            <div>
+              <div className="text-[9px] text-[#71717a]">Imbalance</div>
+              <div className={cn("text-xs tabular-nums", imbalance >= 0 ? "text-[#22c55e]" : "text-[#ef4444]")}>
+                {imbalance >= 0 ? "+" : ""}{imbalance.toFixed(2)}
+              </div>
+            </div>
+            <div>
+              <div className="text-[9px] text-[#71717a]">RSI</div>
+              <div className={cn("text-xs tabular-nums", rsi > 70 ? "text-[#ef4444]" : rsi < 30 ? "text-[#22c55e]" : "text-[#f4f4f5]")}>
+                {rsi.toFixed(1)}
+              </div>
             </div>
           </div>
-          <div>
-            <div className="text-[8px] text-[#71717a] uppercase font-semibold">Absorb</div>
-            <div className={cn("text-xs tabular-nums font-semibold", parseFloat(indicators.absorptionScore) > 50 ? "text-[#22c55e]" : "text-[#e4e4e7]")}>
-              {parseFloat(indicators.absorptionScore).toFixed(0)}
+          {/* Microstructure Metrics */}
+          {indicators.sweepScore !== undefined && (
+            <div className="grid grid-cols-3 gap-x-2 border-t border-[#27272a]/30 pt-1.5 mt-1.5">
+              <div>
+                <div className="text-[8px] text-[#71717a] uppercase font-semibold">Sweep</div>
+                <div className={cn("text-xs tabular-nums font-semibold", parseFloat(indicators.sweepScore) > 50 ? "text-[#ef4444]" : "text-[#e4e4e7]")}>
+                  {parseFloat(indicators.sweepScore).toFixed(0)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[8px] text-[#71717a] uppercase font-semibold">Absorb</div>
+                <div className={cn("text-xs tabular-nums font-semibold", parseFloat(indicators.absorptionScore) > 50 ? "text-[#22c55e]" : "text-[#e4e4e7]")}>
+                  {parseFloat(indicators.absorptionScore).toFixed(0)}
+                </div>
+              </div>
+              <div>
+                <div className="text-[8px] text-[#71717a] uppercase font-semibold">Regime</div>
+                <div className={cn("text-[10px] font-bold tracking-tight uppercase", 
+                  indicators.volatilityRegime === "HIGH" ? "text-[#ef4444]" : 
+                  indicators.volatilityRegime === "LOW" ? "text-[#3b82f6]" : "text-[#a1a1aa]"
+                )}>
+                  {indicators.volatilityRegime || "NORMAL"}
+                </div>
+              </div>
             </div>
-          </div>
-          <div>
-            <div className="text-[8px] text-[#71717a] uppercase font-semibold">Regime</div>
-            <div className={cn("text-[10px] font-bold tracking-tight uppercase", 
-              indicators.volatilityRegime === "HIGH" ? "text-[#ef4444]" : 
-              indicators.volatilityRegime === "LOW" ? "text-[#3b82f6]" : "text-[#a1a1aa]"
-            )}>
-              {indicators.volatilityRegime || "NORMAL"}
-            </div>
-          </div>
-        </div>
+          )}
+        </>
       )}
 
       <div className="mt-1.5 flex items-center justify-between text-[9px] text-[#52525b]">
@@ -221,89 +279,6 @@ const SignalCard = ({ signal }: { signal: any }) => {
   );
 }
 
-// ─── Market Sentiment Gauge ───
-const SentimentGauge = ({ signals }: { signals: any[] }) => {
-  if (!signals || signals.length === 0) return null;
-
-  // Compute weighted sentiment: long=+1, short=-1, neutral=0, weighted by composite score
-  let weightedSum = 0;
-  let totalWeight = 0;
-  let bullCount = 0, bearCount = 0, neutCount = 0;
-
-  for (const s of signals) {
-    const score = parseFloat(s.compositeScore) || 0;
-    const dir = s.direction;
-    const regime = getRegime(s);
-    totalWeight += score;
-    if (regime.label === "BULLISH") { weightedSum += score; bullCount++; }
-    else if (regime.label === "BEARISH") { weightedSum -= score; bearCount++; }
-    else if (regime.label === "ACCUMULATION") { weightedSum += score * 0.5; neutCount++; }
-    else if (regime.label === "DISTRIBUTION") { weightedSum -= score * 0.5; neutCount++; }
-    else neutCount++;
-    void dir;
-  }
-
-  // Normalize to -100..+100
-  const raw = totalWeight > 0 ? (weightedSum / totalWeight) * 100 : 0;
-  const sentiment = Math.max(-100, Math.min(100, raw));
-  // Map to 0..100 for gauge position
-  const pct = (sentiment + 100) / 2;
-
-  const label = sentiment > 30 ? "BULLISH" : sentiment < -30 ? "BEARISH" : "NEUTRAL";
-  const color = sentiment > 30 ? "#0ecb81" : sentiment < -30 ? "#f6465d" : "#f59e0b";
-  const bgGrad = `linear-gradient(to right, #f6465d 0%, #f59e0b 50%, #0ecb81 100%)`;
-
-  return (
-    <div className="bg-[#18181b] border border-[#27272a] rounded-xl p-5">
-      <div className="flex items-center justify-between mb-4">
-        <div>
-          <div className="text-xs text-[#71717a] mb-0.5">Market Sentiment</div>
-          <div className="text-2xl font-black tracking-wide" style={{ color }}>{label}</div>
-        </div>
-        <div className="text-right">
-          <div className="text-xs text-[#71717a] mb-0.5">Score</div>
-          <div className="text-2xl font-black tabular-nums" style={{ color }}>
-            {sentiment > 0 ? "+" : ""}{sentiment.toFixed(0)}
-          </div>
-        </div>
-      </div>
-
-      {/* Gauge bar */}
-      <div className="relative mb-3">
-        <div className="h-4 rounded-full overflow-hidden" style={{ background: bgGrad, opacity: 0.3 }} />
-        <div className="absolute inset-0 h-4 rounded-full overflow-hidden" style={{ background: bgGrad, clipPath: `inset(0 ${100 - pct}% 0 0 round 9999px)` }} />
-        {/* Needle */}
-        <div
-          className="absolute top-1/2 -translate-y-1/2 w-3 h-3 rounded-full border-2 border-[#09090b] shadow-lg transition-all duration-700"
-          style={{ left: `calc(${pct}% - 6px)`, background: color }}
-        />
-        {/* Center line */}
-        <div className="absolute top-0 bottom-0 w-px bg-[#52525b]/60" style={{ left: "50%" }} />
-      </div>
-
-      {/* Labels */}
-      <div className="flex justify-between text-[10px] text-[#52525b] mb-3">
-        <span className="text-[#f6465d]">◀ BEARISH</span>
-        <span className="text-[#52525b]">NEUTRAL</span>
-        <span className="text-[#0ecb81]">BULLISH ▶</span>
-      </div>
-
-      {/* Distribution pills */}
-      <div className="flex items-center gap-2">
-        <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-[#0ecb81]/10 text-[#0ecb81]">
-          <span className="font-bold">{bullCount}</span> Bull
-        </span>
-        <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-[#52525b]/10 text-[#71717a]">
-          <span className="font-bold">{neutCount}</span> Neutral
-        </span>
-        <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-[#f6465d]/10 text-[#f6465d]">
-          <span className="font-bold">{bearCount}</span> Bear
-        </span>
-        <span className="ml-auto text-[10px] text-[#52525b]">{signals.length} pairs</span>
-      </div>
-    </div>
-  );
-};
 
 // ─── Main Signals Page ───
 const Signals = () => {
@@ -397,8 +372,7 @@ const Signals = () => {
       return 0;
     });
 
-  const gatedSignals = signals?.filter((s) => s.isGated) || [];
-  const neutralSignals = signals?.filter((s) => !s.isGated) || [];
+
 
   const regimeCounts = signals?.reduce((acc: Record<string, number>, s) => {
     const r = getRegime(s).label;

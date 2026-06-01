@@ -18,7 +18,9 @@ export function evaluateExitCondition(
   entryPrice: number,
   currentPrice: number,
   size: number,
-  takerFeeRate: number
+  takerFeeRate: number,
+  stopLoss: number | null = null,
+  takeProfit: number | null = null
 ): ExitDecision {
   const unrealizedPnl =
     side === "long"
@@ -30,17 +32,39 @@ export function evaluateExitCondition(
   const totalFees = entryFee + exitFee;
   const feeAdjustedPnl = unrealizedPnl - totalFees;
 
+  let shouldExit = feeAdjustedPnl > 0;
+  let reason =
+    feeAdjustedPnl > 0
+      ? `PnL ${unrealizedPnl.toFixed(6)} > fees ${totalFees.toFixed(6)}`
+      : `PnL ${unrealizedPnl.toFixed(6)} ≤ fees ${totalFees.toFixed(6)} — hold`;
+
+  // Stop loss and take profit triggers
+  if (side === "long") {
+    if (stopLoss && stopLoss > 0 && currentPrice <= stopLoss) {
+      shouldExit = true;
+      reason = `Stop Loss hit at ${currentPrice} (SL: ${stopLoss})`;
+    } else if (takeProfit && takeProfit > 0 && currentPrice >= takeProfit) {
+      shouldExit = true;
+      reason = `Take Profit hit at ${currentPrice} (TP: ${takeProfit})`;
+    }
+  } else {
+    if (stopLoss && stopLoss > 0 && currentPrice >= stopLoss) {
+      shouldExit = true;
+      reason = `Stop Loss hit at ${currentPrice} (SL: ${stopLoss})`;
+    } else if (takeProfit && takeProfit > 0 && currentPrice <= takeProfit) {
+      shouldExit = true;
+      reason = `Take Profit hit at ${currentPrice} (TP: ${takeProfit})`;
+    }
+  }
+
   return {
-    shouldExit: feeAdjustedPnl > 0,
+    shouldExit,
     unrealizedPnl,
     entryFee,
     exitFee,
     totalFees,
     feeAdjustedPnl,
-    reason:
-      feeAdjustedPnl > 0
-        ? `PnL ${unrealizedPnl.toFixed(6)} > fees ${totalFees.toFixed(6)}`
-        : `PnL ${unrealizedPnl.toFixed(6)} ≤ fees ${totalFees.toFixed(6)} — hold`,
+    reason,
   };
 }
 
@@ -51,6 +75,8 @@ interface MonitoredPosition {
   entryPrice: number;
   size: number;
   strategyType: StrategyType;
+  stopLoss: number | null;
+  takeProfit: number | null;
 }
 
 const activeMonitors = new Map<number, ReturnType<typeof setInterval>>();
@@ -84,7 +110,9 @@ export function startExitMonitor(userId: number, positions: MonitoredPosition[])
         pos.entryPrice,
         currentPrice,
         pos.size,
-        config.takerFeeRate
+        config.takerFeeRate,
+        pos.stopLoss,
+        pos.takeProfit
       );
 
       if (decision.shouldExit) {

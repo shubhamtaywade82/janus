@@ -14,6 +14,13 @@ import { fetchOrderBook, fetchRecentTrades, fetchKlines, SUPPORTED_PAIRS } from 
 import { subscribeToSymbol } from "../services/streaming";
 import { marketStateManager } from "../services/market-state";
 import { STRATEGY_CONFIGS, type StrategyType } from "../services/strategy-config";
+import {
+  evaluateGridStrategy,
+  evaluateMomentumReversal,
+  evaluateBBReversion,
+  evaluateMLSizing,
+  evaluateScalpingMicro
+} from "../services/strategies";
 
 // ─── Signal update event bus ───
 export const signalEvents = new EventEmitter();
@@ -78,15 +85,21 @@ async function getConfluenceInput(binanceSymbol: string) {
 
   let prices: number[];
   let volumes: number[];
+  let highs: number[];
+  let lows: number[];
 
   if (dbKlines.length >= 50) {
     const sorted = [...dbKlines].reverse();
     prices = sorted.map((k) => parseFloat(k.close));
     volumes = sorted.map((k) => parseFloat(k.volume));
+    highs = sorted.map((k) => parseFloat(k.high));
+    lows = sorted.map((k) => parseFloat(k.low));
   } else {
     const klines = await fetchKlines(binanceSymbol, "1m", 150);
     prices = klines.map((k) => parseFloat(k.close));
     volumes = klines.map((k) => parseFloat(k.volume));
+    highs = klines.map((k) => parseFloat(k.high));
+    lows = klines.map((k) => parseFloat(k.low));
   }
 
   // 4. Extra Metrics (from in-memory state manager)
@@ -99,7 +112,7 @@ async function getConfluenceInput(binanceSymbol: string) {
     liquidityAdded: state.metrics.liquidityAdded,
   } : undefined;
 
-  return { obMetrics, tapeMetrics, prices, volumes, extraMetrics };
+  return { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics };
 }
 
 // ─── Auto-analysis loop ───
@@ -112,28 +125,102 @@ async function runAutoAnalysis() {
     const db = getDb();
     for (const pair of SUPPORTED_PAIRS) {
       try {
-        const { obMetrics, tapeMetrics, prices, volumes, extraMetrics } = await getConfluenceInput(pair.binance);
-        const analysis = analyzeConfluence(
-          pair.coindcx,
-          obMetrics,
-          tapeMetrics,
-          prices,
-          volumes,
-          extraMetrics,
-          config.weights,
-          config.threshold
-        );
-        await db.insert(signals).values({
-          symbol: pair.coindcx,
-          microScore: String(analysis.microScore),
-          intraScore: String(analysis.intraScore),
-          swingScore: String(analysis.swingScore),
-          compositeScore: String(analysis.compositeScore),
-          threshold: String(analysis.threshold),
-          isGated: analysis.isGated,
-          direction: analysis.direction,
-          metadata: analysis.indicators,
-        }).catch(() => {});
+        const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = await getConfluenceInput(pair.binance);
+        
+        let signalData;
+        const currentPrice = prices[prices.length - 1] || 0;
+
+        if (activeStrategyType === "grid") {
+          const res = evaluateGridStrategy(currentPrice, prices, config.threshold);
+          signalData = {
+            symbol: pair.coindcx,
+            microScore: String(res.score),
+            intraScore: "50.00",
+            swingScore: "50.00",
+            compositeScore: String(res.score),
+            threshold: String(config.threshold),
+            isGated: res.isGated,
+            direction: res.direction,
+            metadata: res.metadata,
+          };
+        } else if (activeStrategyType === "momentum_reversal") {
+          const res = evaluateMomentumReversal(currentPrice, prices, config.threshold);
+          signalData = {
+            symbol: pair.coindcx,
+            microScore: "50.00",
+            intraScore: String(res.score),
+            swingScore: "50.00",
+            compositeScore: String(res.score),
+            threshold: String(config.threshold),
+            isGated: res.isGated,
+            direction: res.direction,
+            metadata: res.metadata,
+          };
+        } else if (activeStrategyType === "bb_reversion") {
+          const res = evaluateBBReversion(currentPrice, prices, config.threshold);
+          signalData = {
+            symbol: pair.coindcx,
+            microScore: "50.00",
+            intraScore: String(res.score),
+            swingScore: "50.00",
+            compositeScore: String(res.score),
+            threshold: String(config.threshold),
+            isGated: res.isGated,
+            direction: res.direction,
+            metadata: res.metadata,
+          };
+        } else if (activeStrategyType === "ml_sizing") {
+          const res = evaluateMLSizing(currentPrice, prices, highs, lows, config.threshold);
+          signalData = {
+            symbol: pair.coindcx,
+            microScore: "50.00",
+            intraScore: "50.00",
+            swingScore: String(res.score),
+            compositeScore: String(res.score),
+            threshold: String(config.threshold),
+            isGated: res.isGated,
+            direction: res.direction,
+            metadata: res.metadata,
+          };
+        } else if (activeStrategyType === "scalping_micro") {
+          const res = evaluateScalpingMicro(currentPrice, obMetrics, tapeMetrics, config.threshold);
+          signalData = {
+            symbol: pair.coindcx,
+            microScore: String(res.score),
+            intraScore: "50.00",
+            swingScore: "50.00",
+            compositeScore: String(res.score),
+            threshold: String(config.threshold),
+            isGated: res.isGated,
+            direction: res.direction,
+            metadata: res.metadata,
+          };
+        } else {
+          // Standard Confluence
+          const analysis = analyzeConfluence(
+            pair.coindcx,
+            obMetrics,
+            tapeMetrics,
+            prices,
+            volumes,
+            extraMetrics,
+            config.weights,
+            config.threshold
+          );
+          signalData = {
+            symbol: pair.coindcx,
+            microScore: String(analysis.microScore),
+            intraScore: String(analysis.intraScore),
+            swingScore: String(analysis.swingScore),
+            compositeScore: String(analysis.compositeScore),
+            threshold: String(analysis.threshold),
+            isGated: analysis.isGated,
+            direction: analysis.direction,
+            metadata: analysis.indicators,
+          };
+        }
+
+        await db.insert(signals).values(signalData).catch(() => {});
       } catch (err) {
         console.error(`[signal-router] Auto-analysis failed for ${pair.binance}:`, err);
       }
@@ -227,7 +314,7 @@ export const signalRouter = createRouter({
     )
     .query(async ({ input }) => {
       try {
-        const { obMetrics, tapeMetrics, prices, volumes, extraMetrics } = await getConfluenceInput(input.symbol);
+        const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = await getConfluenceInput(input.symbol);
 
         // Run confluence analysis
         const coindcxSymbol = `B-${input.symbol.replace("USDT", "_USDT")}`;
@@ -278,7 +365,7 @@ export const signalRouter = createRouter({
     const results = [];
     for (const pair of SUPPORTED_PAIRS) {
       try {
-        const { obMetrics, tapeMetrics, prices, volumes, extraMetrics } = await getConfluenceInput(pair.binance);
+        const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = await getConfluenceInput(pair.binance);
         const analysis = analyzeConfluence(pair.coindcx, obMetrics, tapeMetrics, prices, volumes, extraMetrics);
 
         // Store in DB

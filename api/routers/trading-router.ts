@@ -733,7 +733,9 @@ export const tradingRouter = createRouter({
               side: p.side,
               entryPrice: parseFloat(p.entryPrice),
               size: parseFloat(p.size),
-              strategyType: (p.strategyType ?? "intraday") as "scalping" | "intraday" | "swing",
+              strategyType: (p.strategyType ?? "intraday") as any,
+              stopLoss: p.stopLoss ? parseFloat(p.stopLoss) : null,
+              takeProfit: p.takeProfit ? parseFloat(p.takeProfit) : null,
             }));
             startExitMonitor(input.userId, monitored);
           })
