@@ -283,7 +283,7 @@ const MiniChart = ({ data }: { data: KlineData[] }) => {
 }
 
 // ─── Order Book Component ───
-const OrderBook = ({ symbol }: { symbol: string }) => {
+const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerData: any; markPrice?: number }) => {
   const [depth, setDepth] = useState<any>(null);
 
   const { data: initialDepth } = trpc.market.orderBook.useQuery(
@@ -297,80 +297,107 @@ const OrderBook = ({ symbol }: { symbol: string }) => {
 
   trpc.market.orderBookStream.useSubscription(
     { symbol },
-    {
-      onData(data) {
-        setDepth(data);
-      },
-    }
+    { onData: (data) => setDepth(data) }
   );
 
-  const bids = (depth && Array.isArray(depth.bids) ? depth.bids.slice(0, 10).reverse() : []) as [string, string][];
-  const asks = (depth && Array.isArray(depth.asks) ? depth.asks.slice(0, 10) : []) as [string, string][];
+  // Pair bids[i] with asks[i] side-by-side — both sorted best first
+  const rawBids = (depth && Array.isArray(depth.bids) ? depth.bids.slice(0, 10) : []) as [string, string][];
+  const rawAsks = (depth && Array.isArray(depth.asks) ? depth.asks.slice(0, 10) : []) as [string, string][];
 
-  const maxBidSize = Math.max(...bids.map(([, q]) => parseFloat(q)), 1);
-  const maxAskSize = Math.max(...asks.map(([, q]) => parseFloat(q)), 1);
+  const maxBidSize = Math.max(...rawBids.map(([, q]) => parseFloat(q)), 1);
+  const maxAskSize = Math.max(...rawAsks.map(([, q]) => parseFloat(q)), 1);
+
+  const spread = rawBids[0] && rawAsks[0]
+    ? parseFloat(rawAsks[0][0]) - parseFloat(rawBids[0][0])
+    : 0;
+  const spreadPct = rawBids[0] ? (spread / parseFloat(rawBids[0][0])) * 100 : 0;
+
+  const lastPrice = tickerData ? parseFloat(tickerData.lastPrice) : 0;
+  const lastPriceColor = tickerData && parseFloat(tickerData.priceChange) >= 0 ? "#0ecb81" : "#f6465d";
 
   return (
-    <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-[#27272a]">
-        <span className="text-xs text-[#71717a]">Order Book</span>
-        <ArrowUpDown size={12} className="text-[#71717a]" />
-      </div>
-
-      {/* Asks (Sells) - Red */}
-      <div className="flex-1 overflow-hidden">
-        {asks.map(([price, qty], i) => {
-          const size = parseFloat(qty);
-          const width = (size / maxAskSize) * 100;
-          return (
-            <div
-              key={`ask-${i}`}
-              className="flex items-center justify-between px-3 py-0.5 text-xs relative"
-            >
-              <div
-                className="absolute right-0 top-0 bottom-0 bg-[#ef4444]/10"
-                style={{ width: `${width}%` }}
-              />
-              <span className="relative text-[#ef4444] tabular-nums">
-                {parseFloat(price).toFixed(2)}
-              </span>
-              <span className="relative text-[#71717a] tabular-nums">
-                {size.toFixed(4)}
-              </span>
-            </div>
-          );
-        })}
-      </div>
-
-      {/* Spread */}
-      {bids.length > 0 && asks.length > 0 && (
-        <div className="flex items-center justify-center py-1 border-y border-[#27272a]">
-          <span className="text-xs text-[#a1a1aa] tabular-nums">
-            {(parseFloat(asks[0][0]) - parseFloat(bids[bids.length - 1][0])).toFixed(2)}
-          </span>
+    <div className="flex flex-col h-full text-[10px]">
+      {/* Price header: Futures + Mark */}
+      <div className="px-3 py-2 border-b border-[#27272a]">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-[#71717a]">Order Book</span>
+          {spread > 0 && (
+            <span className="text-[#52525b]">Spread {spread.toFixed(2)} ({spreadPct.toFixed(3)}%)</span>
+          )}
         </div>
-      )}
+        <div className="flex items-center gap-4">
+          <div>
+            <div className="text-[9px] text-[#71717a]">Futures</div>
+            <div className="text-sm font-bold tabular-nums" style={{ color: lastPriceColor }}>
+              {lastPrice > 0 ? lastPrice.toFixed(2) : "--"}
+            </div>
+          </div>
+          {markPrice && (
+            <div>
+              <div className="text-[9px] text-[#71717a]">Mark</div>
+              <div className="text-sm font-bold tabular-nums text-[#f59e0b]">
+                {markPrice.toFixed(2)}
+              </div>
+            </div>
+          )}
+          {tickerData && (
+            <div className="ml-auto text-right">
+              <div className="text-[9px] text-[#71717a]">24h Change</div>
+              <div className="font-medium tabular-nums" style={{ color: lastPriceColor }}>
+                {parseFloat(tickerData.priceChangePercent) >= 0 ? "+" : ""}
+                {parseFloat(tickerData.priceChangePercent).toFixed(2)}%
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
 
-      {/* Bids (Buys) - Green */}
-      <div className="flex-1 overflow-hidden">
-        {bids.map(([price, qty], i) => {
-          const size = parseFloat(qty);
-          const width = (size / maxBidSize) * 100;
+      {/* Column headers */}
+      <div className="grid grid-cols-3 px-2 py-1 border-b border-[#27272a]/50 text-[9px] text-[#52525b]">
+        <span>BID QTY</span>
+        <span className="text-center">PRICE</span>
+        <span className="text-right">ASK QTY</span>
+      </div>
+
+      {/* Rows: bid | price | ask */}
+      <div className="flex-1 overflow-auto scrollbar-thin">
+        {Array.from({ length: Math.max(rawBids.length, rawAsks.length) }).map((_, i) => {
+          const bid = rawBids[i];
+          const ask = rawAsks[i];
+          const bidSize = bid ? parseFloat(bid[1]) : 0;
+          const askSize = ask ? parseFloat(ask[1]) : 0;
+          const bidW = bid ? (bidSize / maxBidSize) * 100 : 0;
+          const askW = ask ? (askSize / maxAskSize) * 100 : 0;
+          // mid price for this row — use bid price if available, else ask
+          const rowPrice = bid ? parseFloat(bid[0]) : ask ? parseFloat(ask[0]) : 0;
+          void rowPrice;
+
           return (
-            <div
-              key={`bid-${i}`}
-              className="flex items-center justify-between px-3 py-0.5 text-xs relative"
-            >
-              <div
-                className="absolute right-0 top-0 bottom-0 bg-[#22c55e]/10"
-                style={{ width: `${width}%` }}
-              />
-              <span className="relative text-[#22c55e] tabular-nums">
-                {parseFloat(price).toFixed(2)}
-              </span>
-              <span className="relative text-[#71717a] tabular-nums">
-                {size.toFixed(4)}
-              </span>
+            <div key={i} className="grid grid-cols-3 items-center py-0.5 px-2 hover:bg-[#27272a]/30">
+              {/* Bid qty + bar */}
+              <div className="relative flex items-center justify-start">
+                <div className="absolute inset-y-0 right-0 bg-[#0ecb81]/15 rounded-l" style={{ width: `${bidW}%` }} />
+                <span className="relative tabular-nums text-[#0ecb81]">
+                  {bid ? bidSize.toFixed(3) : ""}
+                </span>
+              </div>
+
+              {/* Price */}
+              <div className="text-center tabular-nums">
+                {bid ? (
+                  <span className="text-[#0ecb81] font-medium">{parseFloat(bid[0]).toFixed(2)}</span>
+                ) : ask ? (
+                  <span className="text-[#f6465d] font-medium">{parseFloat(ask[0]).toFixed(2)}</span>
+                ) : ""}
+              </div>
+
+              {/* Ask qty + bar */}
+              <div className="relative flex items-center justify-end">
+                <div className="absolute inset-y-0 left-0 bg-[#f6465d]/15 rounded-r" style={{ width: `${askW}%` }} />
+                <span className="relative tabular-nums text-[#f6465d]">
+                  {ask ? askSize.toFixed(3) : ""}
+                </span>
+              </div>
             </div>
           );
         })}
@@ -902,7 +929,7 @@ const Dashboard = () => {
 
           {/* Order Book */}
           <div className="flex-1 min-h-0 border-t border-[#27272a] overflow-hidden flex flex-col">
-            <OrderBook symbol={selectedSymbol} />
+            <OrderBook symbol={selectedSymbol} tickerData={tickerData} />
           </div>
 
           {/* Recent Trades */}
