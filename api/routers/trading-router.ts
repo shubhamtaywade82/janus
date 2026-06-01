@@ -114,18 +114,31 @@ export async function fetchPortfolioData(userId: number) {
           };
         });
 
-      const allTrades = await db
-        .select()
-        .from(trades)
-        .where(eq(trades.userId, userId))
-        .orderBy(desc(trades.createdAt))
-        .limit(100);
-      recentTrades = allTrades.slice(0, 20);
-
-      totalRealizedPnl = allTrades.reduce(
-        (sum, t) => sum + parseFloat(t.fee || "0") * -1,
-        0
-      );
+      try {
+        const filledOrders = await getFuturesOrders(
+          { apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret },
+          { status: "filled" }
+        );
+        recentTrades = filledOrders.slice(0, 20).map((o: any) => ({
+          id: o.id,
+          symbol: o.pair ? o.pair.replace("B-", "").replace("_", "") : o.market,
+          side: o.side,
+          price: o.price_per_unit || o.avg_price || "0",
+          size: o.total_quantity || o.quantity || "0",
+          total: o.total_quantity && o.price_per_unit
+            ? String(parseFloat(o.total_quantity) * parseFloat(o.price_per_unit))
+            : "0",
+          fee: o.fee || "0",
+          createdAt: o.created_at ? new Date(o.created_at) : new Date(),
+        }));
+        totalRealizedPnl = filledOrders.reduce(
+          (sum: number, o: any) => sum + parseFloat(o.fee || "0") * -1,
+          0
+        );
+      } catch {
+        recentTrades = [];
+        totalRealizedPnl = 0;
+      }
 
       let walletUsdt = 0;
       // 1. Try live REST (GET /futures/wallets — now works)
