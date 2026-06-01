@@ -23,10 +23,11 @@ interface KlineData {
 }
 
 // ─── TradingView Lightweight Chart Component ───
-const MiniChart = ({ data, positions }: { data: KlineData[]; positions: any[] }) => {
+const MiniChart = ({ data, positions, lastPrice }: { data: KlineData[]; positions: any[]; lastPrice: number }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
   const [chartInitialized, setChartInitialized] = useState(false);
+  const [positionsY, setPositionsY] = useState<Record<number, { entryY: number | null; liqY: number | null }>>({});
   const priceLinesRef = useRef<any[]>([]);
 
   const chartRef = useRef<any>(null);
@@ -296,7 +297,8 @@ const MiniChart = ({ data, positions }: { data: KlineData[]; positions: any[] })
     });
   }, [data]);
 
-  // Draw custom position lines (entry price and liquidation price)
+  // Draw custom position lines (entry price and liquidation price) with empty titles
+  // so the HTML overlay can render custom left/right aligned labels on top.
   useEffect(() => {
     const series = candlestickSeriesRef.current;
     if (!series) return;
@@ -322,9 +324,6 @@ const MiniChart = ({ data, positions }: { data: KlineData[]; positions: any[] })
         const isLong = pos.side === "long";
         const color = isLong ? "#0ecb81" : "#f6465d";
 
-        const sizeStr = parseFloat(pos.size || "0").toFixed(4);
-        const title = `${isLong ? "LONG" : "SHORT"} ${sizeStr} @ ${entryPrice.toFixed(2)}`;
-
         try {
           const line = series.createPriceLine({
             price: entryPrice,
@@ -332,7 +331,7 @@ const MiniChart = ({ data, positions }: { data: KlineData[]; positions: any[] })
             lineWidth: 1.5,
             lineStyle: LineStyle.Dashed,
             axisLabelVisible: true,
-            title: title,
+            title: "", // empty title, handled by HTML overlay
           });
           return line;
         } catch (err) {
@@ -349,8 +348,6 @@ const MiniChart = ({ data, positions }: { data: KlineData[]; positions: any[] })
         const liqPrice = parseFloat(pos.liquidationPrice);
         if (isNaN(liqPrice) || liqPrice <= 0) return null;
 
-        const title = `LIQ @ ${liqPrice.toFixed(2)}`;
-
         try {
           const line = series.createPriceLine({
             price: liqPrice,
@@ -358,7 +355,7 @@ const MiniChart = ({ data, positions }: { data: KlineData[]; positions: any[] })
             lineWidth: 1,
             lineStyle: LineStyle.Dotted,
             axisLabelVisible: true,
-            title: title,
+            title: "", // empty title, handled by HTML overlay
           });
           return line;
         } catch (err) {
@@ -370,6 +367,59 @@ const MiniChart = ({ data, positions }: { data: KlineData[]; positions: any[] })
 
     priceLinesRef.current = [...newLines, ...liqLines];
   }, [positions, chartInitialized]);
+
+  // Recalculate vertical coordinates of active positions on the canvas
+  const updatePositionsCoordinates = useCallback(() => {
+    const chart = chartRef.current;
+    const series = candlestickSeriesRef.current;
+    if (!chart || !series || !positions || positions.length === 0) {
+      setPositionsY({});
+      return;
+    }
+
+    const newCoords: Record<number, { entryY: number | null; liqY: number | null }> = {};
+    positions.forEach((pos) => {
+      const entryPrice = parseFloat(pos.entryPrice);
+      if (isNaN(entryPrice) || entryPrice <= 0) return;
+
+      const entryY = series.priceToCoordinate(entryPrice);
+      let liqY: number | null = null;
+      if (pos.liquidationPrice) {
+        const liqPrice = parseFloat(pos.liquidationPrice);
+        if (!isNaN(liqPrice) && liqPrice > 0) {
+          liqY = series.priceToCoordinate(liqPrice);
+        }
+      }
+
+      newCoords[pos.id] = { entryY, liqY };
+    });
+
+    setPositionsY(newCoords);
+  }, [positions]);
+
+  // Update coordinates on position, initialization, or price tick changes
+  useEffect(() => {
+    updatePositionsCoordinates();
+  }, [positions, chartInitialized, lastPrice, updatePositionsCoordinates]);
+
+  // Update coordinates when zooming or scrolling the chart
+  useEffect(() => {
+    const chart = chartRef.current;
+    if (!chart) return;
+
+    const handleScrollZoom = () => {
+      updatePositionsCoordinates();
+    };
+
+    chart.timeScale().subscribeVisibleLogicalRangeChange(handleScrollZoom);
+    return () => {
+      try {
+        chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleScrollZoom);
+      } catch (err) {
+        // Safe check
+      }
+    };
+  }, [chartInitialized, updatePositionsCoordinates]);
 
   return (
     <div ref={chartContainerRef} className="w-full h-full relative select-none">
@@ -401,6 +451,149 @@ const MiniChart = ({ data, positions }: { data: KlineData[]; positions: any[] })
             <span className="text-[#71717a] mr-0.5">Vol</span>
             <span className="text-[#f4f4f5]">{hudData.volume}</span>
           </span>
+        </div>
+      )}
+
+      {/* HTML Position Lines Left/Right Labels Overlay */}
+      {chartInitialized && positions && positions.length > 0 && lastPrice > 0 && (
+        <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
+          {positions.map((pos) => {
+            const coords = positionsY[pos.id];
+            if (!coords) return null;
+
+            const { entryY, liqY } = coords;
+            if (entryY === null || entryY < 0) return null;
+
+            const entry = parseFloat(pos.entryPrice);
+            const size = parseFloat(pos.size);
+            const lev = pos.leverage || 1;
+            const isLong = pos.side === "long";
+
+            const pnl = isLong ? (lastPrice - entry) * size : (entry - lastPrice) * size;
+            const pnlPct = ((isLong ? (lastPrice - entry) : (entry - lastPrice)) / entry) * 100 * lev;
+            const isProfit = pnl >= 0;
+            const sign = isProfit ? "+" : "";
+
+            const sizeStr = size.toFixed(4);
+
+            return (
+              <div key={pos.id}>
+                {/* Entry Price Left Label (PnL Capsule) and Right Label (Details) */}
+                <div
+                  className="absolute left-0 right-0 h-0"
+                  style={{
+                    top: `${entryY}px`,
+                  }}
+                >
+                  {/* Left Label: PnL Capsule (centered at 25% of chart width) */}
+                  <span
+                    className={cn(
+                      "absolute px-2 py-0.5 rounded text-[10px] font-bold font-mono shadow-md border transition-all",
+                      isProfit
+                        ? "bg-[#0ecb81]/90 border-[#0ecb81] text-black"
+                        : "bg-[#f6465d]/90 border-[#f6465d] text-white"
+                    )}
+                    style={{
+                      left: "25%",
+                      transform: "translate(-50%, -50%)",
+                    }}
+                  >
+                    PnL: {sign}{pnl.toFixed(2)} USDT ({sign}{pnlPct.toFixed(2)}%)
+                  </span>
+
+                  {/* Right Label: Position details */}
+                  <span
+                    className="absolute px-2 py-0.5 rounded text-[10px] font-semibold font-mono bg-[#18181b]/90 border border-[#27272a] text-[#f4f4f5] shadow-md"
+                    style={{
+                      right: "8px",
+                      transform: "translateY(-50%)",
+                    }}
+                  >
+                    {isLong ? "LONG" : "SHORT"} {sizeStr} @ {entry.toFixed(2)}
+                  </span>
+                </div>
+
+                {/* Liquidation Price Labels (Centered at 25% of chart width / Right details) */}
+                {liqY !== null && liqY >= 0 && (
+                  <div
+                    className="absolute left-0 right-0 h-0"
+                    style={{
+                      top: `${liqY}px`,
+                    }}
+                  >
+                    {/* Left Label: LIQ Indicator */}
+                    <span
+                      className="absolute px-2 py-0.5 rounded text-[10px] font-bold font-mono bg-[#f59e0b]/90 border border-[#f59e0b] text-black shadow-md"
+                      style={{
+                        left: "25%",
+                        transform: "translate(-50%, -50%)",
+                      }}
+                    >
+                      LIQ
+                    </span>
+
+                    {/* Right Label: Liquidation price */}
+                    <span
+                      className="absolute px-2 py-0.5 rounded text-[10px] font-semibold font-mono bg-[#18181b]/90 border border-[#27272a] text-[#f59e0b] shadow-md"
+                      style={{
+                        right: "8px",
+                        transform: "translateY(-50%)",
+                      }}
+                    >
+                      LIQ @ {parseFloat(pos.liquidationPrice || "0").toFixed(2)}
+                    </span>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      {/* Active Position Floating Capsule */}
+      {positions && positions.length > 0 && lastPrice > 0 && (
+        <div className="absolute top-2 right-4 z-10 flex flex-col gap-1.5 pointer-events-none">
+          {positions.map((pos) => {
+            const entry = parseFloat(pos.entryPrice);
+            const size = parseFloat(pos.size);
+            const lev = pos.leverage || 1;
+            const isLong = pos.side === "long";
+            const pnl = isLong ? (lastPrice - entry) * size : (entry - lastPrice) * size;
+            const pnlPct = ((isLong ? (lastPrice - entry) : (entry - lastPrice)) / entry) * 100 * lev;
+            const isProfit = pnl >= 0;
+
+            return (
+              <div
+                key={pos.id}
+                className="flex items-center gap-2.5 bg-black/75 backdrop-blur-md border border-white/10 px-3 py-1 rounded-full shadow-lg text-[10px] font-mono select-none"
+              >
+                <span
+                  className={cn(
+                    "px-2 py-0.5 rounded-full text-[9px] font-bold tracking-wide uppercase",
+                    isLong
+                      ? "bg-[#0ecb81]/15 text-[#0ecb81]"
+                      : "bg-[#f6465d]/15 text-[#f6465d]"
+                  )}
+                >
+                  {isLong ? "Long" : "Short"} {size.toFixed(3)}
+                </span>
+                <span className="text-[#a1a1aa]">
+                  Entry: <span className="text-[#f4f4f5]">{entry.toFixed(2)}</span>
+                </span>
+                <span className="text-[#52525b]">|</span>
+                <span
+                  className={cn(
+                    "font-bold tabular-nums",
+                    isProfit ? "text-[#0ecb81]" : "text-[#f6465d]"
+                  )}
+                >
+                  {isProfit ? "+" : ""}
+                  {pnl.toFixed(2)} USDT ({isProfit ? "+" : ""}
+                  {pnlPct.toFixed(2)}%)
+                </span>
+              </div>
+            );
+          })}
         </div>
       )}
     </div>
@@ -896,7 +1089,7 @@ const Dashboard = () => {
           {/* Chart Area */}
           <div className="flex-1 bg-[#09090b] border-b border-[#27272a] overflow-hidden">
             {klines && klines.length > 0 ? (
-              <MiniChart data={klines as KlineData[]} positions={symbolPositions} />
+              <MiniChart data={klines as KlineData[]} positions={symbolPositions} lastPrice={lastPrice} />
             ) : (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
                 <RefreshCw size={16} className="animate-spin mr-2" />
