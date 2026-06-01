@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createRouter, publicQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { signals } from "@db/schema";
-import { desc, eq } from "drizzle-orm";
+import { desc, eq, sql } from "drizzle-orm";
 import {
   analyzeConfluence,
   aggregateOrderBookMetrics,
@@ -11,7 +11,7 @@ import {
 import { fetchOrderBook, fetchRecentTrades, fetchKlines, SUPPORTED_PAIRS } from "../services/binance";
 
 export const signalRouter = createRouter({
-  // ─── Get latest signals ───
+  // ─── Get latest signals — one per symbol ───
   latest: publicQuery
     .input(
       z.object({
@@ -27,13 +27,14 @@ export const signalRouter = createRouter({
           .from(signals)
           .where(eq(signals.symbol, input.symbol))
           .orderBy(desc(signals.createdAt))
-          .limit(input.limit);
+          .limit(1);
       }
-      return db
-        .select()
-        .from(signals)
-        .orderBy(desc(signals.createdAt))
-        .limit(input.limit);
+      // DISTINCT ON returns one row per symbol — the latest by created_at
+      return db.execute(sql`
+        SELECT DISTINCT ON (symbol) *
+        FROM signals
+        ORDER BY symbol, created_at DESC
+      `).then((r) => r.rows as typeof signals.$inferSelect[]);
     }),
 
   // ─── Get gated signals only ───
