@@ -3,6 +3,7 @@ import { marketRouter } from "./routers/market-router";
 import { tradingRouter } from "./routers/trading-router";
 import { signalRouter } from "./routers/signal-router";
 import { logsRouter } from "./routers/logs-router";
+import { telegramRouter } from "./routers/telegram-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -12,6 +13,7 @@ export const appRouter = createRouter({
   trading: tradingRouter,
   signal: signalRouter,
   logs: logsRouter,
+  telegram: telegramRouter,
 });
 
 export type AppRouter = typeof appRouter;

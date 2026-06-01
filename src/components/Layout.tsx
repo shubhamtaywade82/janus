@@ -37,6 +37,8 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
   const [activeAlertsCount, setActiveAlertsCount] = useState(0);
   const lastAlertTimeRef = useRef<Record<string, number>>({});
 
+  const sendTelegramAlert = trpc.telegram.sendAlert.useMutation();
+
   // Query to fetch all live states periodically for custom alerts comparison
   const { data: allStates } = trpc.market.allLiveStates.useQuery(undefined, {
     refetchInterval: 2000,
@@ -121,6 +123,11 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
           toast.warning(`Alert: ${cleanSymbol} 🔔`, {
             description: triggerMessage,
             duration: 6000,
+          });
+
+          // Send Telegram message
+          sendTelegramAlert.mutate({
+            message: `🔔 <b>Janus Alert: ${cleanSymbol}</b>\n\n${triggerMessage}`,
           });
 
           // Push to logs

@@ -1,6 +1,8 @@
 import { useState, useEffect } from "react";
-import { X, Bell, Trash2, ShieldAlert, Check, Plus, AlertCircle, Play } from "lucide-react";
+import { X, Bell, Trash2, ShieldAlert, Check, Plus, AlertCircle, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { trpc } from "@/providers/trpc";
+import { toast } from "sonner";
 
 // Supported Symbols list matching backend pairs
 const ALERTS_SUPPORTED_PAIRS = [
@@ -68,7 +70,7 @@ export function playAlertChime() {
 }
 
 const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
-  const [activeTab, setActiveTab] = useState<"create" | "rules" | "logs">("create");
+  const [activeTab, setActiveTab] = useState<"create" | "rules" | "logs" | "telegram">("create");
   
   // Rules and Logs State
   const [rules, setRules] = useState<AlertRule[]>([]);
@@ -79,6 +81,29 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
   const [type, setType] = useState<AlertRule["type"]>("price");
   const [operator, setOperator] = useState<AlertRule["operator"]>(">");
   const [value, setValue] = useState("");
+
+  // Telegram settings state
+  const [botToken, setBotToken] = useState("");
+  const [chatId, setChatId] = useState("");
+  const [isSavingTelegram, setIsSavingTelegram] = useState(false);
+  const [isTestingTelegram, setIsTestingTelegram] = useState(false);
+
+  // Queries/Mutations for Telegram settings
+  const { data: telegramSettings, refetch: refetchTelegram } = trpc.telegram.getSettings.useQuery(
+    undefined,
+    { enabled: isOpen }
+  );
+
+  const saveTelegramSettings = trpc.telegram.saveSettings.useMutation();
+  const testTelegramSettings = trpc.telegram.testSettings.useMutation();
+
+  // Load backend Telegram settings into inputs
+  useEffect(() => {
+    if (telegramSettings) {
+      setBotToken(telegramSettings.telegramBotToken || "");
+      setChatId(telegramSettings.telegramChatId || "");
+    }
+  }, [telegramSettings]);
 
   // Load alert settings from local storage
   useEffect(() => {
@@ -100,6 +125,46 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
   const saveLogs = (updatedLogs: AlertLog[]) => {
     setLogs(updatedLogs);
     localStorage.setItem("janus_alert_logs", JSON.stringify(updatedLogs));
+  };
+
+  const handleSaveTelegram = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setIsSavingTelegram(true);
+    try {
+      await saveTelegramSettings.mutateAsync({
+        telegramBotToken: botToken.trim() || null,
+        telegramChatId: chatId.trim() || null,
+      });
+      toast.success("Telegram settings saved successfully!");
+      refetchTelegram();
+    } catch (err: any) {
+      toast.error(err.message || "Failed to save Telegram settings");
+    } finally {
+      setIsSavingTelegram(false);
+    }
+  };
+
+  const handleTestTelegram = async () => {
+    if (!botToken.trim() || !chatId.trim()) {
+      toast.error("Please enter both Bot Token and Chat ID to test.");
+      return;
+    }
+    setIsTestingTelegram(true);
+    try {
+      const result = await testTelegramSettings.mutateAsync({
+        telegramBotToken: botToken.trim(),
+        telegramChatId: chatId.trim(),
+      });
+      if (result.success) {
+        toast.success("Test message sent! Check Telegram.");
+      } else {
+        toast.error("Failed to send test message. Check your token/chat ID.");
+      }
+    } catch (err: any) {
+      toast.error(err.message || "An error occurred during test.");
+    } finally {
+      setIsTestingTelegram(false);
+    }
   };
 
   // Form submit handler
@@ -187,6 +252,17 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
             )}
           >
             Alert History ({logs.length})
+          </button>
+          <button
+            onClick={() => setActiveTab("telegram")}
+            className={cn(
+              "flex-1 py-2 text-center font-bold border-b-2 transition-all flex items-center justify-center gap-1.5",
+              activeTab === "telegram"
+                ? "text-[#f4f4f5] border-[#f59e0b] bg-[#27272a]/20"
+                : "text-[#71717a] border-transparent hover:text-[#a1a1aa]"
+            )}
+          >
+            Telegram Config
           </button>
         </div>
 
@@ -383,6 +459,66 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                 </div>
               )}
             </div>
+          )}
+
+          {/* Tab 4: Telegram Settings */}
+          {activeTab === "telegram" && (
+            <form onSubmit={handleSaveTelegram} className="flex flex-col gap-4">
+              <div>
+                <span className="text-[10px] text-[#a1a1aa] leading-relaxed block">
+                  Configure a Telegram Bot to receive real-time alert notifications directly on your Telegram account or group/channel.
+                </span>
+              </div>
+
+              <div>
+                <label className="block text-[9px] uppercase tracking-wider text-[#71717a] font-semibold mb-1">
+                  Telegram Bot Token
+                </label>
+                <input
+                  type="password"
+                  placeholder="1234567890:ABCdefGhIJKlmNoPQRsTUVwxyZ"
+                  value={botToken}
+                  onChange={(e) => setBotToken(e.target.value)}
+                  className="w-full bg-[#18181b] border border-[#27272a] rounded px-2.5 py-1.5 text-xs text-[#f4f4f5] placeholder-[#52525b] focus:outline-none focus:border-[#f59e0b]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[9px] uppercase tracking-wider text-[#71717a] font-semibold mb-1">
+                  Telegram Chat ID
+                </label>
+                <input
+                  type="text"
+                  placeholder="e.g. 518293021 or -100123456789"
+                  value={chatId}
+                  onChange={(e) => setChatId(e.target.value)}
+                  className="w-full bg-[#18181b] border border-[#27272a] rounded px-2.5 py-1.5 text-xs text-[#f4f4f5] placeholder-[#52525b] focus:outline-none focus:border-[#f59e0b]"
+                />
+                <span className="text-[8px] text-[#71717a] mt-1 block">
+                  Enter your User ID for private DMs or a negative Group/Channel ID (e.g. <code>-100...</code>).
+                </span>
+              </div>
+
+              <div className="flex gap-2 mt-2">
+                <button
+                  type="submit"
+                  disabled={isSavingTelegram}
+                  className="flex-1 bg-[#f59e0b] hover:bg-[#d97706] disabled:opacity-50 text-[#09090b] font-bold text-xs py-1.5 rounded transition-all flex items-center justify-center gap-1.5"
+                >
+                  <Check size={13} />
+                  {isSavingTelegram ? "Saving..." : "Save Settings"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleTestTelegram}
+                  disabled={isTestingTelegram || !botToken || !chatId}
+                  className="px-4 bg-[#27272a] hover:bg-[#3f3f46] disabled:opacity-50 text-[#f4f4f5] font-bold text-xs py-1.5 rounded transition-all flex items-center justify-center gap-1.5 border border-[#3f3f46]"
+                >
+                  <Send size={11} />
+                  {isTestingTelegram ? "Testing..." : "Test Message"}
+                </button>
+              </div>
+            </form>
           )}
         </div>
       </div>
