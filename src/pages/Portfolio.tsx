@@ -85,18 +85,30 @@ const PositionRow = ({ position }: { position: any }) => {
 }
 
 // ─── Main Portfolio Page ───
-const Portfolio = () => {
+export default function Portfolio() {
   const [statusFilter, setStatusFilter] = useState<string>("open");
+  const [portfolio, setPortfolio] = useState<any>(null);
 
-  const { data: portfolio } = trpc.trading.portfolio.useQuery(
+  // Subscribe to real-time client-to-server portfolio WebSocket stream
+  trpc.trading.portfolioStream.useSubscription(
     { userId: 1 },
-    { refetchInterval: 5000 }
+    {
+      onData(data) {
+        setPortfolio(data);
+      },
+      onError(err) {
+        console.error("[portfolio-ws] Subscription error:", err);
+      }
+    }
   );
 
-  const { data: allPositions } = trpc.trading.positions.useQuery(
+  // Query historical positions only when viewing non-open filters
+  const { data: dbPositions } = trpc.trading.positions.useQuery(
     { userId: 1, status: statusFilter as any },
-    { refetchInterval: 5000 }
+    { enabled: statusFilter !== "open", refetchInterval: 5000 }
   );
+
+  const allPositions = statusFilter === "open" ? (portfolio?.positions || []) : (dbPositions || []);
 
   const totalPnl = parseFloat(portfolio?.totalUnrealizedPnl || "0") + parseFloat(portfolio?.totalRealizedPnl || "0");
   const isProfit = totalPnl >= 0;
@@ -214,7 +226,7 @@ const Portfolio = () => {
               </tr>
             </thead>
             <tbody>
-              {allPositions?.map((pos) => (
+              {allPositions?.map((pos: any) => (
                 <PositionRow key={pos.id} position={pos} />
               ))}
               {(!allPositions || allPositions.length === 0) && (
@@ -281,6 +293,4 @@ const Portfolio = () => {
       )}
     </div>
   );
-};
-
-export default Portfolio;
+}

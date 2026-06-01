@@ -3,12 +3,16 @@ import { createHmac } from "crypto";
 import { getDb } from "../queries/connection";
 import { exchangeCredentials, positions } from "@db/schema";
 import { eq, and } from "drizzle-orm";
+import { EventEmitter } from "events";
+
+export const tradingEvents = new EventEmitter();
+tradingEvents.setMaxListeners(100);
 
 let socket: any = null;
 
 // Generate signature for WebSocket Auth Handshake
-function generateWsSignature(secret: string, timestamp: number): string {
-  const payload = `timestamp=${timestamp}`;
+function generateWsSignature(secret: string, body: Record<string, any>): string {
+  const payload = JSON.stringify(body);
   return createHmac("sha256", secret).update(payload).digest("hex");
 }
 
@@ -48,30 +52,43 @@ export async function initCoinDCXPrivateWs() {
   });
 
   socket.on("connect", () => {
-    console.log("[coindcx-ws] Socket.io connection opened. Authenticating...");
+    console.log("[coindcx-ws] Socket.io connection opened. Authenticating for 'coindcx' private channel...");
     
-    // Auth Handshake
-    const timestamp = Date.now();
-    const signature = generateWsSignature(apiSecret, timestamp);
+    // Auth Handshake for 'coindcx' channel
+    const body = { channel: "coindcx" };
+    const authSignature = generateWsSignature(apiSecret, body);
 
     // CoinDCX socket.io join auth handshake
     socket.emit("join", {
-      key: apiKey,
-      signature,
-      timestamp,
+      channelName: "coindcx",
+      authSignature,
+      apiKey,
     });
   });
 
   socket.on("joined", (response: any) => {
-    console.log("[coindcx-ws] Authenticated successfully via join event:", response);
-    
-    // Subscribe to execution reports / user orders
-    socket.emit("subscribe", {
-      channel: "user-orders"
-    });
+    console.log("[coindcx-ws] Authenticated successfully joined 'coindcx' channel:", response);
   });
 
-  // Handle incoming private ticks / execution reports
+  // Handle incoming private ticks / position updates
+  socket.on("df-position-update", (data: any) => {
+    console.log("[coindcx-ws] Received df-position-update:", data);
+    tradingEvents.emit("portfolio-update:1");
+  });
+
+  // Handle incoming private order updates
+  socket.on("df-order-update", (data: any) => {
+    console.log("[coindcx-ws] Received df-order-update:", data);
+    tradingEvents.emit("portfolio-update:1");
+  });
+
+  // Handle incoming balance updates
+  socket.on("balance-update", (data: any) => {
+    console.log("[coindcx-ws] Received balance-update:", data);
+    tradingEvents.emit("portfolio-update:1");
+  });
+
+  // Handle legacy/fallback user-orders if any
   socket.on("user-orders", async (order: any) => {
     try {
       console.log("[coindcx-ws] Received execution report:", order);
@@ -100,6 +117,7 @@ export async function initCoinDCXPrivateWs() {
             .where(eq(positions.id, pos.id));
 
           console.log(`[coindcx-ws] Updated position ${pos.id} to open in DB.`);
+          tradingEvents.emit("portfolio-update:1");
         }
       }
     } catch (err) {

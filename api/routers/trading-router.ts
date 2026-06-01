@@ -5,6 +5,154 @@ import { positions, trades, exchangeCredentials } from "@db/schema";
 import { desc, eq, and } from "drizzle-orm";
 import { createFuturesOrder, getFuturesPositions, getCoinDCXTicker, calculateLiquidationPrice } from "../services/coindcx";
 import { TRPCError } from "@trpc/server";
+import { observable } from "@trpc/server/observable";
+import { tradingEvents, initCoinDCXPrivateWs } from "../services/coindcx-ws";
+
+export async function fetchPortfolioData(userId: number) {
+  const db = getDb();
+  const creds = await db
+    .select()
+    .from(exchangeCredentials)
+    .where(
+      and(
+        eq(exchangeCredentials.userId, userId),
+        eq(exchangeCredentials.exchange, "coindcx")
+      )
+    )
+    .limit(1);
+
+  let openPositions: any[] = [];
+  let totalRealizedPnl = 0;
+  let totalMargin = 0;
+  let totalUnrealizedPnl = 0;
+  let recentTrades: any[] = [];
+
+  if (creds && creds[0]) {
+    try {
+      const livePositions = await getFuturesPositions({
+        apiKey: creds[0].apiKey,
+        apiSecret: creds[0].apiSecret,
+      });
+
+      const tickers = await getCoinDCXTicker();
+      const tickerMap = new Map<string, number>();
+      if (Array.isArray(tickers)) {
+        tickers.forEach((t: any) => {
+          if (t.market && t.last_price) {
+            tickerMap.set(t.market, parseFloat(t.last_price));
+          }
+        });
+      }
+
+      openPositions = livePositions
+        .filter((p: any) => parseFloat(p.active_pos) !== 0)
+        .map((p: any, idx: number) => {
+          const sizeVal = parseFloat(p.active_pos);
+          const side = sizeVal >= 0 ? "long" : "short";
+          const absSize = Math.abs(sizeVal);
+          const symbol = p.pair.replace("B-", "").replace("_", "");
+          
+          const lastPrice = tickerMap.get(p.pair) || parseFloat(p.avg_price);
+          const entryPrice = parseFloat(p.avg_price);
+          
+          let unrealizedPnl = 0;
+          if (side === "long") {
+            unrealizedPnl = (lastPrice - entryPrice) * absSize;
+          } else {
+            unrealizedPnl = (entryPrice - lastPrice) * absSize;
+          }
+
+          totalMargin += parseFloat(p.locked_margin || "0");
+          totalUnrealizedPnl += unrealizedPnl;
+
+          return {
+            id: idx + 10000,
+            userId,
+            symbol,
+            side,
+            entryPrice: p.avg_price,
+            currentPrice: String(lastPrice),
+            size: String(absSize),
+            leverage: p.leverage,
+            margin: p.locked_margin,
+            unrealizedPnl: String(unrealizedPnl),
+            realizedPnl: "0.00",
+            liquidationPrice: p.liquidation_price || null,
+            stopLoss: p.stop_loss_trigger || null,
+            takeProfit: p.take_profit_trigger || null,
+            status: "open",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          };
+        });
+
+      const allTrades = await db
+        .select()
+        .from(trades)
+        .where(eq(trades.userId, userId))
+        .orderBy(desc(trades.createdAt))
+        .limit(100);
+      recentTrades = allTrades.slice(0, 20);
+
+      totalRealizedPnl = allTrades.reduce(
+        (sum, t) => sum + parseFloat(t.fee || "0") * -1,
+        0
+      );
+
+      return {
+        openPositionsCount: openPositions.length,
+        totalUnrealizedPnl: totalUnrealizedPnl.toFixed(4),
+        totalRealizedPnl: totalRealizedPnl.toFixed(4),
+        totalMargin: totalMargin.toFixed(4),
+        totalEquity: totalMargin + totalUnrealizedPnl,
+        positions: openPositions,
+        recentTrades,
+      };
+    } catch (err) {
+      console.error("[trading-router] Failed to fetch live portfolio details from CoinDCX, falling back to local DB:", err);
+    }
+  }
+
+  const localPositions = await db
+    .select()
+    .from(positions)
+    .where(
+      and(
+        eq(positions.userId, userId),
+        eq(positions.status, "open")
+      )
+    );
+
+  const allTrades = await db
+    .select()
+    .from(trades)
+    .where(eq(trades.userId, userId))
+    .orderBy(desc(trades.createdAt))
+    .limit(100);
+
+  const localUnrealizedPnl = localPositions.reduce(
+    (sum, p) => sum + parseFloat(p.unrealizedPnl || "0"),
+    0
+  );
+  const localRealizedPnl = allTrades.reduce(
+    (sum, t) => sum + parseFloat(t.fee || "0") * -1,
+    0
+  );
+  const localMargin = localPositions.reduce(
+    (sum, p) => sum + parseFloat(p.margin || "0"),
+    0
+  );
+
+  return {
+    openPositionsCount: localPositions.length,
+    totalUnrealizedPnl: localUnrealizedPnl.toFixed(4),
+    totalRealizedPnl: localRealizedPnl.toFixed(4),
+    totalMargin: localMargin.toFixed(4),
+    totalEquity: localMargin + localUnrealizedPnl,
+    positions: localPositions,
+    recentTrades: allTrades.slice(0, 20),
+  };
+}
 
 export const tradingRouter = createRouter({
   // ─── Get all positions ───
@@ -239,6 +387,8 @@ export const tradingRouter = createRouter({
         exchangeOrderId,
       }).returning({ id: positions.id });
 
+      tradingEvents.emit(`portfolio-update:${input.userId}`);
+
       return { id: result[0].id, ...input, exchangeOrderId };
     }),
 
@@ -253,6 +403,9 @@ export const tradingRouter = createRouter({
     )
     .mutation(async ({ input }) => {
       const db = getDb();
+      const pos = await db.select().from(positions).where(eq(positions.id, input.id)).limit(1);
+      const userId = pos[0]?.userId || 1;
+
       await db
         .update(positions)
         .set({
@@ -264,6 +417,9 @@ export const tradingRouter = createRouter({
           updatedAt: new Date(),
         })
         .where(eq(positions.id, input.id));
+
+      tradingEvents.emit(`portfolio-update:${userId}`);
+
       return { success: true };
     }),
 
@@ -356,155 +512,42 @@ export const tradingRouter = createRouter({
   portfolio: publicQuery
     .input(z.object({ userId: z.number() }))
     .query(async ({ input }) => {
-      const db = getDb();
-      const userId = input.userId;
+      return fetchPortfolioData(input.userId);
+    }),
 
-      const creds = await db
-        .select()
-        .from(exchangeCredentials)
-        .where(
-          and(
-            eq(exchangeCredentials.userId, userId),
-            eq(exchangeCredentials.exchange, "coindcx")
-          )
-        )
-        .limit(1);
+  // ─── Portfolio Subscription Stream ───
+  portfolioStream: publicQuery
+    .input(z.object({ userId: z.number() }))
+    .subscription(({ input }) => {
+      return observable((emit) => {
+        let closed = false;
 
-      let openPositions: any[] = [];
-      let totalRealizedPnl = 0;
-      let totalMargin = 0;
-      let totalUnrealizedPnl = 0;
-      let recentTrades: any[] = [];
-
-      // Try fetching live if credentials exist
-      if (creds && creds[0]) {
-        try {
-          // Fetch live positions
-          const livePositions = await getFuturesPositions({
-            apiKey: creds[0].apiKey,
-            apiSecret: creds[0].apiSecret,
-          });
-
-          // Fetch live tickers to calculate currentPrice and PnL
-          const tickers = await getCoinDCXTicker();
-          const tickerMap = new Map<string, number>();
-          if (Array.isArray(tickers)) {
-            tickers.forEach((t: any) => {
-              if (t.market && t.last_price) {
-                tickerMap.set(t.market, parseFloat(t.last_price));
-              }
-            });
+        const onUpdate = async () => {
+          try {
+            const data = await fetchPortfolioData(input.userId);
+            if (!closed) emit.next(data);
+          } catch (e) {
+            if (!closed) {
+              console.error("[trading-router] Stream fetch portfolio failed:", e);
+            }
           }
+        };
 
-          openPositions = livePositions
-            .filter((p: any) => parseFloat(p.active_pos) !== 0)
-            .map((p: any, idx: number) => {
-              const sizeVal = parseFloat(p.active_pos);
-              const side = sizeVal >= 0 ? "long" : "short";
-              const absSize = Math.abs(sizeVal);
-              const symbol = p.pair.replace("B-", "").replace("_", "");
-              
-              const lastPrice = tickerMap.get(p.pair) || parseFloat(p.avg_price);
-              const entryPrice = parseFloat(p.avg_price);
-              
-              let unrealizedPnl = 0;
-              if (side === "long") {
-                unrealizedPnl = (lastPrice - entryPrice) * absSize;
-              } else {
-                unrealizedPnl = (entryPrice - lastPrice) * absSize;
-              }
+        // Listen for internal portfolio updates
+        tradingEvents.on(`portfolio-update:${input.userId}`, onUpdate);
 
-              totalMargin += parseFloat(p.locked_margin || "0");
-              totalUnrealizedPnl += unrealizedPnl;
+        // Also refresh periodically every 5 seconds (heartbeat/sync fallback)
+        const interval = setInterval(onUpdate, 5000);
 
-              return {
-                id: idx + 10000,
-                userId,
-                symbol,
-                side,
-                entryPrice: p.avg_price,
-                currentPrice: String(lastPrice),
-                size: String(absSize),
-                leverage: p.leverage,
-                margin: p.locked_margin,
-                unrealizedPnl: String(unrealizedPnl),
-                realizedPnl: "0.00",
-                liquidationPrice: p.liquidation_price || null,
-                stopLoss: p.stop_loss_trigger || null,
-                takeProfit: p.take_profit_trigger || null,
-                status: "open",
-                createdAt: new Date(),
-                updatedAt: new Date(),
-              };
-            });
+        // Push initial data
+        onUpdate();
 
-          const allTrades = await db
-            .select()
-            .from(trades)
-            .where(eq(trades.userId, userId))
-            .orderBy(desc(trades.createdAt))
-            .limit(100);
-          recentTrades = allTrades.slice(0, 20);
-
-          totalRealizedPnl = allTrades.reduce(
-            (sum, t) => sum + parseFloat(t.fee || "0") * -1,
-            0
-          );
-
-          return {
-            openPositionsCount: openPositions.length,
-            totalUnrealizedPnl: totalUnrealizedPnl.toFixed(4),
-            totalRealizedPnl: totalRealizedPnl.toFixed(4),
-            totalMargin: totalMargin.toFixed(4),
-            totalEquity: totalMargin + totalUnrealizedPnl,
-            positions: openPositions,
-            recentTrades,
-          };
-        } catch (err) {
-          console.error("[trading-router] Failed to fetch live portfolio details from CoinDCX, falling back to local DB:", err);
-        }
-      }
-
-      // Fallback: Local simulated DB positions
-      const localPositions = await db
-        .select()
-        .from(positions)
-        .where(
-          and(
-            eq(positions.userId, userId),
-            eq(positions.status, "open")
-          )
-        );
-
-      const allTrades = await db
-        .select()
-        .from(trades)
-        .where(eq(trades.userId, userId))
-        .orderBy(desc(trades.createdAt))
-        .limit(100);
-
-      const localUnrealizedPnl = localPositions.reduce(
-        (sum, p) => sum + parseFloat(p.unrealizedPnl || "0"),
-        0
-      );
-      const localRealizedPnl = allTrades.reduce(
-        (sum, t) => sum + parseFloat(t.fee || "0") * -1,
-        0
-      );
-      const localMargin = localPositions.reduce(
-        (sum, p) => sum + parseFloat(p.margin || "0"),
-        0
-      );
-
-      return {
-        openPositionsCount: localPositions.length,
-        totalUnrealizedPnl: localUnrealizedPnl.toFixed(4),
-        totalRealizedPnl: localRealizedPnl.toFixed(4),
-        totalMargin: localMargin.toFixed(4),
-        totalEquity: localMargin + localUnrealizedPnl,
-        positions: localPositions,
-        recentTrades: allTrades.slice(0, 20),
-      };
+        return () => {
+          closed = true;
+          tradingEvents.off(`portfolio-update:${input.userId}`, onUpdate);
+          clearInterval(interval);
+        };
+      });
     }),
 
   // ─── Save exchange credentials ───
@@ -525,6 +568,11 @@ export const tradingRouter = createRouter({
         apiKey: input.apiKey,
         apiSecret: input.apiSecret,
       });
+      if (input.exchange === "coindcx") {
+        initCoinDCXPrivateWs().catch((err) => {
+          console.error("[coindcx-ws] Failed to initialize private WS on credential update:", err);
+        });
+      }
       return { success: true };
     }),
 
