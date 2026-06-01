@@ -8,7 +8,6 @@ import {
   getFuturesPositions,
   getFuturesWallet,
   getFuturesInstrumentInfo,
-  getCoinDCXTicker,
   calculateLiquidationPrice,
   getCrossMarginDetails,
   walletTransfer,

@@ -7,9 +7,11 @@ import Logs from "./pages/Logs";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 import RiskMetrics from "./pages/RiskMetrics";
+import { Toaster } from "./components/ui/sonner";
 
 const App = () => {
   return (
+    <>
     <Routes>
       <Route path="/login" element={<Login />} />
       <Route
@@ -54,6 +56,8 @@ const App = () => {
       />
       <Route path="*" element={<NotFound />} />
     </Routes>
+    <Toaster position="bottom-right" theme="dark" richColors closeButton />
+    </>
   );
 };
 

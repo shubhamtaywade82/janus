@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from "react";
+import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
 import {
   Signal,
@@ -299,6 +300,10 @@ const Signals = () => {
       refetch();
       refetchStats();
       setLastUpdate(new Date());
+      // Only toast for auto-refresh, not user-triggered (those have their own toasts)
+      if (analyzeTrigger === 0 && analyzeAllTrigger === 0) {
+        toast("Signals refreshed", { duration: 2000, icon: "📡" });
+      }
     },
   });
   trpc.signal.stream.useSubscription(undefined, streamOptsRef.current);
@@ -311,25 +316,38 @@ const Signals = () => {
     return () => clearInterval(id);
   }, [refreshInterval]);
 
+  const prevAnalyzing = useRef(false);
   const { isFetching: isAnalyzing } = trpc.signal.analyze.useQuery(
     { symbol: selectedSymbol },
     { enabled: analyzeTrigger > 0 }
   );
+  useEffect(() => {
+    if (prevAnalyzing.current && !isAnalyzing && analyzeTrigger > 0) {
+      toast.success(`Analysis complete — ${selectedSymbol}`, { duration: 3000 });
+      refetch();
+    }
+    prevAnalyzing.current = isAnalyzing;
+  }, [isAnalyzing]);
 
+  const prevAnalyzingAll = useRef(false);
   const { isFetching: isAnalyzingAll } = trpc.signal.analyzeAll.useQuery(
     undefined,
     { enabled: analyzeAllTrigger > 0 }
   );
+  useEffect(() => {
+    if (prevAnalyzingAll.current && !isAnalyzingAll && analyzeAllTrigger > 0) {
+      const gated = signals?.filter((s) => s.isGated).length ?? 0;
+      toast.success(`All pairs analyzed`, {
+        description: gated > 0 ? `${gated} signal${gated !== 1 ? "s" : ""} gated (≥75)` : "No signals gated",
+        duration: 4000,
+      });
+      refetch();
+    }
+    prevAnalyzingAll.current = isAnalyzingAll;
+  }, [isAnalyzingAll]);
 
-  const handleAnalyze = () => {
-    setAnalyzeTrigger((prev) => prev + 1);
-    setTimeout(() => refetch(), 1500);
-  };
-
-  const handleAnalyzeAll = () => {
-    setAnalyzeAllTrigger((prev) => prev + 1);
-    setTimeout(() => refetch(), 3000);
-  };
+  const handleAnalyze = () => setAnalyzeTrigger((prev) => prev + 1);
+  const handleAnalyzeAll = () => setAnalyzeAllTrigger((prev) => prev + 1);
 
   const [sortBy, setSortBy] = useState<"score-desc" | "score-asc" | "symbol" | "regime">("score-desc");
   const [filterRegime, setFilterRegime] = useState<string>("all");

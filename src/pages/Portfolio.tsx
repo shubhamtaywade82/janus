@@ -1,4 +1,5 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo, useLayoutEffect } from "react";
+import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
 import {
   Wallet,
@@ -195,7 +196,18 @@ export default function Portfolio() {
   }, [initialPortfolio]);
 
   // Stable callback ref — prevents re-subscription on every render
+  const prevPositionCount = useRef<number | null>(null);
   const onPortfolioData = useRef((data: any) => {
+    const prev = prevPositionCount.current;
+    const next = data?.openPositionsCount ?? 0;
+    if (prev !== null && next !== prev) {
+      if (next > prev) {
+        toast.success(`Position opened`, { description: `${next} open position${next !== 1 ? "s" : ""}` });
+      } else {
+        toast.info(`Position closed`, { description: `${next} open position${next !== 1 ? "s" : ""}` });
+      }
+    }
+    prevPositionCount.current = next;
     setPortfolio(data);
     portfolioRef.current = data;
   });
@@ -250,6 +262,22 @@ export default function Portfolio() {
 
   const totalPnl = liveTotalUnrealizedPnl + parseFloat(portfolio?.totalRealizedPnl || "0");
   const isProfit = totalPnl >= 0;
+
+  // Risk warning toast — fire once when threshold crossed
+  const riskWarningFired = useRef(false);
+  useEffect(() => {
+    if (totalEquityUsdt > 0 && liveTotalUnrealizedPnl < -(totalEquityUsdt * 0.1)) {
+      if (!riskWarningFired.current) {
+        riskWarningFired.current = true;
+        toast.error("Risk Warning", {
+          description: `Unrealized loss exceeds 10% of account equity. Current drawdown: ${((liveTotalUnrealizedPnl / totalEquityUsdt) * 100).toFixed(1)}%`,
+          duration: 10000,
+        });
+      }
+    } else {
+      riskWarningFired.current = false;
+    }
+  }, [liveTotalUnrealizedPnl, totalEquityUsdt]);
 
   const pnlFlash = useFlash(liveTotalUnrealizedPnl);
   const marginFlash = useFlash(parseFloat(portfolio?.totalMargin || "0"));
@@ -349,7 +377,7 @@ export default function Portfolio() {
               <div className={cn("text-[10px] mt-1 tabular-nums", isProfit ? "text-[#22c55e]/70" : "text-[#ef4444]/70")}>
                 {pnlInr >= 0 ? "+" : ""}₹{pnlInr.toFixed(2)}
               </div>
-              <div className={cn("mt-1 text-[9px] tabular-nums font-medium", isProfit ? "text-[#22c55e]" : "text-[#ef4444]")}>
+              <div className={cn("mt-1.5 text-sm font-bold tabular-nums", isProfit ? "text-[#22c55e]" : "text-[#ef4444]")}>
                 {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%
               </div>
             </div>

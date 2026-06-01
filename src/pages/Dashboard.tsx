@@ -1,4 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from "react";
+import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
 import {
   ArrowUpDown,
@@ -602,10 +603,22 @@ const Dashboard = () => {
         margin: String((lastPrice * size) / leverage),
       },
       {
-        onSuccess: () => {
+        onSuccess: (data) => {
           utils.trading.positions.invalidate();
           utils.trading.portfolio.invalidate();
           setOrderSize("");
+          if ((data as any)?.exchangeOrderId) {
+            toast.success(`Order placed — ${side === "buy" ? "LONG" : "SHORT"} ${selectedSymbol}`, {
+              description: `Size: ${size} · Leverage: ${leverage}x · ID: ${(data as any).exchangeOrderId.slice(0, 8)}…`,
+            });
+          } else {
+            toast.warning(`Simulated — order not sent to exchange`, {
+              description: `PLACE_ORDERS=false. Position recorded locally for ${side === "buy" ? "LONG" : "SHORT"} ${selectedSymbol}.`,
+            });
+          }
+        },
+        onError: (err) => {
+          toast.error(`Order failed`, { description: err.message });
         },
       }
     );
@@ -686,19 +699,10 @@ const Dashboard = () => {
             )}
           </div>
 
-          {/* Bottom Section - Order Book + Trades */}
-          <div className="h-64 flex border-t border-[#27272a]">
-            <div className="flex-1 border-r border-[#27272a]">
-              <OrderBook symbol={selectedSymbol} />
-            </div>
-            <div className="w-56">
-              <RecentTrades symbol={selectedSymbol} />
-            </div>
-          </div>
         </div>
 
-        {/* Right Panel - Trading */}
-        <div className="w-72 flex-shrink-0 border-l border-[#27272a] bg-[#09090b] flex flex-col">
+        {/* Right Panel - Trading + Order Book + Trades */}
+        <div className="w-80 flex-shrink-0 border-l border-[#27272a] bg-[#09090b] flex flex-col overflow-hidden">
           {/* Symbol Selector */}
           <div className="px-3 py-2 border-b border-[#27272a]">
             <select
@@ -867,7 +871,7 @@ const Dashboard = () => {
           </div>
 
           {/* Place Order Button */}
-          <div className="px-3 py-3 mt-auto">
+          <div className="px-3 py-3">
             {(() => {
               const size = parseFloat(orderSize) || 0;
               const notional = size * lastPrice;
@@ -894,6 +898,16 @@ const Dashboard = () => {
                 </button>
               );
             })()}
+          </div>
+
+          {/* Order Book */}
+          <div className="flex-1 min-h-0 border-t border-[#27272a] overflow-hidden flex flex-col">
+            <OrderBook symbol={selectedSymbol} />
+          </div>
+
+          {/* Recent Trades */}
+          <div className="h-48 border-t border-[#27272a] overflow-hidden flex flex-col">
+            <RecentTrades symbol={selectedSymbol} />
           </div>
         </div>
       </div>
