@@ -1026,6 +1026,12 @@ const Dashboard = () => {
     { staleTime: 60_000, refetchOnWindowFocus: false }
   );
 
+  const { data: conversion } = trpc.trading.currencyConversion.useQuery(
+    undefined,
+    { staleTime: 5 * 60 * 1000, refetchOnWindowFocus: false }
+  );
+  const usdtInrRate = conversion?.rate ?? 89.0;
+
   // Sync leverage to current position leverage when instrument changes
   useEffect(() => {
     if (instrInfo?.currentLeverage) setLeverage(instrInfo.currentLeverage);
@@ -1297,8 +1303,10 @@ const Dashboard = () => {
             {(() => {
               const size = parseFloat(orderSize) || 0;
               const notional = size * lastPrice;
-              const margin = leverage > 0 ? notional / leverage : 0;
-              const fee = notional * 0.0005;
+              const rawMargin = leverage > 0 ? notional / leverage : 0;
+              const rawFee = notional * 0.0005;
+              const margin = marginCurrency === "INR" ? rawMargin * usdtInrRate : rawMargin;
+              const fee = marginCurrency === "INR" ? rawFee * usdtInrRate : rawFee;
               const belowMin = size > 0 && (size < minQty || notional < minNotional);
               return (
                 <>

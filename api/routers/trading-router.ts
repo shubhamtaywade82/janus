@@ -611,6 +611,12 @@ export const tradingRouter = createRouter({
     )
     .mutation(async ({ input }) => {
       const db = getDb();
+      const priceVal = parseFloat(input.price) || 0;
+      const sizeVal = parseFloat(input.size) || 0;
+      const isSell = input.side === "sell";
+      const tdsVal = isSell ? priceVal * sizeVal * 0.01 : 0;
+      const tdsDeducted = tdsVal.toFixed(8);
+
       const result = await db.insert(trades).values({
         userId: input.userId,
         symbol: input.symbol,
@@ -620,13 +626,14 @@ export const tradingRouter = createRouter({
         size: input.size,
         leverage: input.leverage,
         fee: input.fee,
+        tdsDeducted: tdsDeducted,
         total: input.total,
         positionId: input.positionId,
         clientOrderId: input.clientOrderId,
         status: "filled",
         executedAt: new Date(),
       }).returning({ id: trades.id });
-      return { id: result[0].id, ...input };
+      return { id: result[0].id, ...input, tdsDeducted };
     }),
 
   // ─── Get portfolio summary ───

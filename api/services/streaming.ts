@@ -147,6 +147,7 @@ export function subscribeToSymbol(symbol: string) {
         // Throttle kline updates in DB
         const now = Date.now();
         if (now - lastDbSave.kline > 5000) {
+          const db = getDb();
           lastDbSave.kline = now;
           await db.insert(marketData).values({
             symbol,

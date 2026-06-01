@@ -145,6 +145,7 @@ export const trades = pgTable(
     size: decimal("size", { precision: 18, scale: 8 }).notNull(),
     leverage: integer("leverage").default(1).notNull(),
     fee: decimal("fee", { precision: 18, scale: 8 }).default("0").notNull(),
+    tdsDeducted: decimal("tds_deducted", { precision: 18, scale: 8 }).default("0").notNull(),
     total: decimal("total", { precision: 18, scale: 8 }).notNull(),
     status: tradeStatusEnum("status").default("pending").notNull(),
     exchangeOrderId: varchar("exchange_order_id", { length: 255 }),

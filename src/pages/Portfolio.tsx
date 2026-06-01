@@ -13,6 +13,7 @@ import {
   ArrowDownRight,
   Layers,
   Shield,
+  Percent,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -97,10 +98,12 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
         </div>
       </td>
       <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
-        {parseFloat(position.margin || "0").toFixed(2)}
+        {marginCurrency === "INR" ? "₹" : "$"}{parseFloat(position.margin || "0").toFixed(2)}
       </td>
       <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
-        {position.maintenanceMargin ? parseFloat(position.maintenanceMargin).toFixed(2) : "--"}
+        {position.maintenanceMargin 
+          ? `${marginCurrency === "INR" ? "₹" : "$"}${parseFloat(position.maintenanceMargin).toFixed(2)}` 
+          : "--"}
       </td>
       <td className="px-3 py-2">
         <div className={cn("flex items-center gap-1 text-xs tabular-nums rounded px-1 -mx-1", isProfit ? "text-[#22c55e]" : "text-[#ef4444]", pnlFlashRow)}>
@@ -243,6 +246,53 @@ export default function Portfolio() {
 
   const allPositions = statusFilter === "open" ? openPositions : (dbPositions || []);
 
+  // Query historical positions and trades for tax metrics
+  const { data: closedPositions } = trpc.trading.positions.useQuery(
+    { userId: 1, status: "closed" },
+    { refetchInterval: 30000 }
+  );
+  const { data: liquidatedPositions } = trpc.trading.positions.useQuery(
+    { userId: 1, status: "liquidated" },
+    { refetchInterval: 30000 }
+  );
+  const { data: tradeHistory } = trpc.trading.trades.useQuery(
+    { userId: 1 },
+    { refetchInterval: 30000 }
+  );
+
+  const taxMetrics = useMemo(() => {
+    const closed = closedPositions || [];
+    const liq = liquidatedPositions || [];
+    const history = tradeHistory || [];
+
+    // 1. Calculate 30% VDA Gains (No offsets allowed!)
+    let totalGainsUsdt = 0;
+    [...closed, ...liq].forEach((pos: any) => {
+      const pnl = parseFloat(pos.realizedPnl || "0");
+      if (pnl > 0) {
+        totalGainsUsdt += pnl;
+      }
+    });
+
+    const vdaTaxRate = 0.312; // 30% tax + 4% cess = 31.2%
+    const estTaxUsdt = totalGainsUsdt * vdaTaxRate;
+
+    // 2. Calculate 1% TDS (applicable on sell/close fills)
+    let totalTdsUsdt = 0;
+    history.forEach((t: any) => {
+      if (t.side === "sell") {
+        const value = parseFloat(t.price) * parseFloat(t.size);
+        totalTdsUsdt += value * 0.01;
+      }
+    });
+
+    return {
+      totalGainsUsdt,
+      estTaxUsdt,
+      totalTdsUsdt,
+    };
+  }, [closedPositions, liquidatedPositions, tradeHistory]);
+
   // Recalculate totals using live prices
   const usdtInrRate = conversion?.conversion_price ?? 89.0;
   const liveTotalUnrealizedPnl = openPositions.reduce((sum: number, p: any) => {
@@ -341,8 +391,12 @@ export default function Portfolio() {
                 ₹{walletBalanceInr.toFixed(2)} · Rate ₹{rate.toFixed(2)}
               </div>
               <div className="mt-2 flex items-center justify-between text-[9px]">
-                <span className="text-[#22c55e]">Available ₹{availFree.toFixed(2)}</span>
-                <span className="text-[#f59e0b]">Locked ₹{lockedMgn.toFixed(2)}</span>
+                <span className="text-[#22c55e]">
+                  Available {walletCcy === "INR" ? `₹${availFree.toFixed(2)}` : `$${availFree.toFixed(2)}`}
+                </span>
+                <span className="text-[#f59e0b]">
+                  Locked {walletCcy === "INR" ? `₹${lockedMgn.toFixed(2)}` : `$${lockedMgn.toFixed(2)}`}
+                </span>
               </div>
             </div>
 
@@ -384,6 +438,53 @@ export default function Portfolio() {
           </div>
         );
       })()}
+
+      {/* Indian VDA Tax Estimator Row */}
+      <div className="grid grid-cols-2 gap-3 mt-3">
+        {/* VDA Gains & Estimated Tax Card */}
+        <div className="bg-[#ef4444]/5 border border-[#ef4444]/20 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertTriangle size={14} className="text-[#ef4444]" />
+            <span className="text-[10px] text-[#ef4444] font-semibold uppercase tracking-wide">
+              Section 115BBH VDA Tax (India)
+            </span>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <div className="text-xl font-bold text-[#ef4444] tabular-nums">
+              ₹{(taxMetrics.estTaxUsdt * usdtInrRate).toFixed(2)}
+            </div>
+            <div className="text-xs text-[#71717a] tabular-nums">
+              (${taxMetrics.estTaxUsdt.toFixed(2)} USDT)
+            </div>
+          </div>
+          <div className="text-[10px] text-[#71717a] mt-2 leading-relaxed">
+            Estimated <span className="font-semibold text-[#f4f4f5]">31.2% Tax</span> (including 4% cess) on gross profit. 
+            <br />
+            Gross FY Profits: <span className="text-[#22c55e] font-semibold">₹{(taxMetrics.totalGainsUsdt * usdtInrRate).toFixed(2)}</span> (losses are not offset).
+          </div>
+        </div>
+
+        {/* 1% TDS Paid Card */}
+        <div className="bg-[#f59e0b]/5 border border-[#f59e0b]/20 rounded-lg p-4">
+          <div className="flex items-center gap-2 mb-2">
+            <Percent size={14} className="text-[#f59e0b]" />
+            <span className="text-[10px] text-[#f59e0b] font-semibold uppercase tracking-wide">
+              Section 194S TDS Paid (1%)
+            </span>
+          </div>
+          <div className="flex items-baseline gap-2">
+            <div className="text-xl font-bold text-[#f59e0b] tabular-nums">
+              ₹{(taxMetrics.totalTdsUsdt * usdtInrRate).toFixed(2)}
+            </div>
+            <div className="text-xs text-[#71717a] tabular-nums">
+              (${taxMetrics.totalTdsUsdt.toFixed(2)} USDT)
+            </div>
+          </div>
+          <div className="text-[10px] text-[#71717a] mt-2 leading-relaxed">
+            Estimated Tax Deducted at Source (1% of sell/short orders) withheld on exchange transfers.
+          </div>
+        </div>
+      </div>
 
       {/* Risk Warning — trigger when PnL > 10% of total wallet equity */}
       {portfolio && totalEquityUsdt > 0 && liveTotalUnrealizedPnl < -(totalEquityUsdt * 0.1) && (
