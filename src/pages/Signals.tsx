@@ -184,6 +184,33 @@ const SignalCard = ({ signal }: { signal: any }) => {
         </div>
       </div>
 
+      {/* Microstructure Metrics */}
+      {indicators.sweepScore !== undefined && (
+        <div className="grid grid-cols-3 gap-x-2 border-t border-[#27272a]/30 pt-1.5 mt-1.5">
+          <div>
+            <div className="text-[8px] text-[#71717a] uppercase font-semibold">Sweep</div>
+            <div className={cn("text-xs tabular-nums font-semibold", parseFloat(indicators.sweepScore) > 50 ? "text-[#ef4444]" : "text-[#e4e4e7]")}>
+              {parseFloat(indicators.sweepScore).toFixed(0)}
+            </div>
+          </div>
+          <div>
+            <div className="text-[8px] text-[#71717a] uppercase font-semibold">Absorb</div>
+            <div className={cn("text-xs tabular-nums font-semibold", parseFloat(indicators.absorptionScore) > 50 ? "text-[#22c55e]" : "text-[#e4e4e7]")}>
+              {parseFloat(indicators.absorptionScore).toFixed(0)}
+            </div>
+          </div>
+          <div>
+            <div className="text-[8px] text-[#71717a] uppercase font-semibold">Regime</div>
+            <div className={cn("text-[10px] font-bold tracking-tight uppercase", 
+              indicators.volatilityRegime === "HIGH" ? "text-[#ef4444]" : 
+              indicators.volatilityRegime === "LOW" ? "text-[#3b82f6]" : "text-[#a1a1aa]"
+            )}>
+              {indicators.volatilityRegime || "NORMAL"}
+            </div>
+          </div>
+        </div>
+      )}
+
       <div className="mt-1.5 flex items-center justify-between text-[9px] text-[#52525b]">
         <span>{ts ? ts.toLocaleTimeString() : "--"}</span>
         <span className={cn(age !== null && age < 2 ? "text-[#22c55e]" : "")}>

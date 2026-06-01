@@ -7,6 +7,10 @@ import {
   Plus,
   Minus,
   RefreshCw,
+  Activity,
+  ShieldAlert,
+  Sparkles,
+  Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineStyle } from "lightweight-charts";
@@ -606,11 +610,17 @@ const MiniChart = ({ data, positions, lastPrice }: { data: KlineData[]; position
 
 // ─── Order Book Component ───
 const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerData: any; markPrice?: number }) => {
+  const [activeTab, setActiveTab] = useState<"book" | "telemetry">("book");
   const [depth, setDepth] = useState<any>(null);
 
   const { data: initialDepth } = trpc.market.orderBook.useQuery(
     { symbol, limit: 20 },
     { staleTime: Infinity }
+  );
+
+  const { data: liveState } = trpc.market.liveState.useQuery(
+    { symbol },
+    { refetchInterval: 1000, enabled: activeTab === "telemetry" }
   );
 
   useEffect(() => {
@@ -683,56 +693,222 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
         </div>
       </div>
 
-      {/* Column headers */}
-      <div className="grid grid-cols-3 px-2 py-1 border-b border-[#27272a]/50 text-[9px] text-[#52525b]">
-        <span>BID QTY</span>
-        <span className="text-center">PRICE</span>
-        <span className="text-right">ASK QTY</span>
+      {/* Tab selector */}
+      <div className="flex border-b border-[#27272a] text-[10px]">
+        <button
+          onClick={() => setActiveTab("book")}
+          className={cn(
+            "flex-1 py-1.5 text-center font-bold border-b-2 transition-all",
+            activeTab === "book"
+              ? "text-[#f4f4f5] border-[#f59e0b] bg-[#27272a]/20"
+              : "text-[#71717a] border-transparent hover:text-[#a1a1aa]"
+          )}
+        >
+          Depth Book
+        </button>
+        <button
+          onClick={() => setActiveTab("telemetry")}
+          className={cn(
+            "flex-1 py-1.5 text-center font-bold border-b-2 transition-all flex items-center justify-center gap-1",
+            activeTab === "telemetry"
+              ? "text-[#f4f4f5] border-[#f59e0b] bg-[#27272a]/20"
+              : "text-[#71717a] border-transparent hover:text-[#a1a1aa]"
+          )}
+        >
+          <Activity size={10} className={cn(activeTab === "telemetry" && "text-[#f59e0b]")} />
+          Flow Telemetry
+        </button>
       </div>
 
-      {/* Rows: bid | price | ask */}
-      <div className="flex-1 overflow-auto scrollbar-thin">
-        {Array.from({ length: Math.max(rawBids.length, rawAsks.length) }).map((_, i) => {
-          const bid = rawBids[i];
-          const ask = rawAsks[i];
-          const bidSize = bid ? parseFloat(bid[1]) : 0;
-          const askSize = ask ? parseFloat(ask[1]) : 0;
-          const bidW = bid ? (bidSize / maxBidSize) * 100 : 0;
-          const askW = ask ? (askSize / maxAskSize) * 100 : 0;
-          // mid price for this row — use bid price if available, else ask
-          const rowPrice = bid ? parseFloat(bid[0]) : ask ? parseFloat(ask[0]) : 0;
-          void rowPrice;
+      {activeTab === "book" ? (
+        <>
+          {/* Column headers */}
+          <div className="grid grid-cols-3 px-2 py-1 border-b border-[#27272a]/50 text-[9px] text-[#52525b]">
+            <span>BID QTY</span>
+            <span className="text-center">PRICE</span>
+            <span className="text-right">ASK QTY</span>
+          </div>
 
-          return (
-            <div key={i} className="grid grid-cols-3 items-center py-0.5 px-2 hover:bg-[#27272a]/30">
-              {/* Bid qty + bar */}
-              <div className="relative flex items-center justify-start">
-                <div className="absolute inset-y-0 right-0 bg-[#0ecb81]/15 rounded-l" style={{ width: `${bidW}%` }} />
-                <span className="relative tabular-nums text-[#0ecb81]">
-                  {bid ? bidSize.toFixed(3) : ""}
-                </span>
-              </div>
+          {/* Rows: bid | price | ask */}
+          <div className="flex-1 overflow-auto scrollbar-thin">
+            {Array.from({ length: Math.max(rawBids.length, rawAsks.length) }).map((_, i) => {
+              const bid = rawBids[i];
+              const ask = rawAsks[i];
+              const bidSize = bid ? parseFloat(bid[1]) : 0;
+              const askSize = ask ? parseFloat(ask[1]) : 0;
+              const bidW = bid ? (bidSize / maxBidSize) * 100 : 0;
+              const askW = ask ? (askSize / maxAskSize) * 100 : 0;
 
-              {/* Price */}
-              <div className="text-center tabular-nums">
-                {bid ? (
-                  <span className="text-[#0ecb81] font-medium">{parseFloat(bid[0]).toFixed(2)}</span>
-                ) : ask ? (
-                  <span className="text-[#f6465d] font-medium">{parseFloat(ask[0]).toFixed(2)}</span>
-                ) : ""}
-              </div>
+              return (
+                <div key={i} className="grid grid-cols-3 items-center py-0.5 px-2 hover:bg-[#27272a]/30">
+                  {/* Bid qty + bar */}
+                  <div className="relative flex items-center justify-start">
+                    <div className="absolute inset-y-0 right-0 bg-[#0ecb81]/15 rounded-l" style={{ width: `${bidW}%` }} />
+                    <span className="relative tabular-nums text-[#0ecb81]">
+                      {bid ? bidSize.toFixed(3) : ""}
+                    </span>
+                  </div>
 
-              {/* Ask qty + bar */}
-              <div className="relative flex items-center justify-end">
-                <div className="absolute inset-y-0 left-0 bg-[#f6465d]/15 rounded-r" style={{ width: `${askW}%` }} />
-                <span className="relative tabular-nums text-[#f6465d]">
-                  {ask ? askSize.toFixed(3) : ""}
-                </span>
-              </div>
+                  {/* Price */}
+                  <div className="text-center tabular-nums">
+                    {bid ? (
+                      <span className="text-[#0ecb81] font-medium">{parseFloat(bid[0]).toFixed(2)}</span>
+                    ) : ask ? (
+                      <span className="text-[#f6465d] font-medium">{parseFloat(ask[0]).toFixed(2)}</span>
+                    ) : ""}
+                  </div>
+
+                  {/* Ask qty + bar */}
+                  <div className="relative flex items-center justify-end">
+                    <div className="absolute inset-y-0 left-0 bg-[#f6465d]/15 rounded-r" style={{ width: `${askW}%` }} />
+                    <span className="relative tabular-nums text-[#f6465d]">
+                      {ask ? askSize.toFixed(3) : ""}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      ) : (
+        <div className="flex-1 overflow-auto p-3 flex flex-col gap-3.5 scrollbar-thin">
+          {!liveState ? (
+            <div className="flex flex-col items-center justify-center h-full gap-2 text-[#71717a] py-8">
+              <RefreshCw size={16} className="animate-spin text-[#f59e0b]" />
+              <span>Loading telemetry...</span>
             </div>
-          );
-        })}
-      </div>
+          ) : (() => {
+            const metrics = liveState.metrics;
+            const netDelta = (metrics.liquidityAdded || 0) - (metrics.liquidityRemoved || 0);
+
+            // Volatility regime styling
+            const regime = metrics.volatilityRegime || "NORMAL";
+            const regimeColor = regime === "HIGH" ? "text-[#ef4444] border-[#ef4444]" : regime === "LOW" ? "text-[#3b82f6] border-[#3b82f6]" : "text-[#a1a1aa] border-[#27272a]";
+            const regimeBg = regime === "HIGH" ? "bg-[#ef4444]/10 animate-pulse" : regime === "LOW" ? "bg-[#3b82f6]/10" : "bg-[#27272a]/20";
+
+            // Imbalance calculations (cap at -1 to +1)
+            const imb = Math.max(-1, Math.min(1, metrics.bidAskImbalance || 0));
+            // Position percentage (0 to 100)
+            const imbPct = ((imb + 1) / 2) * 100;
+
+            // Sweep and absorption levels
+            const sweep = metrics.sweepScore || 0;
+            const absorb = metrics.absorptionScore || 0;
+
+            return (
+              <>
+                {/* Volatility & Net Delta Row */}
+                <div className="grid grid-cols-2 gap-2">
+                  <div className={cn("flex flex-col gap-1 p-2 rounded border text-center transition-all", regimeColor, regimeBg)}>
+                    <span className="text-[8px] uppercase tracking-wider text-[#71717a] font-medium">Volatility Regime</span>
+                    <span className="text-xs font-black tracking-widest">{regime}</span>
+                  </div>
+                  <div className="flex flex-col gap-1 p-2 rounded border border-[#27272a] bg-[#27272a]/10 text-center">
+                    <span className="text-[8px] uppercase tracking-wider text-[#71717a] font-medium">Net Liquidity Delta</span>
+                    <span className={cn("text-xs font-bold tabular-nums", netDelta >= 0 ? "text-[#0ecb81]" : "text-[#f6465d]")}>
+                      {netDelta >= 0 ? "+" : ""}{netDelta.toFixed(1)}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Imbalance scale */}
+                <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40">
+                  <div className="flex justify-between items-center mb-1 text-[8px] uppercase text-[#71717a] font-semibold">
+                    <span>Seller Pressure</span>
+                    <span className={cn("font-bold text-[9px] tabular-nums", imb >= 0 ? "text-[#0ecb81]" : "text-[#f6465d]")}>
+                      OFI: {imb >= 0 ? "+" : ""}{imb.toFixed(2)}
+                    </span>
+                    <span>Buyer Pressure</span>
+                  </div>
+                  <div className="relative h-2 rounded bg-[#27272a]/40 overflow-hidden mb-1 flex">
+                    <div className="h-full bg-[#f6465d]/40" style={{ width: "50%" }} />
+                    <div className="h-full bg-[#0ecb81]/40" style={{ width: "50%" }} />
+                    {/* Imbalance Marker */}
+                    <div className="absolute top-0 bottom-0 w-1 bg-[#ffffff] shadow-[0_0_4px_rgba(255,255,255,0.8)] transition-all duration-300" style={{ left: `${imbPct}%`, transform: 'translateX(-50%)' }} />
+                  </div>
+                  <div className="flex justify-between text-[7px] text-[#52525b]">
+                    <span>100% ASKS</span>
+                    <span>MID</span>
+                    <span>100% BIDS</span>
+                  </div>
+                </div>
+
+                {/* Sweep Indicator */}
+                <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
+                  <div className="flex justify-between items-center text-[8px] uppercase text-[#71717a] font-semibold">
+                    <span className="flex items-center gap-1">
+                      <Zap size={9} className={cn(sweep > 50 ? "text-[#ef4444] animate-bounce" : "text-[#52525b]")} />
+                      Tape Sweep Intensity
+                    </span>
+                    <span className={cn("font-bold tabular-nums text-[9px]", sweep > 75 ? "text-[#ef4444]" : sweep > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
+                      {sweep.toFixed(0)}/100
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-[#27272a]/50 overflow-hidden">
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-all duration-500",
+                        sweep > 75 ? "bg-[#ef4444]" : sweep > 40 ? "bg-[#f59e0b]" : "bg-[#3b82f6]"
+                      )}
+                      style={{ width: `${sweep}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[7px] text-[#52525b]">
+                    <span>STABLE</span>
+                    <span className={cn(sweep > 50 && "text-[#ef4444] font-bold")}>
+                      {sweep > 75 ? "AGGRESSIVE BREAKOUT" : sweep > 40 ? "PRESSURE SWEEP" : "ORDER FLOW CALM"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Absorption Indicator */}
+                <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
+                  <div className="flex justify-between items-center text-[8px] uppercase text-[#71717a] font-semibold">
+                    <span className="flex items-center gap-1">
+                      <Sparkles size={9} className={cn(absorb > 50 ? "text-[#0ecb81]" : "text-[#52525b]")} />
+                      Micro Limit Absorption
+                    </span>
+                    <span className={cn("font-bold tabular-nums text-[9px]", absorb > 75 ? "text-[#0ecb81]" : absorb > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
+                      {absorb.toFixed(0)}/100
+                    </span>
+                  </div>
+                  <div className="h-1.5 rounded-full bg-[#27272a]/50 overflow-hidden">
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-all duration-500",
+                        absorb > 75 ? "bg-[#0ecb81]" : absorb > 40 ? "bg-[#8b5cf6]" : "bg-[#71717a]"
+                      )}
+                      style={{ width: `${absorb}%` }}
+                    />
+                  </div>
+                  <div className="flex justify-between text-[7px] text-[#52525b]">
+                    <span>NO WALL</span>
+                    <span className={cn(absorb > 50 && "text-[#0ecb81] font-bold")}>
+                      {absorb > 75 ? "HEAVY BLOCK ABSORPTION" : absorb > 40 ? "WALL RESISTING" : "TAPING DIRECTLY"}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Liquidity Added & Removed Stats */}
+                <div className="grid grid-cols-2 gap-2 text-[8px] text-[#71717a] font-semibold mt-1">
+                  <div className="p-2 rounded border border-[#27272a]/50 bg-[#27272a]/5">
+                    <div className="mb-0.5 uppercase">Liquidity Added</div>
+                    <div className="text-[10px] text-[#0ecb81] font-bold tabular-nums">
+                      +{(metrics.liquidityAdded || 0).toFixed(1)}
+                    </div>
+                  </div>
+                  <div className="p-2 rounded border border-[#27272a]/50 bg-[#27272a]/5">
+                    <div className="mb-0.5 uppercase">Liquidity Removed</div>
+                    <div className="text-[10px] text-[#f6465d] font-bold tabular-nums">
+                      -{(metrics.liquidityRemoved || 0).toFixed(1)}
+                    </div>
+                  </div>
+                </div>
+              </>
+            );
+          })()}
+        </div>
+      )}
     </div>
   );
 }
