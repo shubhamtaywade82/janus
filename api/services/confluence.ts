@@ -194,15 +194,17 @@ export function calculateSwingScore(prices: number[]): number {
 export function calculateCompositeScore(
   microScore: number,
   intraScore: number,
-  swingScore: number
+  swingScore: number,
+  weights = WEIGHTS,
+  threshold = DEFAULT_THRESHOLD
 ): { composite: number; direction: "long" | "short" | "neutral" } {
   const composite =
-    WEIGHTS.micro * microScore +
-    WEIGHTS.intra * intraScore +
-    WEIGHTS.swing * swingScore;
+    weights.micro * microScore +
+    weights.intra * intraScore +
+    weights.swing * swingScore;
 
   let direction: "long" | "short" | "neutral" = "neutral";
-  if (composite >= DEFAULT_THRESHOLD) {
+  if (composite >= threshold) {
     direction = intraScore > 50 ? "long" : "short";
   }
 
@@ -223,13 +225,21 @@ export function analyzeConfluence(
     bidAskImbalance?: number;
     liquidityRemoved?: number;
     liquidityAdded?: number;
-  }
+  },
+  strategyWeights?: { micro: number; intra: number; swing: number },
+  strategyThreshold?: number
 ): ConfluenceScore {
   const microScore = calculateMicroScore(orderBook, tradeTape);
   const intraScore = calculateIntraScore(prices, volumes);
   const swingScore = calculateSwingScore(prices);
 
-  const { composite, direction } = calculateCompositeScore(microScore, intraScore, swingScore);
+  const { composite, direction } = calculateCompositeScore(
+    microScore,
+    intraScore,
+    swingScore,
+    strategyWeights ?? WEIGHTS,
+    strategyThreshold ?? DEFAULT_THRESHOLD
+  );
 
   const ema20 = calculateEMA(prices, 20);
   const ema50 = calculateEMA(prices, 50);
@@ -240,8 +250,8 @@ export function analyzeConfluence(
     intraScore: Math.round(intraScore * 100) / 100,
     swingScore: Math.round(swingScore * 100) / 100,
     compositeScore: composite,
-    threshold: DEFAULT_THRESHOLD,
-    isGated: composite >= DEFAULT_THRESHOLD,
+    threshold: strategyThreshold ?? DEFAULT_THRESHOLD,
+    isGated: composite >= (strategyThreshold ?? DEFAULT_THRESHOLD),
     direction,
     indicators: {
       spread: orderBook.spread,

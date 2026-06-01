@@ -25,6 +25,7 @@ export const logLevelEnum = pgEnum("log_level", ["info", "warn", "error", "criti
 export const exchangeEnum = pgEnum("exchange", ["coindcx", "binance"]);
 export const marginModeEnum = pgEnum("margin_mode", ["isolated", "cross"]);
 export const marginCurrencyEnum = pgEnum("margin_currency", ["USDT", "INR"]);
+export const strategyTypeEnum = pgEnum("strategy_type", ["scalping", "intraday", "swing"]);
 
 // ─── Users Table (Auth) ───
 export const users = pgTable("users", {
@@ -121,6 +122,7 @@ export const positions = pgTable(
     settlementCurrencyConversionPrice: decimal("settlement_currency_conversion_price", { precision: 18, scale: 8 }),
     settlementCurrencyAvgPrice: decimal("settlement_currency_avg_price", { precision: 18, scale: 8 }),
     priceInInr: decimal("price_in_inr", { precision: 18, scale: 8 }),
+    strategyType: strategyTypeEnum("strategy_type").default("intraday"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
     closedAt: timestamp("closed_at"),

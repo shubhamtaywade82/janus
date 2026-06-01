@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
+import { ExitSignalToast } from "@/components/ExitSignalToast";
 import {
   ArrowUpDown,
   Clock,
@@ -1270,6 +1271,7 @@ const Dashboard = () => {
   });
   const [leverage, setLeverage] = useState(1);
   const [orderSize, setOrderSize] = useState("");
+  const [strategyType, setStrategyType] = useState<"scalping" | "intraday" | "swing">("intraday");
 
   useEffect(() => {
     localStorage.setItem("janus_selected_symbol", selectedSymbol);
@@ -1407,6 +1409,11 @@ const Dashboard = () => {
   const createPosition = trpc.trading.createPosition.useMutation();
   const utils = trpc.useUtils();
 
+  const { data: breakevenMap } = trpc.trading.feeBreakevenMap.useQuery(
+    { takerFeeRate: 0.0005 },
+    { refetchInterval: 10_000 }
+  );
+
   const tickerData = ticker && !Array.isArray(ticker) && !("error" in ticker) ? ticker : null;
   const lastPrice = tickerData ? parseFloat(tickerData.lastPrice) : 0;
   const priceChange = tickerData ? parseFloat(tickerData.priceChangePercent) : 0;
@@ -1434,6 +1441,7 @@ const Dashboard = () => {
         size: String(size),
         leverage,
         margin: String((lastPrice * size) / leverage),
+        strategyType,
       },
       {
         onSuccess: (data) => {
@@ -1455,12 +1463,13 @@ const Dashboard = () => {
         },
       }
     );
-  }, [orderSize, lastPrice, side, leverage, selectedSymbol, createPosition, utils]);
+  }, [orderSize, lastPrice, side, leverage, selectedSymbol, strategyType, createPosition, utils]);
 
   const intervals = ["1m", "5m", "15m", "1h", "4h", "1d"];
 
   return (
     <div className="flex flex-col h-full">
+      <ExitSignalToast userId={1} />
       <TickerStrip />
 
       <div className="flex flex-1 overflow-hidden">
@@ -1599,6 +1608,30 @@ const Dashboard = () => {
             )}
           </div>
 
+          {/* Strategy Type */}
+          <div className="px-3 py-2 border-b border-[#27272a]">
+            <div className="flex items-center justify-between mb-1">
+              <span className="text-[10px] text-[#71717a]">Strategy</span>
+              <span className="text-[10px] text-[#52525b]">fee exit threshold</span>
+            </div>
+            <div className="flex gap-1">
+              {(["scalping", "intraday", "swing"] as const).map((s) => (
+                <button
+                  key={s}
+                  onClick={() => setStrategyType(s)}
+                  className={cn(
+                    "flex-1 py-1 rounded text-[9px] transition-colors capitalize",
+                    strategyType === s
+                      ? "bg-[#a855f7]/10 text-[#a855f7] border border-[#a855f7]/30"
+                      : "bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5]"
+                  )}
+                >
+                  {s}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Leverage */}
           <div className="px-3 py-2 border-b border-[#27272a]">
             <div className="flex items-center justify-between mb-1">
@@ -1684,9 +1717,15 @@ const Dashboard = () => {
                     </span>
                   </div>
                   <div className="flex justify-between text-[10px] mb-1">
-                    <span className="text-[#71717a]">Est. Fee (0.05%)</span>
+                    <span className="text-[#71717a]">Est. Fee ×2 (entry+exit)</span>
                     <span className="text-[#71717a] tabular-nums">
-                      {fee > 0 ? fee.toFixed(4) : "--"} {marginCurrency}
+                      {fee > 0 ? (fee * 2).toFixed(4) : "--"} {marginCurrency}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-[10px] mb-1">
+                    <span className="text-[#71717a]">Min move to profit</span>
+                    <span className="text-[#a855f7] tabular-nums font-medium">
+                      {strategyType === "scalping" ? "≥0.10%" : strategyType === "intraday" ? "≥0.10%" : "≥0.10%"}
                     </span>
                   </div>
                   <div className="flex justify-between text-[10px] mb-1">
@@ -1734,6 +1773,55 @@ const Dashboard = () => {
               );
             })()}
           </div>
+
+          {/* Fee Breakeven Map */}
+          {breakevenMap && breakevenMap.length > 0 && (
+            <div className="px-3 py-2 border-b border-[#27272a]">
+              <div className="text-[9px] text-[#52525b] uppercase tracking-wide mb-1.5 flex justify-between">
+                <span>Min move to profit (0.10% = 2× fee)</span>
+                <span className="text-[#a855f7]">entry + exit</span>
+              </div>
+              <div className="space-y-0.5">
+                {breakevenMap.map((entry) => (
+                  <div
+                    key={entry.symbol}
+                    className={cn(
+                      "flex items-center justify-between py-0.5 px-1 rounded text-[9px]",
+                      entry.symbol === selectedSymbol
+                        ? "bg-[#a855f7]/10"
+                        : "hover:bg-[#18181b]"
+                    )}
+                  >
+                    <span className={cn(
+                      "font-medium tabular-nums",
+                      entry.symbol === selectedSymbol ? "text-[#a855f7]" : "text-[#71717a]"
+                    )}>
+                      {entry.symbol.replace("USDT", "")}
+                    </span>
+                    <span className="text-[#52525b] tabular-nums">
+                      ${entry.currentPrice > 0
+                        ? entry.currentPrice >= 1000
+                          ? entry.currentPrice.toLocaleString("en-US", { maximumFractionDigits: 0 })
+                          : entry.currentPrice >= 1
+                            ? entry.currentPrice.toFixed(2)
+                            : entry.currentPrice.toFixed(4)
+                        : "—"}
+                    </span>
+                    <span className={cn(
+                      "tabular-nums font-semibold",
+                      entry.symbol === selectedSymbol ? "text-[#a855f7]" : "text-[#71717a]"
+                    )}>
+                      {entry.minMoveAbs > 0
+                        ? entry.minMoveAbs >= 1
+                          ? `≥$${entry.minMoveAbs.toFixed(2)}`
+                          : `≥$${entry.minMoveAbs.toFixed(4)}`
+                        : "—"}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           {/* Order Book */}
           <div className="flex-1 min-h-0 border-t border-[#27272a] overflow-hidden flex flex-col">

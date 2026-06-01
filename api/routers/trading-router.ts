@@ -19,6 +19,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
 import { tradingEvents, initCoinDCXPrivateWs, userBalancesCache, userPositionsCache, markPriceCache } from "../services/coindcx-ws";
+import { startExitMonitor, stopExitMonitor, getFeeBreakevenMap } from "../services/exit-manager";
 import { latestTickerCache, subscribeToSymbol } from "../services/streaming";
 import { env } from "../lib/env";
 
@@ -412,6 +413,7 @@ export const tradingRouter = createRouter({
         stopLoss: z.string().optional(),
         takeProfit: z.string().optional(),
         signalId: z.number().optional(),
+        strategyType: z.enum(["scalping", "intraday", "swing"]).default("intraday"),
       })
     )
     .mutation(async ({ input }) => {
@@ -513,6 +515,7 @@ export const tradingRouter = createRouter({
         stopLoss: input.stopLoss,
         takeProfit: input.takeProfit,
         signalId: input.signalId,
+        strategyType: input.strategyType,
         unrealizedPnl: "0",
         realizedPnl: "0",
         status: "open",
@@ -647,6 +650,17 @@ export const tradingRouter = createRouter({
       return { id: result[0].id, ...input, tdsDeducted };
     }),
 
+  // ─── Fee breakeven map — min price move needed to cover entry+exit fees per symbol ───
+  feeBreakevenMap: publicQuery
+    .input(
+      z.object({
+        takerFeeRate: z.number().min(0).max(0.01).default(0.0005),
+      })
+    )
+    .query(({ input }) => {
+      return getFeeBreakevenMap(input.takerFeeRate);
+    }),
+
   // ─── Get portfolio summary ───
   portfolio: publicQuery
     .input(z.object({ userId: z.number() }))
@@ -692,6 +706,42 @@ export const tradingRouter = createRouter({
           closed = true;
           tradingEvents.off(`portfolio-update:${input.userId}`, onUpdate);
           clearInterval(interval);
+        };
+      });
+    }),
+
+  // ─── Exit Signal Stream — fires when fee-adjusted PnL > 0 on an open position ───
+  exitSignalStream: publicQuery
+    .input(z.object({ userId: z.number() }))
+    .subscription(({ input }) => {
+      return observable((emit) => {
+        const onExitSignal = (payload: unknown) => {
+          emit.next(payload);
+        };
+
+        tradingEvents.on(`exit-signal:${input.userId}`, onExitSignal);
+
+        // Start monitoring open positions for this user
+        const db = getDb();
+        db.select()
+          .from(positions)
+          .where(and(eq(positions.userId, input.userId), eq(positions.status, "open")))
+          .then((openPositions) => {
+            const monitored = openPositions.map((p) => ({
+              id: p.id,
+              symbol: p.symbol,
+              side: p.side,
+              entryPrice: parseFloat(p.entryPrice),
+              size: parseFloat(p.size),
+              strategyType: (p.strategyType ?? "intraday") as "scalping" | "intraday" | "swing",
+            }));
+            startExitMonitor(input.userId, monitored);
+          })
+          .catch(() => {});
+
+        return () => {
+          tradingEvents.off(`exit-signal:${input.userId}`, onExitSignal);
+          stopExitMonitor(input.userId);
         };
       });
     }),

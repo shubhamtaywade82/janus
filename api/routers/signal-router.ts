@@ -13,6 +13,7 @@ import {
 import { fetchOrderBook, fetchRecentTrades, fetchKlines, SUPPORTED_PAIRS } from "../services/binance";
 import { subscribeToSymbol } from "../services/streaming";
 import { marketStateManager } from "../services/market-state";
+import { STRATEGY_CONFIGS, type StrategyType } from "../services/strategy-config";
 
 // ─── Signal update event bus ───
 export const signalEvents = new EventEmitter();
@@ -101,16 +102,27 @@ async function getConfluenceInput(binanceSymbol: string) {
   return { obMetrics, tapeMetrics, prices, volumes, extraMetrics };
 }
 
-// ─── Auto-analysis loop — runs every 30s on the server ───
+// ─── Auto-analysis loop ───
 let autoAnalysisTimer: ReturnType<typeof setTimeout> | null = null;
+let activeStrategyType: StrategyType = "intraday";
 
 async function runAutoAnalysis() {
+  const config = STRATEGY_CONFIGS[activeStrategyType];
   try {
     const db = getDb();
     for (const pair of SUPPORTED_PAIRS) {
       try {
         const { obMetrics, tapeMetrics, prices, volumes, extraMetrics } = await getConfluenceInput(pair.binance);
-        const analysis = analyzeConfluence(pair.coindcx, obMetrics, tapeMetrics, prices, volumes, extraMetrics);
+        const analysis = analyzeConfluence(
+          pair.coindcx,
+          obMetrics,
+          tapeMetrics,
+          prices,
+          volumes,
+          extraMetrics,
+          config.weights,
+          config.threshold
+        );
         await db.insert(signals).values({
           symbol: pair.coindcx,
           microScore: String(analysis.microScore),
@@ -130,18 +142,25 @@ async function runAutoAnalysis() {
   } catch (err) {
     console.error("[signal-router] Auto-analysis loop error:", err);
   }
-  autoAnalysisTimer = setTimeout(runAutoAnalysis, 30_000);
+  autoAnalysisTimer = setTimeout(runAutoAnalysis, config.signalIntervalMs);
 }
 
-export function startAutoAnalysis() {
-  if (autoAnalysisTimer) return; // already running
-  
+export function startAutoAnalysis(strategyType: StrategyType = "intraday") {
+  if (autoAnalysisTimer) {
+    if (activeStrategyType === strategyType) return; // already running same strategy
+    clearTimeout(autoAnalysisTimer);
+    autoAnalysisTimer = null;
+  }
+
+  activeStrategyType = strategyType;
+
   // Keep WebSocket connections active for all supported symbols from startup
   for (const pair of SUPPORTED_PAIRS) {
     console.log(`[signal-router] Bootstrapping WebSocket subscription for ${pair.binance}`);
     subscribeToSymbol(pair.binance);
   }
-  
+
+  console.log(`[signal-router] Starting auto-analysis with strategy: ${strategyType} (interval: ${STRATEGY_CONFIGS[strategyType].signalIntervalMs}ms)`);
   runAutoAnalysis();
 }
 
