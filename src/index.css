@@ -1,0 +1,107 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --background: 0 0% 4%;
+    --foreground: 0 0% 96%;
+    --card: 0 0% 7%;
+    --card-foreground: 0 0% 96%;
+    --popover: 0 0% 7%;
+    --popover-foreground: 0 0% 96%;
+    --primary: 0 0% 96%;
+    --primary-foreground: 0 0% 4%;
+    --secondary: 0 0% 12%;
+    --secondary-foreground: 0 0% 96%;
+    --muted: 0 0% 12%;
+    --muted-foreground: 0 0% 60%;
+    --accent: 0 0% 12%;
+    --accent-foreground: 0 0% 96%;
+    --destructive: 0 84% 60%;
+    --destructive-foreground: 0 0% 98%;
+    --border: 0 0% 15%;
+    --input: 0 0% 15%;
+    --ring: 0 0% 80%;
+    --radius: 0.5rem;
+    --sidebar-background: 0 0% 5%;
+    --sidebar-foreground: 0 0% 90%;
+    --sidebar-primary: 0 0% 96%;
+    --sidebar-primary-foreground: 0 0% 4%;
+    --sidebar-accent: 0 0% 12%;
+    --sidebar-accent-foreground: 0 0% 96%;
+    --sidebar-border: 0 0% 15%;
+    --sidebar-ring: 0 0% 80%;
+    
+    /* Janus Custom Colors */
+    --janus-green: 142 70% 45%;
+    --janus-red: 0 84% 60%;
+    --janus-yellow: 45 90% 55%;
+    --janus-blue: 217 90% 60%;
+    --janus-purple: 270 60% 55%;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+  body {
+    @apply bg-background text-foreground;
+    font-family: ui-monospace, SFMono-Regular, 'Roboto Mono', 'Cascadia Code', 'Fira Code', monospace;
+  }
+}
+
+@layer utilities {
+  .text-janus-green {
+    color: hsl(var(--janus-green));
+  }
+  .text-janus-red {
+    color: hsl(var(--janus-red));
+  }
+  .text-janus-yellow {
+    color: hsl(var(--janus-yellow));
+  }
+  .text-janus-blue {
+    color: hsl(var(--janus-blue));
+  }
+  .text-janus-purple {
+    color: hsl(var(--janus-purple));
+  }
+  .bg-janus-green {
+    background-color: hsl(var(--janus-green));
+  }
+  .bg-janus-red {
+    background-color: hsl(var(--janus-red));
+  }
+  .bg-janus-green\/10 {
+    background-color: hsl(var(--janus-green) / 0.1);
+  }
+  .bg-janus-red\/10 {
+    background-color: hsl(var(--janus-red) / 0.1);
+  }
+  .border-janus-green {
+    border-color: hsl(var(--janus-green));
+  }
+  .border-janus-red {
+    border-color: hsl(var(--janus-red));
+  }
+  .tabular-nums {
+    font-variant-numeric: tabular-nums;
+  }
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: hsl(var(--border)) transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 4px;
+    height: 4px;
+  }
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: hsl(var(--border));
+    border-radius: 2px;
+  }
+}
