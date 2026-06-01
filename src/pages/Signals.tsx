@@ -331,6 +331,27 @@ const Signals = () => {
     setTimeout(() => refetch(), 3000);
   };
 
+  const [sortBy, setSortBy] = useState<"score-desc" | "score-asc" | "symbol" | "regime">("score-desc");
+  const [filterRegime, setFilterRegime] = useState<string>("all");
+  const [filterGated, setFilterGated] = useState<"all" | "gated" | "ungated">("all");
+
+  const allSignals = signals || [];
+
+  const filteredSorted = allSignals
+    .filter((s) => {
+      if (filterGated === "gated" && !s.isGated) return false;
+      if (filterGated === "ungated" && s.isGated) return false;
+      if (filterRegime !== "all" && getRegime(s).label !== filterRegime) return false;
+      return true;
+    })
+    .sort((a, b) => {
+      if (sortBy === "score-desc") return parseFloat(b.compositeScore) - parseFloat(a.compositeScore);
+      if (sortBy === "score-asc") return parseFloat(a.compositeScore) - parseFloat(b.compositeScore);
+      if (sortBy === "symbol") return (a.symbol || "").localeCompare(b.symbol || "");
+      if (sortBy === "regime") return getRegime(a).label.localeCompare(getRegime(b).label);
+      return 0;
+    });
+
   const gatedSignals = signals?.filter((s) => s.isGated) || [];
   const neutralSignals = signals?.filter((s) => !s.isGated) || [];
 
@@ -512,33 +533,54 @@ const Signals = () => {
         </div>
       </div>
 
+      {/* Sort + Filter toolbar */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {/* Filter: gated */}
+        <div className="flex rounded overflow-hidden border border-[#27272a] text-[10px]">
+          {(["all","gated","ungated"] as const).map((v) => (
+            <button key={v} onClick={() => setFilterGated(v)}
+              className={cn("px-2.5 py-1 capitalize transition-colors",
+                filterGated === v ? "bg-[#27272a] text-[#f4f4f5]" : "bg-[#18181b] text-[#71717a] hover:text-[#f4f4f5]"
+              )}>
+              {v === "gated" ? "🔓 Gated" : v === "ungated" ? "🔒 Below" : "All"}
+            </button>
+          ))}
+        </div>
+
+        {/* Filter: regime */}
+        <select
+          value={filterRegime}
+          onChange={(e) => setFilterRegime(e.target.value)}
+          className="bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-[#f4f4f5] outline-none"
+        >
+          <option value="all">All Regimes</option>
+          {["BULLISH","BEARISH","ACCUMULATION","DISTRIBUTION","RANGE","NEUTRAL","AVOID"].map((r) => (
+            <option key={r} value={r}>{r}</option>
+          ))}
+        </select>
+
+        {/* Sort */}
+        <select
+          value={sortBy}
+          onChange={(e) => setSortBy(e.target.value as any)}
+          className="bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-[#f4f4f5] outline-none"
+        >
+          <option value="score-desc">Score ↓ High first</option>
+          <option value="score-asc">Score ↑ Low first</option>
+          <option value="symbol">Symbol A→Z</option>
+          <option value="regime">Regime A→Z</option>
+        </select>
+
+        <span className="ml-auto text-[10px] text-[#52525b]">{filteredSorted.length} / {allSignals.length} signals</span>
+      </div>
+
       {/* Signal Grid */}
       <div className="flex-1 overflow-auto scrollbar-thin">
-        {gatedSignals.length > 0 && (
-          <div className="mb-4">
-            <div className="flex items-center gap-2 mb-2">
-              <Unlock size={12} className="text-[#22c55e]" />
-              <span className="text-xs font-semibold text-[#22c55e]">Gated Signals (Execution Ready)</span>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-              {gatedSignals.map((signal) => (
-                <SignalCard key={signal.id} signal={signal} />
-              ))}
-            </div>
-          </div>
-        )}
-
-        {neutralSignals.length > 0 && (
-          <div>
-            <div className="flex items-center gap-2 mb-2">
-              <Lock size={12} className="text-[#71717a]" />
-              <span className="text-xs font-semibold text-[#71717a]">Neutral Signals (Below Threshold)</span>
-            </div>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
-              {neutralSignals.map((signal) => (
-                <SignalCard key={signal.id} signal={signal} />
-              ))}
-            </div>
+        {filteredSorted.length > 0 && (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
+            {filteredSorted.map((signal) => (
+              <SignalCard key={signal.id} signal={signal} />
+            ))}
           </div>
         )}
 
@@ -549,7 +591,13 @@ const Signals = () => {
           </div>
         )}
 
-        {!isLoading && (!signals || signals.length === 0) && (
+        {!isLoading && filteredSorted.length === 0 && allSignals.length > 0 && (
+          <div className="flex flex-col items-center justify-center h-32 text-[#71717a]">
+            <p className="text-sm">No signals match current filters</p>
+          </div>
+        )}
+
+        {!isLoading && allSignals.length === 0 && (
           <div className="flex flex-col items-center justify-center h-40 text-[#71717a]">
             <Signal size={24} className="mb-2 opacity-30" />
             <p className="text-sm">No signals generated yet</p>
