@@ -21,6 +21,7 @@ import { TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
 import { tradingEvents, initCoinDCXPrivateWs, userBalancesCache, userPositionsCache, markPriceCache } from "../services/coindcx-ws";
 import { latestTickerCache, subscribeToSymbol } from "../services/streaming";
+import { env } from "../lib/env";
 
 export async function fetchPortfolioData(userId: number) {
   const db = getDb();
@@ -450,7 +451,7 @@ export const tradingRouter = createRouter({
 
       let exchangeOrderId: string | undefined = undefined;
 
-      if (creds && creds[0]) {
+      if (creds && creds[0] && env.placeOrders) {
         try {
           // Format symbol from BTCUSDT -> B-BTC_USDT
           let coindcxSymbol = input.symbol;
@@ -481,6 +482,8 @@ export const tradingRouter = createRouter({
         } catch (err) {
           console.error("[coindcx-execution] Failed live execution, falling back to simulation mode:", err);
         }
+      } else if (creds && creds[0] && !env.placeOrders) {
+        console.warn(`[coindcx-execution] BLOCKED — PLACE_ORDERS=false. Set PLACE_ORDERS=true in .env to enable live trading.`);
       }
 
       const result = await db.insert(positions).values({

@@ -16,4 +16,7 @@ export const env = {
   authUrl: required("AUTH_URL"),
   authPlatformUrl: required("AUTH_PLATFORM_URL"),
   ownerUnionId: process.env.OWNER_UNION_ID ?? "",
+  // Safety flag — set PLACE_ORDERS=true to enable live order execution
+  // Default OFF to prevent accidental trades
+  placeOrders: process.env.PLACE_ORDERS === "true",
 };
