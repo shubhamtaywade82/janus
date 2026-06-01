@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { createRouter, publicQuery } from "../middleware";
 import { getDb } from "../queries/connection";
-import { signals } from "@db/schema";
-import { desc, eq, sql } from "drizzle-orm";
+import { signals, marketData } from "@db/schema";
+import { desc, eq, and, sql } from "drizzle-orm";
 import { EventEmitter } from "events";
 import { observable } from "@trpc/server/observable";
 import {
@@ -11,10 +11,95 @@ import {
   aggregateTradeTape,
 } from "../services/confluence";
 import { fetchOrderBook, fetchRecentTrades, fetchKlines, SUPPORTED_PAIRS } from "../services/binance";
+import { subscribeToSymbol } from "../services/streaming";
+import { marketStateManager } from "../services/market-state";
 
 // ─── Signal update event bus ───
 export const signalEvents = new EventEmitter();
 signalEvents.setMaxListeners(50);
+
+// ─── Input helper: checks cache / local DB, falls back to REST ───
+async function getConfluenceInput(binanceSymbol: string) {
+  const state = marketStateManager.get(binanceSymbol);
+
+  // 1. Order Book Metrics
+  let obMetrics;
+  if (state && state.orderBook) {
+    obMetrics = {
+      spread: state.metrics.spread,
+      spreadPercent: state.metrics.spreadPercent,
+      bidDepth: state.metrics.bidDepth,
+      askDepth: state.metrics.askDepth,
+      imbalance: state.metrics.imbalance,
+      midPrice: state.metrics.midPrice,
+    };
+  } else {
+    const orderBook = await fetchOrderBook(binanceSymbol, 50);
+    obMetrics = aggregateOrderBookMetrics(orderBook.bids, orderBook.asks);
+  }
+
+  // 2. Trade Tape Metrics
+  let tapeMetrics;
+  if (state && state.tradeWindow.size() > 0) {
+    const trades = state.tradeWindow.values();
+    tapeMetrics = aggregateTradeTape(
+      trades.map((t) => ({
+        price: String(t.price),
+        qty: String(t.quantity),
+        isBuyerMaker: t.side === "SELL",
+      }))
+    );
+  } else {
+    const recentTrades = await fetchRecentTrades(binanceSymbol, 50);
+    tapeMetrics = aggregateTradeTape(
+      recentTrades.map((t) => ({
+        price: t.price,
+        qty: t.qty,
+        isBuyerMaker: t.isBuyerMaker,
+      }))
+    );
+  }
+
+  // 3. Kline prices and volumes
+  const db = getDb();
+  const dbKlines = await db
+    .select()
+    .from(marketData)
+    .where(
+      and(
+        eq(marketData.symbol, binanceSymbol),
+        eq(marketData.timeframe, "1m")
+      )
+    )
+    .orderBy(desc(marketData.timestamp))
+    .limit(150)
+    .catch(() => []);
+
+  let prices: number[];
+  let volumes: number[];
+
+  if (dbKlines.length >= 50) {
+    const sorted = [...dbKlines].reverse();
+    prices = sorted.map((k) => parseFloat(k.close));
+    volumes = sorted.map((k) => parseFloat(k.volume));
+  } else {
+    const klines = await fetchKlines(binanceSymbol, "1m", 150);
+    prices = klines.map((k) => parseFloat(k.close));
+    volumes = klines.map((k) => parseFloat(k.volume));
+  }
+
+  // 4. Extra Metrics (from in-memory state manager)
+  const extraMetrics = state ? {
+    sweepScore: state.metrics.sweepScore,
+    absorptionScore: state.metrics.absorptionScore,
+    volatilityRegime: state.metrics.volatilityRegime,
+    bidAskImbalance: state.metrics.bidAskImbalance,
+    liquidityRemoved: state.metrics.liquidityRemoved,
+    liquidityAdded: state.metrics.liquidityAdded,
+  } : undefined;
+
+  return { obMetrics, tapeMetrics, prices, volumes, extraMetrics };
+}
 
 // ─── Auto-analysis loop — runs every 30s on the server ───
 let autoAnalysisTimer: ReturnType<typeof setTimeout> | null = null;
@@ -24,16 +109,8 @@ async function runAutoAnalysis() {
     const db = getDb();
     for (const pair of SUPPORTED_PAIRS) {
       try {
-        const [orderBook, recentTrades, klines] = await Promise.all([
-          fetchOrderBook(pair.binance, 50),
-          fetchRecentTrades(pair.binance, 50),
-          fetchKlines(pair.binance, "1m", 150),
-        ]);
-        const obMetrics = aggregateOrderBookMetrics(orderBook.bids, orderBook.asks);
-        const tapeMetrics = aggregateTradeTape(recentTrades.map((t) => ({ price: t.price, qty: t.qty, isBuyerMaker: t.isBuyerMaker })));
-        const prices = klines.map((k) => parseFloat(k.close));
-        const volumes = klines.map((k) => parseFloat(k.volume));
-        const analysis = analyzeConfluence(pair.coindcx, obMetrics, tapeMetrics, prices, volumes);
+        const { obMetrics, tapeMetrics, prices, volumes, extraMetrics } = await getConfluenceInput(pair.binance);
+        const analysis = analyzeConfluence(pair.coindcx, obMetrics, tapeMetrics, prices, volumes, extraMetrics);
         await db.insert(signals).values({
           symbol: pair.coindcx,
           microScore: String(analysis.microScore),
@@ -45,15 +122,26 @@ async function runAutoAnalysis() {
           direction: analysis.direction,
           metadata: analysis.indicators,
         }).catch(() => {});
-      } catch { /* skip failed pairs */ }
+      } catch (err) {
+        console.error(`[signal-router] Auto-analysis failed for ${pair.binance}:`, err);
+      }
     }
     signalEvents.emit("update");
-  } catch {}
+  } catch (err) {
+    console.error("[signal-router] Auto-analysis loop error:", err);
+  }
   autoAnalysisTimer = setTimeout(runAutoAnalysis, 30_000);
 }
 
 export function startAutoAnalysis() {
   if (autoAnalysisTimer) return; // already running
+  
+  // Keep WebSocket connections active for all supported symbols from startup
+  for (const pair of SUPPORTED_PAIRS) {
+    console.log(`[signal-router] Bootstrapping WebSocket subscription for ${pair.binance}`);
+    subscribeToSymbol(pair.binance);
+  }
+  
   runAutoAnalysis();
 }
 
@@ -120,32 +208,11 @@ export const signalRouter = createRouter({
     )
     .query(async ({ input }) => {
       try {
-        // Fetch all required data in parallel
-        const [orderBook, recentTrades, klines] = await Promise.all([
-          fetchOrderBook(input.symbol, 50),
-          fetchRecentTrades(input.symbol, 50),
-          fetchKlines(input.symbol, "1m", 150),
-        ]);
-
-        // Aggregate order book metrics
-        const obMetrics = aggregateOrderBookMetrics(orderBook.bids, orderBook.asks);
-
-        // Aggregate trade tape metrics
-        const tapeMetrics = aggregateTradeTape(
-          recentTrades.map((t) => ({
-            price: t.price,
-            qty: t.qty,
-            isBuyerMaker: t.isBuyerMaker,
-          }))
-        );
-
-        // Extract prices and volumes from klines
-        const prices = klines.map((k) => parseFloat(k.close));
-        const volumes = klines.map((k) => parseFloat(k.volume));
+        const { obMetrics, tapeMetrics, prices, volumes, extraMetrics } = await getConfluenceInput(input.symbol);
 
         // Run confluence analysis
         const coindcxSymbol = `B-${input.symbol.replace("USDT", "_USDT")}`;
-        const analysis = analyzeConfluence(coindcxSymbol, obMetrics, tapeMetrics, prices, volumes);
+        const analysis = analyzeConfluence(coindcxSymbol, obMetrics, tapeMetrics, prices, volumes, extraMetrics);
 
         // Store in database
         const db = getDb();
@@ -192,25 +259,8 @@ export const signalRouter = createRouter({
     const results = [];
     for (const pair of SUPPORTED_PAIRS) {
       try {
-        const [orderBook, recentTrades, klines] = await Promise.all([
-          fetchOrderBook(pair.binance, 50),
-          fetchRecentTrades(pair.binance, 50),
-          fetchKlines(pair.binance, "1m", 150),
-        ]);
-
-        const obMetrics = aggregateOrderBookMetrics(orderBook.bids, orderBook.asks);
-        const tapeMetrics = aggregateTradeTape(
-          recentTrades.map((t) => ({
-            price: t.price,
-            qty: t.qty,
-            isBuyerMaker: t.isBuyerMaker,
-          }))
-        );
-
-        const prices = klines.map((k) => parseFloat(k.close));
-        const volumes = klines.map((k) => parseFloat(k.volume));
-
-        const analysis = analyzeConfluence(pair.coindcx, obMetrics, tapeMetrics, prices, volumes);
+        const { obMetrics, tapeMetrics, prices, volumes, extraMetrics } = await getConfluenceInput(pair.binance);
+        const analysis = analyzeConfluence(pair.coindcx, obMetrics, tapeMetrics, prices, volumes, extraMetrics);
 
         // Store in DB
         const db = getDb();

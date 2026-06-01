@@ -29,6 +29,12 @@ export interface ConfluenceScore {
     ema20: number;
     ema50: number;
     trendStrength: number;
+    sweepScore?: number;
+    absorptionScore?: number;
+    volatilityRegime?: string;
+    bidAskImbalance?: number;
+    liquidityRemoved?: number;
+    liquidityAdded?: number;
   };
   timestamp: number;
 }
@@ -209,7 +215,15 @@ export function analyzeConfluence(
   orderBook: OrderBookMetrics,
   tradeTape: TradeTapeMetrics,
   prices: number[],
-  volumes: number[]
+  volumes: number[],
+  extraMetrics?: {
+    sweepScore?: number;
+    absorptionScore?: number;
+    volatilityRegime?: string;
+    bidAskImbalance?: number;
+    liquidityRemoved?: number;
+    liquidityAdded?: number;
+  }
 ): ConfluenceScore {
   const microScore = calculateMicroScore(orderBook, tradeTape);
   const intraScore = calculateIntraScore(prices, volumes);
@@ -237,6 +251,12 @@ export function analyzeConfluence(
       ema20: ema20[ema20.length - 1] || prices[prices.length - 1],
       ema50: ema50[ema50.length - 1] || prices[prices.length - 1],
       trendStrength: calculateADXApproximation(prices, 14),
+      sweepScore: extraMetrics?.sweepScore,
+      absorptionScore: extraMetrics?.absorptionScore,
+      volatilityRegime: extraMetrics?.volatilityRegime,
+      bidAskImbalance: extraMetrics?.bidAskImbalance,
+      liquidityRemoved: extraMetrics?.liquidityRemoved,
+      liquidityAdded: extraMetrics?.liquidityAdded,
     },
     timestamp: Date.now(),
   };
