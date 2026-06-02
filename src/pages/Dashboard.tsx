@@ -1624,10 +1624,16 @@ const Dashboard = () => {
           <div className="flex-1 bg-[#09090b] border-b border-[#27272a] overflow-hidden">
             {klines && klines.length > 0 ? (
               <MiniChart data={klines as KlineData[]} positions={symbolPositions} lastPrice={lastPrice} symbol={selectedSymbol} interval={interval} onLoadMore={handleLoadMore} />
-            ) : (
+            ) : initialKlines === null || initialKlines === undefined ? (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
                 <RefreshCw size={16} className="animate-spin mr-2" />
-                Loading market data...
+                Loading {interval} candles…
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full gap-2 text-[#71717a] text-sm">
+                <RefreshCw size={16} className="opacity-40" />
+                <span>No {interval} data — WS accumulating 1m candles</span>
+                <span className="text-[10px] text-[#3f3f46]">Switch to 1m for live data</span>
               </div>
             )}
           </div>

@@ -6,6 +6,13 @@
 
 const BINANCE_API_BASE = "https://fapi.binance.com";
 const BINANCE_WS_BASE = "wss://fstream.binance.com/ws";
+// Spot API fallbacks — used when futures REST is geo-blocked
+const BINANCE_SPOT_BASES = [
+  "https://api.binance.com",
+  "https://api1.binance.com",
+  "https://api2.binance.com",
+  "https://data-api.binance.vision",
+];
 
 // ─── Types ───
 export interface BinanceKline {
@@ -123,10 +130,29 @@ export async function fetchKlines(
   limit: number = 150,
   endTime?: number          // ms timestamp — fetch candles BEFORE this time
 ): Promise<BinanceKline[]> {
-  let url = `${BINANCE_API_BASE}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
-  if (endTime) url += `&endTime=${endTime}`;
-  // klines bypass the circuit breaker — low-frequency, not the source of rate-limit bans
-  const data = await binanceFetch(url, "Binance klines error", true) as any[];
+  const qsBase = `symbol=${symbol}&interval=${interval}&limit=${limit}${endTime ? `&endTime=${endTime}` : ""}`;
+  const errors: string[] = [];
+
+  // 1. Try futures REST (may be geo-blocked in some regions)
+  try {
+    const url = `${BINANCE_API_BASE}/fapi/v1/klines?${qsBase}`;
+    const data = await binanceFetch(url, "Binance klines error", true) as any[];
+    return mapKlines(data);
+  } catch (e: any) { errors.push(`futures: ${e.message}`); }
+
+  // 2. Try spot REST mirrors in order (globally accessible)
+  for (const base of BINANCE_SPOT_BASES) {
+    try {
+      const url = `${base}/api/v3/klines?${qsBase}`;
+      const data = await binanceFetch(url, "Binance spot klines error", true) as any[];
+      return mapKlines(data);
+    } catch (e: any) { errors.push(`spot(${base}): ${e.message}`); }
+  }
+
+  throw new Error(`fetchKlines failed (all endpoints): ${errors.join(" | ")}`);
+}
+
+function mapKlines(data: any[]): BinanceKline[] {
   return data.map((d: any[]) => ({
     openTime: d[0],
     open: d[1],

@@ -12,10 +12,55 @@ import {
   fetchMarkPrice,
   fetchFundingRate,
   SUPPORTED_PAIRS,
+  type BinanceKline,
 } from "../services/binance";
 import { getDb } from "../queries/connection";
 import { marketData, orderBookSnapshots, recentTicks } from "@db/schema";
 import { desc, eq, and } from "drizzle-orm";
+
+// ─── Interval → milliseconds ───
+const INTERVAL_MS: Record<string, number> = {
+  "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+  "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
+  "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000, "3d": 259_200_000,
+  "1w": 604_800_000,
+};
+
+// Resample 1m candles from DB into a higher timeframe.
+// Used when REST endpoints are unavailable (geo-block) — gives us chart data from WS-cached 1m data.
+function resampleFromOneMin(
+  rows: { timestamp: Date; open: string; high: string; low: string; close: string; volume: string; quoteVolume: string; tradeCount: number | null }[],
+  intervalMs: number,
+  limit: number
+): BinanceKline[] {
+  if (rows.length === 0 || intervalMs <= 60_000) return [];
+
+  const groups = new Map<number, typeof rows>();
+  for (const row of rows) {
+    const ts = row.timestamp.getTime();
+    const bucket = Math.floor(ts / intervalMs) * intervalMs;
+    if (!groups.has(bucket)) groups.set(bucket, []);
+    groups.get(bucket)!.push(row);
+  }
+
+  const result: BinanceKline[] = [];
+  for (const [bucket, candles] of groups) {
+    const sorted = [...candles].sort((a, b) => a.timestamp.getTime() - b.timestamp.getTime());
+    result.push({
+      openTime: bucket,
+      open: sorted[0].open,
+      high: String(Math.max(...sorted.map((c) => parseFloat(c.high)))),
+      low: String(Math.min(...sorted.map((c) => parseFloat(c.low)))),
+      close: sorted[sorted.length - 1].close,
+      volume: String(sorted.reduce((s, c) => s + parseFloat(c.volume), 0)),
+      closeTime: bucket + intervalMs - 1,
+      quoteVolume: String(sorted.reduce((s, c) => s + parseFloat(c.quoteVolume), 0)),
+      trades: sorted.reduce((s, c) => s + (c.tradeCount ?? 0), 0),
+    });
+  }
+
+  return result.sort((a, b) => a.openTime - b.openTime).slice(-limit);
+}
 
 export const marketRouter = createRouter({
   // ─── Get supported trading pairs ───
@@ -54,30 +99,47 @@ export const marketRouter = createRouter({
         }
         return klines;
       } catch (error: any) {
-        // Fallback to cached data
+        console.warn(`[market-router] klines REST failed for ${input.symbol}/${input.interval}:`, error.message);
         const db = getDb();
+
+        // Fallback 1: same-timeframe DB cache (populated on previous successful fetches)
         const cached = await db
           .select()
           .from(marketData)
-          .where(
-            and(
-              eq(marketData.symbol, input.symbol),
-              eq(marketData.timeframe, input.interval)
-            )
-          )
+          .where(and(eq(marketData.symbol, input.symbol), eq(marketData.timeframe, input.interval)))
           .orderBy(desc(marketData.timestamp))
           .limit(input.limit);
-        return cached.reverse().map((c) => ({
-          openTime: c.timestamp.getTime(),
-          open: c.open,
-          high: c.high,
-          low: c.low,
-          close: c.close,
-          volume: c.volume,
-          closeTime: c.timestamp.getTime() + 60000,
-          quoteVolume: c.quoteVolume,
-          trades: c.tradeCount || 0,
-        }));
+
+        if (cached.length >= 10) {
+          return cached.reverse().map((c) => ({
+            openTime: c.timestamp.getTime(),
+            open: c.open, high: c.high, low: c.low, close: c.close,
+            volume: c.volume, closeTime: c.timestamp.getTime() + 60_000,
+            quoteVolume: c.quoteVolume, trades: c.tradeCount || 0,
+          }));
+        }
+
+        // Fallback 2: resample from 1m DB candles (WS continuously populates these)
+        const intervalMs = INTERVAL_MS[input.interval] ?? 0;
+        if (intervalMs > 60_000) {
+          // Fetch enough 1m candles to cover the requested number of higher-TF candles
+          const oneMinNeeded = Math.min(input.limit * (intervalMs / 60_000), 2000);
+          const oneMin = await db
+            .select()
+            .from(marketData)
+            .where(and(eq(marketData.symbol, input.symbol), eq(marketData.timeframe, "1m")))
+            .orderBy(desc(marketData.timestamp))
+            .limit(Math.ceil(oneMinNeeded))
+            .then((rows) => rows.reverse());
+
+          const resampled = resampleFromOneMin(oneMin, intervalMs, input.limit);
+          if (resampled.length > 0) {
+            console.log(`[market-router] Serving ${resampled.length} ${input.interval} candles resampled from ${oneMin.length} 1m DB rows`);
+            return resampled;
+          }
+        }
+
+        return []; // no data available
       }
     }),
 
