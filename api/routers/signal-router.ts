@@ -136,13 +136,42 @@ async function runAutoAnalysis() {
   if (autoRegimeDetect && Date.now() - lastRegimeDetectAt >= REGIME_DETECT_INTERVAL_MS) {
     lastRegimeDetectAt = Date.now();
     try {
-      const ethRegime = await detectRegimeForSymbol("ETHUSDT");
-      latestRegimeCache.set("ETHUSDT", ethRegime);
-      const suggestedStrategy = regimeToStrategy(ethRegime.regime);
+      // Use BTC + ETH as dual proxies — agree = high confidence, disagree = use BTC (market leader)
+      const [btcRegime, ethRegime] = await Promise.allSettled([
+        detectRegimeForSymbol("BTCUSDT"),
+        detectRegimeForSymbol("ETHUSDT"),
+      ]);
+
+      const btcResult = btcRegime.status === "fulfilled" ? btcRegime.value : null;
+      const ethResult = ethRegime.status === "fulfilled" ? ethRegime.value : null;
+
+      // Prefer BTC; fall back to ETH; use whichever is available
+      const primary = btcResult ?? ethResult;
+      if (!primary) throw new Error("Both BTC and ETH regime detection failed");
+
+      if (btcResult) latestRegimeCache.set("BTCUSDT", btcResult);
+      if (ethResult) latestRegimeCache.set("ETHUSDT", ethResult);
+
+      // If both agree use that; if they disagree defer to BTC (leads the market)
+      const agreedRegime = btcResult && ethResult && btcResult.regime === ethResult.regime
+        ? btcResult.regime
+        : primary.regime;
+
+      const suggestedStrategy = regimeToStrategy(agreedRegime);
       if (suggestedStrategy !== activeStrategyType) {
-        console.log(`[signal-router] Regime auto-switch: ${activeStrategyType} → ${suggestedStrategy} (${ethRegime.regime})`);
+        const prevStrategy = activeStrategyType;
+        const agreement = btcResult && ethResult
+          ? btcResult.regime === ethResult.regime ? "BTC+ETH agree" : `BTC=${btcResult.regime} ETH=${ethResult.regime} → BTC wins`
+          : "single proxy";
+        console.log(`[signal-router] Regime auto-switch: ${prevStrategy} → ${suggestedStrategy} (${agreedRegime}, ${agreement})`);
         activeStrategyType = suggestedStrategy;
-        signalEvents.emit("strategy-switch", { from: activeStrategyType, to: suggestedStrategy, regime: ethRegime.regime, reason: ethRegime.reason });
+        signalEvents.emit("strategy-switch", {
+          from: prevStrategy,
+          to: suggestedStrategy,
+          regime: agreedRegime,
+          reason: primary.reason,
+          agreement,
+        });
       }
     } catch (err) {
       console.error("[signal-router] Regime detection failed:", err);
