@@ -50,6 +50,13 @@
       "when": 1780368145445,
       "tag": "0006_common_jigsaw",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1780392013880,
+      "tag": "0007_wealthy_skullbuster",
+      "breakpoints": true
     }
   ]
 }
