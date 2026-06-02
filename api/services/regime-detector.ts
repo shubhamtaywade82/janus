@@ -125,10 +125,37 @@ function calcATRPct(prices: number[], period = 14): number {
 }
 
 export async function detectRegimeForSymbol(binanceSymbol: string): Promise<RegimeResult> {
-  const [klines1h, klines4h] = await Promise.all([
-    fetchKlines(binanceSymbol, "1h", 60),
-    fetchKlines(binanceSymbol, "4h", 60),
-  ]);
+  let klines1h, klines4h;
+  try {
+    [klines1h, klines4h] = await Promise.all([
+      fetchKlines(binanceSymbol, "1h", 60),
+      fetchKlines(binanceSymbol, "4h", 60),
+    ]);
+  } catch (err: any) {
+    console.warn(`[regime-detector] Failed to fetch klines for ${binanceSymbol} via REST (using cached or default):`, err.message || err);
+    const cached = latestRegimeCache.get(binanceSymbol);
+    if (cached) {
+      return cached;
+    }
+    // Fallback default ranging regime
+    return {
+      regime: "ranging",
+      strategy: "bb_reversion",
+      symbol: binanceSymbol,
+      timestamp: Date.now(),
+      reason: `API error fallback: ${err.message || err}`,
+      inputs: {
+        adx1h: 15,
+        atrPct1h: 0.5,
+        ema20_1h: 100,
+        ema50_1h: 100,
+        ema50_4h: 100,
+        ema200_4h: 100,
+        spreadPct: 0.01,
+        rsi1h: 50,
+      },
+    };
+  }
 
   const prices1h = klines1h.map((k) => parseFloat(k.close));
   const prices4h = klines4h.map((k) => parseFloat(k.close));

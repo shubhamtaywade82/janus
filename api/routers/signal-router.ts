@@ -49,8 +49,13 @@ async function getConfluenceInput(binanceSymbol: string) {
       midPrice: state.metrics.midPrice,
     };
   } else {
-    const orderBook = await fetchOrderBook(binanceSymbol, 50);
-    obMetrics = aggregateOrderBookMetrics(orderBook.bids, orderBook.asks);
+    try {
+      const orderBook = await fetchOrderBook(binanceSymbol, 50);
+      obMetrics = aggregateOrderBookMetrics(orderBook.bids, orderBook.asks);
+    } catch (err: any) {
+      console.warn(`[signal-router] Failed to fetch order book for ${binanceSymbol} via REST (fallback to empty):`, err.message || err);
+      obMetrics = { spread: 0, spreadPercent: 0, bidDepth: 0, askDepth: 0, imbalance: 0, midPrice: 0 };
+    }
   }
 
   // 2. Trade Tape Metrics
@@ -65,14 +70,19 @@ async function getConfluenceInput(binanceSymbol: string) {
       }))
     );
   } else {
-    const recentTrades = await fetchRecentTrades(binanceSymbol, 50);
-    tapeMetrics = aggregateTradeTape(
-      recentTrades.map((t) => ({
-        price: t.price,
-        qty: t.qty,
-        isBuyerMaker: t.isBuyerMaker,
-      }))
-    );
+    try {
+      const recentTrades = await fetchRecentTrades(binanceSymbol, 50);
+      tapeMetrics = aggregateTradeTape(
+        recentTrades.map((t) => ({
+          price: t.price,
+          qty: t.qty,
+          isBuyerMaker: t.isBuyerMaker,
+        }))
+      );
+    } catch (err: any) {
+      console.warn(`[signal-router] Failed to fetch trades for ${binanceSymbol} via REST (fallback to empty):`, err.message || err);
+      tapeMetrics = { buyVolume: 0, sellVolume: 0, delta: 0, makerRatio: 0.5, avgTradeSize: 0, tradeCount: 0 };
+    }
   }
 
   // 3. Kline prices and volumes
@@ -102,11 +112,19 @@ async function getConfluenceInput(binanceSymbol: string) {
     highs = sorted.map((k) => parseFloat(k.high));
     lows = sorted.map((k) => parseFloat(k.low));
   } else {
-    const klines = await fetchKlines(binanceSymbol, "1m", 150);
-    prices = klines.map((k) => parseFloat(k.close));
-    volumes = klines.map((k) => parseFloat(k.volume));
-    highs = klines.map((k) => parseFloat(k.high));
-    lows = klines.map((k) => parseFloat(k.low));
+    try {
+      const klines = await fetchKlines(binanceSymbol, "1m", 150);
+      prices = klines.map((k) => parseFloat(k.close));
+      volumes = klines.map((k) => parseFloat(k.volume));
+      highs = klines.map((k) => parseFloat(k.high));
+      lows = klines.map((k) => parseFloat(k.low));
+    } catch (err: any) {
+      console.warn(`[signal-router] Failed to fetch klines for ${binanceSymbol} via REST (fallback to empty):`, err.message || err);
+      prices = [];
+      volumes = [];
+      highs = [];
+      lows = [];
+    }
   }
 
   // 4. Extra Metrics (from in-memory state manager)
@@ -264,6 +282,63 @@ async function runAutoAnalysis() {
   autoAnalysisTimer = setTimeout(runAutoAnalysis, config.signalIntervalMs);
 }
 
+// Bootstrap database with historical klines once on startup to avoid REST rate limits during analysis
+async function bootstrapHistoricalKlines() {
+  console.log("[signal-router] Bootstrapping historical klines for supported pairs...");
+  const db = getDb();
+  for (const pair of SUPPORTED_PAIRS) {
+    try {
+      // Check if we already have enough klines in DB
+      const existing = await db
+        .select({ id: marketData.id })
+        .from(marketData)
+        .where(
+          and(
+            eq(marketData.symbol, pair.binance),
+            eq(marketData.timeframe, "1m")
+          )
+        )
+        .limit(50)
+        .catch(() => []);
+
+      if (existing.length < 50) {
+        console.log(`[signal-router] Fetching historical klines for ${pair.binance} via REST to bootstrap DB...`);
+        const klines = await fetchKlines(pair.binance, "1m", 150);
+        for (const k of klines) {
+          await db.insert(marketData).values({
+            symbol: pair.binance,
+            timeframe: "1m",
+            timestamp: new Date(k.openTime || k.closeTime || Date.now()),
+            open: String(k.open),
+            high: String(k.high),
+            low: String(k.low),
+            close: String(k.close),
+            volume: String(k.volume),
+            quoteVolume: String(k.quoteVolume || "0"),
+            tradeCount: k.trades || 0,
+          }).onConflictDoUpdate({
+            target: [marketData.symbol, marketData.timeframe, marketData.timestamp],
+            set: {
+              open: String(k.open),
+              high: String(k.high),
+              low: String(k.low),
+              close: String(k.close),
+              volume: String(k.volume),
+              quoteVolume: String(k.quoteVolume || "0"),
+              tradeCount: k.trades || 0,
+            }
+          }).catch(() => {});
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[signal-router] Failed to bootstrap klines for ${pair.binance}:`, err.message || err);
+    }
+    // Sleep a bit to avoid hitting rate limits on startup
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  console.log("[signal-router] Historical klines bootstrapping completed.");
+}
+
 export function startAutoAnalysis(strategyType: StrategyType = "intraday", autoSwitch?: boolean) {
   // autoSwitch=true → regime detector drives strategy; autoSwitch=false → pin to strategyType
   if (autoSwitch !== undefined) autoRegimeDetect = autoSwitch;
@@ -275,6 +350,11 @@ export function startAutoAnalysis(strategyType: StrategyType = "intraday", autoS
   }
 
   activeStrategyType = strategyType;
+
+  // Run bootstrapping in background
+  bootstrapHistoricalKlines().catch((err) => {
+    console.error("[signal-router] Bootstrapping failed:", err);
+  });
 
   for (const pair of SUPPORTED_PAIRS) {
     subscribeToSymbol(pair.binance);
