@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { observable } from "@trpc/server/observable";
 import { createRouter, publicQuery } from "../middleware";
+import { analyzeAll, klinesFromBinance } from "../services/price-action";
 import { subscribeToSymbol, unsubscribeFromSymbol, marketEvents } from "../services/streaming";
 import { marketStateManager } from "../services/market-state";
 import {
@@ -144,6 +145,47 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Fetch 24h ticker stats ───
+  // ─── SMC / ICT Price Action Analysis ───
+  priceAction: publicQuery
+    .input(z.object({
+      symbol:   z.string().default("BTCUSDT"),
+      interval: z.string().default("1m"),
+      limit:    z.number().min(50).max(500).default(200),
+    }))
+    .query(async ({ input }) => {
+      // 1. Try to get klines from DB cache
+      const db = getDb();
+      const dbRows = await db
+        .select()
+        .from(marketData)
+        .where(and(eq(marketData.symbol, input.symbol), eq(marketData.timeframe, input.interval)))
+        .orderBy(desc(marketData.timestamp))
+        .limit(input.limit)
+        .catch(() => []);
+
+      let rawKlines: { openTime: number; open: string; high: string; low: string; close: string; volume: string }[];
+
+      if (dbRows.length >= 50) {
+        rawKlines = [...dbRows].reverse().map((r) => ({
+          openTime: r.timestamp.getTime(),
+          open: r.open, high: r.high, low: r.low, close: r.close, volume: r.volume,
+        }));
+      } else {
+        // Fallback to REST
+        try {
+          const fetched = await fetchKlines(input.symbol, input.interval, input.limit);
+          rawKlines = fetched.map((k) => ({
+            openTime: k.openTime, open: k.open, high: k.high, low: k.low, close: k.close, volume: k.volume,
+          }));
+        } catch {
+          return null;
+        }
+      }
+
+      const klines = klinesFromBinance(rawKlines);
+      return analyzeAll(klines);
+    }),
+
   ticker24h: publicQuery
     .input(
       z.object({

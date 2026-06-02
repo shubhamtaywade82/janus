@@ -17,8 +17,14 @@ import {
   Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineStyle } from "lightweight-charts";
-import type { UTCTimestamp } from "lightweight-charts";
+import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineStyle, createSeriesMarkers } from "lightweight-charts";
+import type { UTCTimestamp, SeriesMarker, Time } from "lightweight-charts";
+import { OrderBlockPrimitive } from "@/lib/chart/primitives/OrderBlockPrimitive";
+import { FVGPrimitive } from "@/lib/chart/primitives/FVGPrimitive";
+import { StructurePrimitive } from "@/lib/chart/primitives/StructurePrimitive";
+import { ChartOverlayPanel } from "@/components/ChartOverlayPanel";
+import type { OverlayToggles } from "@/components/ChartOverlayPanel";
+import type { PriceActionData } from "@/lib/chart/pa-types";
 
 // ─── Types ───
 interface KlineData {
@@ -31,7 +37,12 @@ interface KlineData {
 }
 
 // ─── TradingView Lightweight Chart Component ───
-const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore }: { data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string; onLoadMore?: (beforeTime: number) => void }) => {
+const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles }: {
+  data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string;
+  onLoadMore?: (beforeTime: number) => void;
+  overlayData?: PriceActionData | null;
+  overlayToggles?: OverlayToggles;
+}) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
   const [chartInitialized, setChartInitialized] = useState(false);
@@ -96,6 +107,11 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore }:
   const prevIntervalRef = useRef<string>(interval);
   const isLoadingMoreRef = useRef(false);
   const onLoadMoreRef = useRef(onLoadMore);
+  // SMC primitives
+  const obPrimRef   = useRef<OrderBlockPrimitive | null>(null);
+  const fvgPrimRef  = useRef<FVGPrimitive | null>(null);
+  const strPrimRef  = useRef<StructurePrimitive | null>(null);
+  const markersPluginRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
 
   // ─── Tick animation: persistent lerp loop chasing target ───
   const animFrameRef = useRef<number | null>(null);
@@ -265,6 +281,18 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore }:
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
 
+    // Attach SMC primitives to candlestick series
+    const obPrim  = new OrderBlockPrimitive();
+    const fvgPrim = new FVGPrimitive();
+    const strPrim = new StructurePrimitive();
+    candlestickSeries.attachPrimitive(obPrim);
+    candlestickSeries.attachPrimitive(fvgPrim);
+    candlestickSeries.attachPrimitive(strPrim);
+    obPrimRef.current   = obPrim;
+    fvgPrimRef.current  = fvgPrim;
+    strPrimRef.current  = strPrim;
+    markersPluginRef.current = createSeriesMarkers(candlestickSeries, []);
+
     // Lazy load older candles when user scrolls to the left edge
     chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (!range) return;
@@ -284,6 +312,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore }:
       resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
+      obPrimRef.current = null;
+      fvgPrimRef.current = null;
+      strPrimRef.current = null;
+      markersPluginRef.current = null;
       setChartInitialized(false);
     };
   }, []);
@@ -406,6 +438,62 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore }:
       isGreen: targetClose >= o,
     });
   }, [lastPrice, interval, data]);
+
+  // 4. SMC / ICT overlay updates — runs when overlayData or toggles change
+  useEffect(() => {
+    if (!candlestickSeriesRef.current || !obPrimRef.current || !fvgPrimRef.current || !strPrimRef.current) return;
+    const tog = overlayToggles;
+    const pa  = overlayData;
+
+    // Order Blocks
+    obPrimRef.current.setBlocks(tog?.orderBlocks && pa?.orderBlocks ? pa.orderBlocks : []);
+
+    // FVGs
+    fvgPrimRef.current.setFVGs(tog?.fvg && pa?.fvgs ? pa.fvgs : []);
+
+    // Structure + Liquidity
+    strPrimRef.current.setData(
+      tog?.structure  && pa?.structure  ? pa.structure  : [],
+      tog?.liquidity  && pa?.liquidity  ? pa.liquidity  : []
+    );
+
+    // Swing markers + displacement markers via createSeriesMarkers
+    if (markersPluginRef.current) {
+      const markers: SeriesMarker<Time>[] = [];
+
+      if (tog?.swings && pa?.swings) {
+        for (const s of pa.swings) {
+          markers.push({
+            time:     (s.time / 1000) as Time,
+            position: s.type === "high" ? "aboveBar" : "belowBar",
+            shape:    s.type === "high" ? "arrowDown" : "arrowUp",
+            color:    s.type === "high" ? "#71717a" : "#71717a",
+            size:     0.6,
+            text:     "",
+          });
+        }
+      }
+
+      if (tog?.displacement && pa?.displacement) {
+        for (const d of pa.displacement) {
+          markers.push({
+            time:     (d.time / 1000) as Time,
+            position: d.direction === "bullish" ? "belowBar" : "aboveBar",
+            shape:    d.direction === "bullish" ? "arrowUp" : "arrowDown",
+            color:    d.direction === "bullish" ? "#22c55e" : "#ef4444",
+            size:     1.5,
+            text:     `${d.atrMultiple.toFixed(1)}×`,
+          });
+        }
+      }
+
+      // Sort markers by time (required by lightweight-charts)
+      markers.sort((a, b) => (a.time as number) - (b.time as number));
+      markersPluginRef.current.setMarkers(markers);
+    }
+
+    // Primitives call requestUpdate() internally via their setters above
+  }, [overlayData, overlayToggles]);
 
   // Draw custom position lines (entry price and liquidation price) with empty titles
   // so the HTML overlay can render custom left/right aligned labels on top.
@@ -1398,6 +1486,19 @@ const Dashboard = () => {
     }
   }, [selectedSymbol, interval, utils]);
 
+  // ─── SMC / Price Action overlay ───
+  const [overlayToggles, setOverlayToggles] = useState<OverlayToggles>(() => {
+    try {
+      const saved = localStorage.getItem("janus_chart_overlays");
+      return saved ? JSON.parse(saved) : { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false };
+    } catch { return { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false }; }
+  });
+
+  const { data: paData } = trpc.market.priceAction.useQuery(
+    { symbol: selectedSymbol, interval, limit: 200 },
+    { staleTime: 30_000, refetchInterval: 60_000, enabled: klines.length > 0 }
+  );
+
   useEffect(() => {
     if (initialTicker && !Array.isArray(initialTicker)) {
       setTicker(initialTicker);
@@ -1607,6 +1708,7 @@ const Dashboard = () => {
             </div>
             <div className="flex items-center gap-2">
               <RegimeIndicator symbol={selectedSymbol} />
+              <ChartOverlayPanel onChange={setOverlayToggles} />
               <div className="h-3 w-px bg-[#27272a]" />
               <span className="text-[10px] text-[#71717a]">
                 H: {tickerData ? parseFloat(tickerData.highPrice).toFixed(2) : "--"}
@@ -1623,7 +1725,16 @@ const Dashboard = () => {
           {/* Chart Area */}
           <div className="flex-1 bg-[#09090b] border-b border-[#27272a] overflow-hidden">
             {klines && klines.length > 0 ? (
-              <MiniChart data={klines as KlineData[]} positions={symbolPositions} lastPrice={lastPrice} symbol={selectedSymbol} interval={interval} onLoadMore={handleLoadMore} />
+              <MiniChart
+                data={klines as KlineData[]}
+                positions={symbolPositions}
+                lastPrice={lastPrice}
+                symbol={selectedSymbol}
+                interval={interval}
+                onLoadMore={handleLoadMore}
+                overlayData={paData ?? null}
+                overlayToggles={overlayToggles}
+              />
             ) : initialKlines === null || initialKlines === undefined ? (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
                 <RefreshCw size={16} className="animate-spin mr-2" />
