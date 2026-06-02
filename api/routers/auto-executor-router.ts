@@ -1,13 +1,12 @@
 import { z } from "zod";
 import { createRouter, publicQuery } from "../middleware";
 import { getDb } from "../queries/connection";
-import { autoExecutorConfig, equitySnapshots } from "@db/schema";
-import { eq, desc } from "drizzle-orm";
+import { autoExecutorConfig, equitySnapshots, positions } from "@db/schema";
+import { eq, desc, and } from "drizzle-orm";
 import { observable } from "@trpc/server/observable";
 import { globalAutoExecutor, autoExecutorEvents } from "../services/auto-executor";
 import { globalKillSwitch, killSwitchEvents } from "../services/kill-switch";
 import { computeMetrics } from "../services/performance-tracker";
-import { getPaperWallet, resetPaperWallet } from "../services/paper-wallet";
 import { env } from "../lib/env";
 
 export const autoExecutorRouter = createRouter({
@@ -40,6 +39,8 @@ export const autoExecutorRouter = createRouter({
         llmConfidenceThreshold: z.number().min(0).max(100).optional(),
         maxPositionsPerSymbol: z.number().min(1).max(10).optional(),
         maxTotalPositions: z.number().min(1).max(20).optional(),
+        capitalAllocationPct: z.string().optional(),   // "0.050" – "0.500"
+        useStrategyLeverage: z.boolean().optional(),
         paperStartingBalance: z.string().optional(),
       })
     )
@@ -76,17 +77,71 @@ export const autoExecutorRouter = createRouter({
   })),
 
   // ─── Paper wallet status ───
+  // ─── Paper wallet — computed fresh from DB on every call (no in-memory cache) ───
   paperWallet: publicQuery
-    .input(z.object({ userId: z.number(), startingBalance: z.number().optional() }))
+    .input(z.object({ userId: z.number() }))
     .query(async ({ input }) => {
-      return getPaperWallet(input.userId, input.startingBalance ?? 10_000);
+      const db = getDb();
+
+      // Starting balance from config
+      const configRows = await db
+        .select({ paperStartingBalance: autoExecutorConfig.paperStartingBalance })
+        .from(autoExecutorConfig)
+        .where(eq(autoExecutorConfig.userId, input.userId))
+        .limit(1);
+      const startingBalance = parseFloat(configRows[0]?.paperStartingBalance ?? "10000");
+
+      // Locked margin = sum of open paper position margins
+      const openPaper = await db
+        .select({ margin: positions.margin })
+        .from(positions)
+        .where(and(
+          eq(positions.userId, input.userId),
+          eq(positions.status, "open"),
+          eq(positions.isPaper, true)
+        ));
+      const lockedMargin = openPaper.reduce((sum, p) => sum + parseFloat(p.margin), 0);
+
+      // Realized PnL = sum of closed paper position realizedPnl
+      const closedPaper = await db
+        .select({ realizedPnl: positions.realizedPnl })
+        .from(positions)
+        .where(and(
+          eq(positions.userId, input.userId),
+          eq(positions.status, "closed"),
+          eq(positions.isPaper, true)
+        ));
+      const realizedPnl = closedPaper.reduce((sum, p) => sum + parseFloat(p.realizedPnl ?? "0"), 0);
+
+      // Free = starting - locked + realized
+      const balance = startingBalance - lockedMargin + realizedPnl;
+
+      return {
+        userId: input.userId,
+        startingBalance,
+        balance,
+        lockedMargin,
+        realizedPnl,
+        tradeCount: closedPaper.length,
+      };
     }),
 
-  // ─── Reset paper wallet (clears virtual balance to starting amount) ───
+  // ─── Reset paper wallet — clears realized PnL baseline by adjusting starting balance ───
   resetPaperWallet: publicQuery
     .input(z.object({ userId: z.number(), newBalance: z.number().default(10_000) }))
-    .mutation(({ input }) => {
-      resetPaperWallet(input.userId, input.newBalance);
+    .mutation(async ({ input }) => {
+      const db = getDb();
+      const existing = await db
+        .select({ id: autoExecutorConfig.id })
+        .from(autoExecutorConfig)
+        .where(eq(autoExecutorConfig.userId, input.userId))
+        .limit(1);
+      if (existing.length > 0) {
+        await db
+          .update(autoExecutorConfig)
+          .set({ paperStartingBalance: String(input.newBalance), updatedAt: new Date() })
+          .where(eq(autoExecutorConfig.userId, input.userId));
+      }
       return { success: true, balance: input.newBalance };
     }),
 

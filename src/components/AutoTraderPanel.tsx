@@ -37,6 +37,8 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
     targetSymbols: ["BTCUSDT", "ETHUSDT"] as string[],
     defaultSizeUsdt: "50",
     defaultLeverage: 3,
+    capitalAllocationPct: "0.100",   // 10%
+    useStrategyLeverage: true,
     stopLossPct: "0.015",
     tp1Pct: "0.015",
     useLlmAdvisor: true,
@@ -53,6 +55,8 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
         targetSymbols: (config.targetSymbols as string[]) ?? ["BTCUSDT", "ETHUSDT"],
         defaultSizeUsdt: config.defaultSizeUsdt ?? "50",
         defaultLeverage: config.defaultLeverage ?? 3,
+        capitalAllocationPct: config.capitalAllocationPct ?? "0.100",
+        useStrategyLeverage: config.useStrategyLeverage ?? true,
         stopLossPct: config.stopLossPct ?? "0.015",
         tp1Pct: config.tp1Pct ?? "0.015",
         useLlmAdvisor: config.useLlmAdvisor ?? true,
@@ -212,27 +216,84 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
             </div>
           </div>
 
-          {/* Size + leverage */}
+          {/* Capital allocation + size */}
           <div className="grid grid-cols-2 gap-2">
             <div>
-              <div className="text-[9px] text-[#71717a] mb-1">Size (USDT)</div>
+              <div className="text-[9px] text-[#71717a] mb-1">
+                Allocation % of balance
+                <span className="ml-1 text-[#22c55e]">{(parseFloat(form.capitalAllocationPct) * 100).toFixed(0)}%</span>
+              </div>
+              <input
+                type="range"
+                min={1} max={50} step={1}
+                value={Math.round(parseFloat(form.capitalAllocationPct) * 100)}
+                onChange={(e) => setForm((f) => ({ ...f, capitalAllocationPct: String(parseInt(e.target.value) / 100) }))}
+                className="w-full"
+              />
+              <div className="flex justify-between text-[8px] text-[#3f3f46]">
+                <span>1%</span><span>25%</span><span>50%</span>
+              </div>
+            </div>
+            <div>
+              <div className="text-[9px] text-[#71717a] mb-1">Max trade size (USDT cap)</div>
               <input
                 type="number"
                 value={form.defaultSizeUsdt}
                 onChange={(e) => setForm((f) => ({ ...f, defaultSizeUsdt: e.target.value }))}
                 className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-[#f4f4f5] outline-none focus:border-[#22c55e]"
               />
+              <div className="text-[8px] text-[#52525b] mt-0.5">uses min(% cap, this)</div>
             </div>
-            <div>
-              <div className="text-[9px] text-[#71717a] mb-1">Leverage</div>
-              <select
-                value={form.defaultLeverage}
-                onChange={(e) => setForm((f) => ({ ...f, defaultLeverage: parseInt(e.target.value) }))}
-                className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-[#f4f4f5] outline-none"
+          </div>
+
+          {/* Leverage mode */}
+          <div>
+            <div className="text-[9px] text-[#71717a] mb-1.5">Leverage</div>
+            <div className="flex gap-2">
+              <button
+                onClick={() => setForm((f) => ({ ...f, useStrategyLeverage: true }))}
+                className={cn(
+                  "flex-1 py-1 rounded text-[9px] border transition-colors",
+                  form.useStrategyLeverage
+                    ? "bg-[#3b82f6]/10 text-[#3b82f6] border-[#3b82f6]/30"
+                    : "bg-[#18181b] text-[#52525b] border-[#27272a]"
+                )}
               >
-                {[1, 2, 3, 5, 7, 10].map((l) => <option key={l} value={l}>{l}x</option>)}
-              </select>
+                Auto per strategy
+              </button>
+              <button
+                onClick={() => setForm((f) => ({ ...f, useStrategyLeverage: false }))}
+                className={cn(
+                  "flex-1 py-1 rounded text-[9px] border transition-colors",
+                  !form.useStrategyLeverage
+                    ? "bg-[#3b82f6]/10 text-[#3b82f6] border-[#3b82f6]/30"
+                    : "bg-[#18181b] text-[#52525b] border-[#27272a]"
+                )}
+              >
+                Fixed {form.defaultLeverage}x
+              </button>
             </div>
+            {!form.useStrategyLeverage && (
+              <div className="flex gap-1 mt-1.5">
+                {[1, 2, 3, 5, 7, 10].map((l) => (
+                  <button
+                    key={l}
+                    onClick={() => setForm((f) => ({ ...f, defaultLeverage: l }))}
+                    className={cn(
+                      "flex-1 py-0.5 rounded text-[9px] border transition-colors",
+                      form.defaultLeverage === l
+                        ? "bg-[#3b82f6]/10 text-[#3b82f6] border-[#3b82f6]/30"
+                        : "bg-[#18181b] text-[#52525b] border-[#27272a] hover:text-[#f4f4f5]"
+                    )}
+                  >{l}x</button>
+                ))}
+              </div>
+            )}
+            {form.useStrategyLeverage && (
+              <div className="text-[8px] text-[#52525b] mt-1">
+                scalping_micro=10x · scalping=10x · bb_reversion=8x · intraday=5x · swing=3x
+              </div>
+            )}
           </div>
 
           {/* SL / TP */}

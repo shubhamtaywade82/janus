@@ -107,10 +107,12 @@ export class AutoExecutor {
     targetSymbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"],
     defaultSizeUsdt: "50",
     defaultLeverage: 3,
+    capitalAllocationPct: "0.100",   // 10% of free balance per trade
+    useStrategyLeverage: true,        // use STRATEGY_CONFIGS leverage per regime
     stopLossPct: "0.015",
     tp1Pct: "0.015",
     tp2Pct: "0.030",
-    useLlmAdvisor: false, // off by default until user configures LLM keys
+    useLlmAdvisor: false,
     llmConfidenceThreshold: 70,
     maxPositionsPerSymbol: 1,
     maxTotalPositions: 3,
@@ -148,6 +150,8 @@ export class AutoExecutor {
           llmConfidenceThreshold: AutoExecutor.DEFAULT_CONFIG.llmConfidenceThreshold!,
           maxPositionsPerSymbol: AutoExecutor.DEFAULT_CONFIG.maxPositionsPerSymbol!,
           maxTotalPositions: AutoExecutor.DEFAULT_CONFIG.maxTotalPositions!,
+          capitalAllocationPct: AutoExecutor.DEFAULT_CONFIG.capitalAllocationPct,
+          useStrategyLeverage: AutoExecutor.DEFAULT_CONFIG.useStrategyLeverage,
           paperStartingBalance: AutoExecutor.DEFAULT_CONFIG.paperStartingBalance,
         }).catch(() => {}); // ignore if already exists
         this.configCache = AutoExecutor.DEFAULT_CONFIG;
@@ -314,11 +318,16 @@ export class AutoExecutor {
       return this.skip(signal, "no price feed");
     }
 
-    const notional = Math.min(sizeUsdt * sizeMult, (walletFree || session.startingBalance) * 0.20);
-    const leverage = Math.min(
-      config.defaultLeverage ?? 3,
-      STRATEGY_CONFIGS[regimeData?.strategy ?? "intraday"]?.maxLeverage ?? 5
-    );
+    // Capital allocation: use configured % of free balance, capped by fixed USDT size
+    const allocationPct = parseFloat(config.capitalAllocationPct ?? "0.10"); // e.g. 0.10 = 10%
+    const balanceCap = (walletFree || session.startingBalance) * allocationPct;
+    const notional = Math.min(sizeUsdt * sizeMult, balanceCap);
+
+    // Leverage: if useStrategyLeverage=true, use strategy's maxLeverage; else use defaultLeverage
+    const strategyMaxLev = STRATEGY_CONFIGS[regimeData?.strategy ?? "intraday"]?.maxLeverage ?? 5;
+    const leverage = config.useStrategyLeverage
+      ? strategyMaxLev
+      : Math.min(config.defaultLeverage ?? 3, strategyMaxLev);
 
     // Validate size against instrument minimums
     let rawSize = notional / currentPrice;
