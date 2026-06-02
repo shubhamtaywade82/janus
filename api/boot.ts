@@ -115,9 +115,9 @@ initCoinDCXPrivateWs().catch((err) => {
   console.error("[coindcx-ws] Failed to initialize private WS:", err);
 });
 
-// Start auto signal analysis loop (runs every 30s)
+// Start auto signal analysis loop with regime detection enabled
 import { startAutoAnalysis } from "./routers/signal-router";
-startAutoAnalysis();
+startAutoAnalysis("intraday", true); // true = regime auto-switch on
 
 // Init LLM advisor (loads keys from DB + env-level Ollama config)
 import { globalLlmAdvisor } from "./services/llm-advisor";

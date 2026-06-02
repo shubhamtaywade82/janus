@@ -15,7 +15,7 @@
 
 import { EventEmitter } from "events";
 import { getDb } from "../queries/connection";
-import { positions, exchangeCredentials, autoExecutorConfig, signals, systemLogs } from "@db/schema";
+import { positions, exchangeCredentials, autoExecutorConfig, systemLogs } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { globalKillSwitch } from "./kill-switch";
 import { isFundingExtreme } from "./funding-filter";
@@ -24,7 +24,7 @@ import { globalRiskEngine, getOrCreateSession, updateSession } from "./risk-engi
 import { globalLlmAdvisor, type SignalContext } from "./llm-advisor";
 import { latestTickerCache } from "./streaming";
 import { markPriceCache, tradingEvents } from "./coindcx-ws";
-import { createFuturesOrder, getFuturesWallet } from "./coindcx";
+import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo } from "./coindcx";
 import { registerPositionForTrailing } from "./trailing-stop";
 import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
@@ -99,6 +99,26 @@ export class AutoExecutor {
     this.state.lastRun = Date.now();
   }
 
+  // Default config used when AUTO_EXECUTE=true but no DB row exists yet
+  private static readonly DEFAULT_CONFIG: AutoExecutorConfig = {
+    id: 0,
+    userId: 1,
+    enabled: true,
+    targetSymbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"],
+    defaultSizeUsdt: "50",
+    defaultLeverage: 3,
+    stopLossPct: "0.015",
+    tp1Pct: "0.015",
+    tp2Pct: "0.030",
+    useLlmAdvisor: false, // off by default until user configures LLM keys
+    llmConfidenceThreshold: 70,
+    maxPositionsPerSymbol: 1,
+    maxTotalPositions: 3,
+    paperStartingBalance: "10000",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
   private async getConfig(): Promise<AutoExecutorConfig | null> {
     if (this.configCache && Date.now() - this.configCacheAt < this.CONFIG_TTL_MS) {
       return this.configCache;
@@ -110,10 +130,37 @@ export class AutoExecutor {
         .from(autoExecutorConfig)
         .where(eq(autoExecutorConfig.userId, 1))
         .limit(1);
-      this.configCache = rows[0] ?? null;
+
+      if (rows[0]) {
+        this.configCache = rows[0];
+      } else if (env.autoExecute) {
+        // AUTO_EXECUTE=true but no row yet — upsert defaults and use them
+        await db.insert(autoExecutorConfig).values({
+          userId: 1,
+          enabled: true,
+          targetSymbols: AutoExecutor.DEFAULT_CONFIG.targetSymbols as string[],
+          defaultSizeUsdt: AutoExecutor.DEFAULT_CONFIG.defaultSizeUsdt,
+          defaultLeverage: AutoExecutor.DEFAULT_CONFIG.defaultLeverage!,
+          stopLossPct: AutoExecutor.DEFAULT_CONFIG.stopLossPct,
+          tp1Pct: AutoExecutor.DEFAULT_CONFIG.tp1Pct,
+          tp2Pct: AutoExecutor.DEFAULT_CONFIG.tp2Pct,
+          useLlmAdvisor: AutoExecutor.DEFAULT_CONFIG.useLlmAdvisor,
+          llmConfidenceThreshold: AutoExecutor.DEFAULT_CONFIG.llmConfidenceThreshold!,
+          maxPositionsPerSymbol: AutoExecutor.DEFAULT_CONFIG.maxPositionsPerSymbol!,
+          maxTotalPositions: AutoExecutor.DEFAULT_CONFIG.maxTotalPositions!,
+          paperStartingBalance: AutoExecutor.DEFAULT_CONFIG.paperStartingBalance,
+        }).catch(() => {}); // ignore if already exists
+        this.configCache = AutoExecutor.DEFAULT_CONFIG;
+        console.log("[auto-executor] No config row found — created default config (AUTO_EXECUTE=true)");
+      } else {
+        this.configCache = null;
+      }
       this.configCacheAt = Date.now();
     } catch {
-      // Keep stale cache
+      // Keep stale cache; fall back to default if env switch is on
+      if (!this.configCache && env.autoExecute) {
+        this.configCache = AutoExecutor.DEFAULT_CONFIG;
+      }
     }
     return this.configCache;
   }
@@ -215,9 +262,9 @@ export class AutoExecutor {
     // Gate 8: LLM Advisor (optional)
     let sizeMult = 1.0;
     let llmDecision: ExecutorDecision["llmDecision"] | undefined;
+    const regimeData = latestRegimeCache.get("BTCUSDT");
 
     if (config.useLlmAdvisor) {
-      const regimeData = latestRegimeCache.get("BTCUSDT");
       const currentPrice = latestTickerCache.get(symbol)?.lastPrice ?? 0;
       const metadata = signal.metadata as Record<string, unknown> | null;
 
@@ -272,7 +319,28 @@ export class AutoExecutor {
       config.defaultLeverage ?? 3,
       STRATEGY_CONFIGS[regimeData?.strategy ?? "intraday"]?.maxLeverage ?? 5
     );
-    const size = notional / currentPrice;
+
+    // Validate size against instrument minimums
+    let rawSize = notional / currentPrice;
+    if (!isPaperMode && creds[0]) {
+      try {
+        const instrInfo = await getFuturesInstrumentInfo(symbol);
+        if (instrInfo) {
+          const minQty   = parseFloat(instrInfo.min_quantity ?? instrInfo.min_qty ?? "0");
+          const stepSize = parseFloat(instrInfo.step ?? instrInfo.quantity_step ?? "0");
+          if (minQty > 0 && rawSize < minQty) {
+            return this.skip(signal,
+              `size ${rawSize.toFixed(6)} < min qty ${minQty} for ${symbol} — increase defaultSizeUsdt`
+            );
+          }
+          // Round down to nearest step
+          if (stepSize > 0) {
+            rawSize = Math.floor(rawSize / stepSize) * stepSize;
+          }
+        }
+      } catch { /* non-fatal — proceed with raw size */ }
+    }
+    const size = rawSize;
     const slPct = parseFloat(config.stopLossPct ?? "0.015");
     const tp1Pct = parseFloat(config.tp1Pct ?? "0.015");
 

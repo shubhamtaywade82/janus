@@ -25,7 +25,16 @@ export const logLevelEnum = pgEnum("log_level", ["info", "warn", "error", "criti
 export const exchangeEnum = pgEnum("exchange", ["coindcx", "binance"]);
 export const marginModeEnum = pgEnum("margin_mode", ["isolated", "cross"]);
 export const marginCurrencyEnum = pgEnum("margin_currency", ["USDT", "INR"]);
-export const strategyTypeEnum = pgEnum("strategy_type", ["scalping", "intraday", "swing"]);
+export const strategyTypeEnum = pgEnum("strategy_type", [
+  "scalping",
+  "intraday",
+  "swing",
+  "grid",
+  "momentum_reversal",
+  "bb_reversion",
+  "ml_sizing",
+  "scalping_micro",
+]);
 
 // ─── Users Table (Auth) ───
 export const users = pgTable("users", {

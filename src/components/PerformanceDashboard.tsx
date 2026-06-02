@@ -1,6 +1,6 @@
 import { trpc } from "@/providers/trpc";
 import { cn } from "@/lib/utils";
-import { createChart, ColorType, LineStyle } from "lightweight-charts";
+import { createChart, ColorType, LineSeries } from "lightweight-charts";
 import { useEffect, useRef } from "react";
 import { TrendingUp, TrendingDown, Target, Zap } from "lucide-react";
 
@@ -28,7 +28,7 @@ function MiniEquityCurve({ data }: { data: EquityPoint[] }) {
       handleScale: false,
     });
 
-    const series = chart.addLineSeries({
+    const series = chart.addSeries(LineSeries, {
       color: "#22c55e",
       lineWidth: 2,
       lastValueVisible: false,
@@ -73,7 +73,6 @@ export function PerformanceDashboard({ userId = 1 }: { userId?: number }) {
     ? metrics.profitFactor.toFixed(2)
     : "—";
 
-  const streakColor = metrics.currentStreak > 0 ? "text-[#22c55e]" : metrics.currentStreak < 0 ? "text-[#ef4444]" : "text-[#71717a]";
   const streakLabel = metrics.currentStreak > 0
     ? `+${metrics.currentStreak}W`
     : metrics.currentStreak < 0

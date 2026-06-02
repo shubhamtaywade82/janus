@@ -10,7 +10,7 @@ import {
   aggregateOrderBookMetrics,
   aggregateTradeTape,
 } from "../services/confluence";
-import { fetchOrderBook, fetchRecentTrades, fetchKlines, SUPPORTED_PAIRS } from "../services/binance";
+import { fetchKlines, SUPPORTED_PAIRS } from "../services/binance";
 import { subscribeToSymbol } from "../services/streaming";
 import { marketStateManager } from "../services/market-state";
 import { STRATEGY_CONFIGS, type StrategyType } from "../services/strategy-config";
@@ -21,7 +21,12 @@ import {
   evaluateMLSizing,
   evaluateScalpingMicro
 } from "../services/strategies";
-import { detectRegimeForSymbol, latestRegimeCache, type RegimeResult } from "../services/regime-detector";
+import {
+  detectRegimeForSymbol,
+  latestRegimeCache,
+  regimeToStrategy,
+  type RegimeResult,
+} from "../services/regime-detector";
 import { globalAutoExecutor } from "../services/auto-executor";
 
 // ─── Signal update event bus ───
@@ -32,7 +37,7 @@ signalEvents.setMaxListeners(50);
 async function getConfluenceInput(binanceSymbol: string) {
   const state = marketStateManager.get(binanceSymbol);
 
-  // 1. Order Book Metrics
+  // 1. Order Book Metrics — WS-only, never REST (prevents IP ban from 8×/tick calls)
   let obMetrics;
   if (state && state.orderBook) {
     obMetrics = {
@@ -44,11 +49,11 @@ async function getConfluenceInput(binanceSymbol: string) {
       midPrice: state.metrics.midPrice,
     };
   } else {
-    const orderBook = await fetchOrderBook(binanceSymbol, 50);
-    obMetrics = aggregateOrderBookMetrics(orderBook.bids, orderBook.asks);
+    // WS not ready yet — neutral metrics; microstructure score will be 50 (no edge)
+    obMetrics = { spread: 0, spreadPercent: 0.05, bidDepth: 0, askDepth: 0, imbalance: 0, midPrice: 0 };
   }
 
-  // 2. Trade Tape Metrics
+  // 2. Trade Tape Metrics — WS-only, never REST
   let tapeMetrics;
   if (state && state.tradeWindow.size() > 0) {
     const trades = state.tradeWindow.values();
@@ -60,14 +65,8 @@ async function getConfluenceInput(binanceSymbol: string) {
       }))
     );
   } else {
-    const recentTrades = await fetchRecentTrades(binanceSymbol, 50);
-    tapeMetrics = aggregateTradeTape(
-      recentTrades.map((t) => ({
-        price: t.price,
-        qty: t.qty,
-        isBuyerMaker: t.isBuyerMaker,
-      }))
-    );
+    // WS not ready yet — neutral metrics
+    tapeMetrics = { buyVolume: 0, sellVolume: 0, delta: 0, makerRatio: 0.5, avgTradeSize: 0, tradeCount: 0 };
   }
 
   // 3. Kline prices and volumes
@@ -97,11 +96,19 @@ async function getConfluenceInput(binanceSymbol: string) {
     highs = sorted.map((k) => parseFloat(k.high));
     lows = sorted.map((k) => parseFloat(k.low));
   } else {
-    const klines = await fetchKlines(binanceSymbol, "1m", 150);
-    prices = klines.map((k) => parseFloat(k.close));
-    volumes = klines.map((k) => parseFloat(k.volume));
-    highs = klines.map((k) => parseFloat(k.high));
-    lows = klines.map((k) => parseFloat(k.low));
+    try {
+      const klines = await fetchKlines(binanceSymbol, "1m", 150);
+      prices = klines.map((k) => parseFloat(k.close));
+      volumes = klines.map((k) => parseFloat(k.volume));
+      highs = klines.map((k) => parseFloat(k.high));
+      lows = klines.map((k) => parseFloat(k.low));
+    } catch (err: any) {
+      console.warn(`[signal-router] Failed to fetch klines for ${binanceSymbol} via REST (fallback to empty):`, err.message || err);
+      prices = [];
+      volumes = [];
+      highs = [];
+      lows = [];
+    }
   }
 
   // 4. Extra Metrics (from in-memory state manager)
@@ -120,8 +127,28 @@ async function getConfluenceInput(binanceSymbol: string) {
 // ─── Auto-analysis loop ───
 let autoAnalysisTimer: ReturnType<typeof setTimeout> | null = null;
 let activeStrategyType: StrategyType = "intraday";
+let autoRegimeDetect = true;  // when true, regime detector drives strategy selection
+let lastRegimeDetectAt = 0;
+const REGIME_DETECT_INTERVAL_MS = 60_000; // max once per 60s regardless of signal loop speed
 
 async function runAutoAnalysis() {
+  // ─── Regime detection — throttled to once per 60s (prevents REST ban on fast loops like scalping_micro 2s) ───
+  if (autoRegimeDetect && Date.now() - lastRegimeDetectAt >= REGIME_DETECT_INTERVAL_MS) {
+    lastRegimeDetectAt = Date.now();
+    try {
+      const ethRegime = await detectRegimeForSymbol("ETHUSDT");
+      latestRegimeCache.set("ETHUSDT", ethRegime);
+      const suggestedStrategy = regimeToStrategy(ethRegime.regime);
+      if (suggestedStrategy !== activeStrategyType) {
+        console.log(`[signal-router] Regime auto-switch: ${activeStrategyType} → ${suggestedStrategy} (${ethRegime.regime})`);
+        activeStrategyType = suggestedStrategy;
+        signalEvents.emit("strategy-switch", { from: activeStrategyType, to: suggestedStrategy, regime: ethRegime.regime, reason: ethRegime.reason });
+      }
+    } catch (err) {
+      console.error("[signal-router] Regime detection failed:", err);
+    }
+  }
+
   const config = STRATEGY_CONFIGS[activeStrategyType];
   const batchSignals: typeof signals.$inferSelect[] = [];
   try {
@@ -129,8 +156,8 @@ async function runAutoAnalysis() {
     for (const pair of SUPPORTED_PAIRS) {
       try {
         const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = await getConfluenceInput(pair.binance);
-        
-        let signalData;
+
+        let signalData: typeof signals.$inferInsert;
         const currentPrice = prices[prices.length - 1] || 0;
 
         if (activeStrategyType === "grid") {
@@ -199,7 +226,7 @@ async function runAutoAnalysis() {
             metadata: res.metadata,
           };
         } else {
-          // Standard Confluence
+          // Standard Confluence (intraday / swing / scalping)
           const analysis = analyzeConfluence(
             pair.coindcx,
             obMetrics,
@@ -243,27 +270,92 @@ async function runAutoAnalysis() {
   autoAnalysisTimer = setTimeout(runAutoAnalysis, config.signalIntervalMs);
 }
 
-export function startAutoAnalysis(strategyType: StrategyType = "intraday") {
+// Bootstrap database with historical klines once on startup to avoid REST rate limits during analysis
+async function bootstrapHistoricalKlines() {
+  console.log("[signal-router] Bootstrapping historical klines for supported pairs...");
+  const db = getDb();
+  for (const pair of SUPPORTED_PAIRS) {
+    try {
+      // Check if we already have enough klines in DB
+      const existing = await db
+        .select({ id: marketData.id })
+        .from(marketData)
+        .where(
+          and(
+            eq(marketData.symbol, pair.binance),
+            eq(marketData.timeframe, "1m")
+          )
+        )
+        .limit(50)
+        .catch(() => []);
+
+      if (existing.length < 50) {
+        console.log(`[signal-router] Fetching historical klines for ${pair.binance} via REST to bootstrap DB...`);
+        const klines = await fetchKlines(pair.binance, "1m", 150);
+        for (const k of klines) {
+          await db.insert(marketData).values({
+            symbol: pair.binance,
+            timeframe: "1m",
+            timestamp: new Date(k.openTime || k.closeTime || Date.now()),
+            open: String(k.open),
+            high: String(k.high),
+            low: String(k.low),
+            close: String(k.close),
+            volume: String(k.volume),
+            quoteVolume: String(k.quoteVolume || "0"),
+            tradeCount: k.trades || 0,
+          }).onConflictDoUpdate({
+            target: [marketData.symbol, marketData.timeframe, marketData.timestamp],
+            set: {
+              open: String(k.open),
+              high: String(k.high),
+              low: String(k.low),
+              close: String(k.close),
+              volume: String(k.volume),
+              quoteVolume: String(k.quoteVolume || "0"),
+              tradeCount: k.trades || 0,
+            }
+          }).catch(() => {});
+        }
+      }
+    } catch (err: any) {
+      console.warn(`[signal-router] Failed to bootstrap klines for ${pair.binance}:`, err.message || err);
+    }
+    // Sleep a bit to avoid hitting rate limits on startup
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  }
+  console.log("[signal-router] Historical klines bootstrapping completed.");
+}
+
+export function startAutoAnalysis(strategyType: StrategyType = "intraday", autoSwitch?: boolean) {
+  // autoSwitch=true → regime detector drives strategy; autoSwitch=false → pin to strategyType
+  if (autoSwitch !== undefined) autoRegimeDetect = autoSwitch;
+
   if (autoAnalysisTimer) {
-    if (activeStrategyType === strategyType) return;
+    if (activeStrategyType === strategyType && autoSwitch === undefined) return; // no change
     clearTimeout(autoAnalysisTimer);
     autoAnalysisTimer = null;
   }
 
   activeStrategyType = strategyType;
 
+  // Run bootstrapping in background
+  bootstrapHistoricalKlines().catch((err) => {
+    console.error("[signal-router] Bootstrapping failed:", err);
+  });
+
   for (const pair of SUPPORTED_PAIRS) {
     subscribeToSymbol(pair.binance);
   }
 
-  console.log(`[signal-router] Starting auto-analysis: strategy=${strategyType} interval=${STRATEGY_CONFIGS[strategyType].signalIntervalMs}ms`);
+  const mode = autoRegimeDetect ? "regime-auto" : "fixed";
+  console.log(`[signal-router] Starting auto-analysis strategy=${strategyType} mode=${mode} interval=${STRATEGY_CONFIGS[strategyType].signalIntervalMs}ms`);
   runAutoAnalysis();
   // First regime detection 15s after startup, then every 60s
   setTimeout(runRegimeDetection, 15_000);
 }
 
 // ─── Regime detection + auto strategy switch ───
-let regimeTimer: ReturnType<typeof setTimeout> | null = null;
 
 async function runRegimeDetection() {
   try {
@@ -290,7 +382,7 @@ async function runRegimeDetection() {
   } catch (err) {
     console.error("[regime] Detection failed:", err);
   }
-  regimeTimer = setTimeout(runRegimeDetection, 60_000);
+  setTimeout(runRegimeDetection, 60_000);
 }
 
 export const signalRouter = createRouter({

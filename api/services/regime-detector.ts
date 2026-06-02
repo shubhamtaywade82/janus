@@ -36,13 +36,18 @@ regimeEvents.setMaxListeners(20);
 
 // ─── Regime → Strategy mapping ───
 export const REGIME_STRATEGY_MAP: Record<RegimeType, StrategyType> = {
-  ranging_tight:   "scalping_micro",
-  ranging:         "bb_reversion",
-  reversal:        "momentum_reversal",
-  intraday_trend:  "intraday",
-  swing_trend:     "swing",
-  high_volatility: "intraday",
+  ranging_tight:   "scalping_micro",  // ADX<15 + tight spread → pure microstructure
+  ranging:         "bb_reversion",    // ADX<20 normal → mean-revert to BB middle
+  reversal:        "momentum_reversal", // RSI extreme → catch exhaustion
+  intraday_trend:  "intraday",         // ADX 20-30 → EMA + momentum
+  swing_trend:     "swing",            // ADX>30 + 4h trend confirmed
+  high_volatility: "intraday",         // ATR>2% → wider stops, trend-follow
 };
+
+// `scalping`, `grid`, `ml_sizing` are manual-only strategies:
+// - scalping:    set via bot.setStrategy() when you want fast confluence scalps
+// - grid:        set manually for known consolidation zones
+// - ml_sizing:   set manually to overlay conviction-based sizing on any trend
 
 export function classifyRegime(input: RegimeInput): RegimeType {
   // Priority 1: Extreme volatility — don't scalp chaos
@@ -125,10 +130,37 @@ function calcATRPct(prices: number[], period = 14): number {
 }
 
 export async function detectRegimeForSymbol(binanceSymbol: string): Promise<RegimeResult> {
-  const [klines1h, klines4h] = await Promise.all([
-    fetchKlines(binanceSymbol, "1h", 60),
-    fetchKlines(binanceSymbol, "4h", 60),
-  ]);
+  let klines1h, klines4h;
+  try {
+    [klines1h, klines4h] = await Promise.all([
+      fetchKlines(binanceSymbol, "1h", 60),
+      fetchKlines(binanceSymbol, "4h", 60),
+    ]);
+  } catch (err: any) {
+    console.warn(`[regime-detector] Failed to fetch klines for ${binanceSymbol} via REST (using cached or default):`, err.message || err);
+    const cached = latestRegimeCache.get(binanceSymbol);
+    if (cached) {
+      return cached;
+    }
+    // Fallback default ranging regime
+    return {
+      regime: "ranging",
+      strategy: "bb_reversion",
+      symbol: binanceSymbol,
+      timestamp: Date.now(),
+      reason: `API error fallback: ${err.message || err}`,
+      inputs: {
+        adx1h: 15,
+        atrPct1h: 0.5,
+        ema20_1h: 100,
+        ema50_1h: 100,
+        ema50_4h: 100,
+        ema200_4h: 100,
+        spreadPct: 0.01,
+        rsi1h: 50,
+      },
+    };
+  }
 
   const prices1h = klines1h.map((k) => parseFloat(k.close));
   const prices4h = klines4h.map((k) => parseFloat(k.close));

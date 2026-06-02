@@ -1,8 +1,7 @@
 import { useState } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
-import { cn } from "@/lib/utils";
-import { ShieldAlert, ShieldCheck, AlertTriangle } from "lucide-react";
+import { ShieldAlert, ShieldCheck } from "lucide-react";
 
 export function KillSwitchButton() {
   const [confirming, setConfirming] = useState(false);

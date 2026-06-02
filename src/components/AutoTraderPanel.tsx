@@ -1,14 +1,15 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
 import { cn } from "@/lib/utils";
-import { Bot, Settings, AlertTriangle, CheckCircle, Activity } from "lucide-react";
+import { Bot, Settings, AlertTriangle, Activity } from "lucide-react";
 import { KillSwitchButton } from "./KillSwitchButton";
 
 const ALL_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"];
 
 export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
   const [expanded, setExpanded] = useState(false);
+  const [synced, setSynced] = useState(false);
 
   const { data: config, refetch } = trpc.autoExecutor.getConfig.useQuery({ userId }, {
     refetchInterval: 15_000,
@@ -45,20 +46,23 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
   });
 
   // Sync form from DB config
-  const synced = config !== undefined;
-  if (config && !synced) {
-    setForm({
-      enabled: config.enabled ?? false,
-      targetSymbols: (config.targetSymbols as string[]) ?? ["BTCUSDT", "ETHUSDT"],
-      defaultSizeUsdt: config.defaultSizeUsdt ?? "50",
-      defaultLeverage: config.defaultLeverage ?? 3,
-      stopLossPct: config.stopLossPct ?? "0.015",
-      tp1Pct: config.tp1Pct ?? "0.015",
-      useLlmAdvisor: config.useLlmAdvisor ?? true,
-      llmConfidenceThreshold: config.llmConfidenceThreshold ?? 70,
-      maxTotalPositions: config.maxTotalPositions ?? 3,
-    });
-  }
+  useEffect(() => {
+    if (config && !synced) {
+      setForm({
+        enabled: config.enabled ?? false,
+        targetSymbols: (config.targetSymbols as string[]) ?? ["BTCUSDT", "ETHUSDT"],
+        defaultSizeUsdt: config.defaultSizeUsdt ?? "50",
+        defaultLeverage: config.defaultLeverage ?? 3,
+        stopLossPct: config.stopLossPct ?? "0.015",
+        tp1Pct: config.tp1Pct ?? "0.015",
+        useLlmAdvisor: config.useLlmAdvisor ?? true,
+        llmConfidenceThreshold: config.llmConfidenceThreshold ?? 70,
+        maxTotalPositions: config.maxTotalPositions ?? 3,
+        paperStartingBalance: config.paperStartingBalance ?? "10000",
+      });
+      setSynced(true);
+    }
+  }, [config, synced]);
 
   const handleSave = () => {
     saveConfig.mutate({ userId, ...form, defaultSizeUsdt: form.defaultSizeUsdt });

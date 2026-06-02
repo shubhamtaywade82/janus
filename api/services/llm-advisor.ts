@@ -13,7 +13,7 @@
 
 import { getDb } from "../queries/connection";
 import { llmApiKeys } from "@db/schema";
-import { eq, and, asc } from "drizzle-orm";
+import { eq, asc } from "drizzle-orm";
 import { env } from "../lib/env";
 
 export interface SignalContext {
@@ -58,7 +58,6 @@ interface LlmKey {
 export class LlmAdvisor {
   private keys: LlmKey[] = [];
   private unhealthyUntil = new Map<number, number>(); // keyId → timestamp
-  private refreshTimer: ReturnType<typeof setInterval> | null = null;
 
   async init(): Promise<void> {
     await this.refreshKeys();
@@ -90,7 +89,7 @@ export class LlmAdvisor {
     }
 
     // Refresh DB keys every 60s so UI changes take effect
-    this.refreshTimer = setInterval(() => this.refreshKeys().catch(() => {}), 60_000);
+    setInterval(() => this.refreshKeys().catch(() => {}), 60_000);
     console.log(`[llm-advisor] Initialized with ${this.keys.length} key(s)`);
   }
 

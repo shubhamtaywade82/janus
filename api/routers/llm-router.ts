@@ -2,7 +2,7 @@ import { z } from "zod";
 import { createRouter, publicQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { llmApiKeys, systemLogs } from "@db/schema";
-import { eq, and, desc, asc } from "drizzle-orm";
+import { eq, desc, asc } from "drizzle-orm";
 import { observable } from "@trpc/server/observable";
 import { globalLlmAdvisor } from "../services/llm-advisor";
 import { EventEmitter } from "events";

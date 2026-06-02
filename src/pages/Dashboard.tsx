@@ -31,7 +31,7 @@ interface KlineData {
 }
 
 // ─── TradingView Lightweight Chart Component ───
-const MiniChart = ({ data, positions, lastPrice, symbol }: { data: KlineData[]; positions: any[]; lastPrice: number; symbol: string }) => {
+const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore }: { data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string; onLoadMore?: (beforeTime: number) => void }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
   const [chartInitialized, setChartInitialized] = useState(false);
@@ -92,6 +92,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol }: { data: KlineData[]; 
   const dataRef = useRef<KlineData[]>(data);
   const prevLastTimeRef = useRef<number | null>(null);
   const prevDataLenRef = useRef<number>(0);
+  const prevSymbolRef = useRef<string>(symbol);
+  const prevIntervalRef = useRef<string>(interval);
+  const isLoadingMoreRef = useRef(false);
+  const onLoadMoreRef = useRef(onLoadMore);
 
   // ─── Tick animation: persistent lerp loop chasing target ───
   const animFrameRef = useRef<number | null>(null);
@@ -127,10 +131,9 @@ const MiniChart = ({ data, positions, lastPrice, symbol }: { data: KlineData[]; 
     animFrameRef.current = requestAnimationFrame(loop);
   }, []);
 
-  // Keep dataRef updated
-  useEffect(() => {
-    dataRef.current = data;
-  }, [data]);
+  // Keep refs updated
+  useEffect(() => { dataRef.current = data; }, [data]);
+  useEffect(() => { onLoadMoreRef.current = onLoadMore; }, [onLoadMore]);
 
   // 1. Initialize Chart instance once
   useEffect(() => {
@@ -262,6 +265,18 @@ const MiniChart = ({ data, positions, lastPrice, symbol }: { data: KlineData[]; 
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
 
+    // Lazy load older candles when user scrolls to the left edge
+    chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (!range) return;
+      // When left edge approaches the first bar (< 5 bars left of data start)
+      if (range.from > 5) return;
+      if (isLoadingMoreRef.current) return;
+      const oldest = dataRef.current[0];
+      if (!oldest) return;
+      isLoadingMoreRef.current = true;
+      onLoadMoreRef.current?.(oldest.openTime);
+    });
+
     setChartInitialized(true);
 
     return () => {
@@ -328,7 +343,9 @@ const MiniChart = ({ data, positions, lastPrice, symbol }: { data: KlineData[]; 
       });
       candlestickSeriesRef.current.setData(chartData);
       volumeSeriesRef.current.setData(volumeData);
-      if (chartRef.current) {
+
+      const isSymbolOrIntervalChange = prevSymbolRef.current !== symbol || prevIntervalRef.current !== interval;
+      if (chartRef.current && isSymbolOrIntervalChange) {
         chartRef.current.timeScale().fitContent();
         chartRef.current.timeScale().scrollToPosition(8, false);
       }
@@ -340,6 +357,9 @@ const MiniChart = ({ data, positions, lastPrice, symbol }: { data: KlineData[]; 
 
     prevDataLenRef.current = data.length;
     prevLastTimeRef.current = lastTime;
+    prevSymbolRef.current = symbol;
+    prevIntervalRef.current = interval;
+    isLoadingMoreRef.current = false; // allow next lazy load after chart updated
 
     // Update HUD with live last candle
     const o = parseFloat(last.open);
@@ -355,7 +375,37 @@ const MiniChart = ({ data, positions, lastPrice, symbol }: { data: KlineData[]; 
       pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
       isGreen: c >= o,
     });
-  }, [data]);
+  }, [data, symbol, interval]);
+
+  // 3. Live Price tick updates for non-1m timeframes using lastPrice prop
+  useEffect(() => {
+    if (!candlestickSeriesRef.current || !volumeSeriesRef.current || data.length === 0 || interval === "1m" || lastPrice <= 0) return;
+
+    const last = data[data.length - 1];
+    const lastTime = last.openTime / 1000;
+    const o = parseFloat(last.open);
+    const targetClose = lastPrice;
+    const h = Math.max(parseFloat(last.high), targetClose);
+    const l = Math.min(parseFloat(last.low), targetClose);
+    const vol = parseFloat(last.volume);
+
+    if (animCurrent.current.close === 0) animCurrent.current.close = targetClose;
+
+    animTarget.current = { time: lastTime, open: o, high: h, low: l, close: targetClose, vol };
+    startAnimLoop();
+
+    const pct = ((targetClose - o) / o) * 100;
+    setHudData({
+      time: new Date(last.openTime).toLocaleString(),
+      open: o.toFixed(2),
+      high: h.toFixed(2),
+      low: l.toFixed(2),
+      close: targetClose.toFixed(2),
+      volume: vol.toFixed(2),
+      pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
+      isGreen: targetClose >= o,
+    });
+  }, [lastPrice, interval, data]);
 
   // Draw custom position lines (entry price and liquidation price) with empty titles
   // so the HTML overlay can render custom left/right aligned labels on top.
@@ -1290,11 +1340,15 @@ const Dashboard = () => {
   const [klines, setKlines] = useState<KlineData[]>([]);
   const [ticker, setTicker] = useState<any>(null);
 
+  // Track which symbol+interval the current klines state belongs to
+  const klineKeyRef = useRef(`${selectedSymbol}:${interval}`);
+
   const { data: initialKlines } = trpc.market.klines.useQuery(
     { symbol: selectedSymbol, interval, limit: 150 },
     {
-      staleTime: interval === "1m" ? Infinity : 0,
+      staleTime: 0,           // always fetch fresh when key changes
       refetchInterval: interval === "1m" ? false : 30_000,
+      refetchOnWindowFocus: false,
     }
   );
 
@@ -1303,12 +1357,46 @@ const Dashboard = () => {
     { staleTime: Infinity }
   );
 
+  // Step 1: Clear klines immediately when symbol or interval changes — prevents
+  // stale data from the previous query key from briefly rendering on the chart.
   useEffect(() => {
-    if (initialKlines) {
-      // Reset chart update tracking refs on symbol/interval change
+    const newKey = `${selectedSymbol}:${interval}`;
+    if (klineKeyRef.current !== newKey) {
+      klineKeyRef.current = newKey;
+      setKlines([]);
+    }
+  }, [selectedSymbol, interval]);
+
+  // Step 2: Set klines only when fresh data matching the current key arrives.
+  useEffect(() => {
+    if (initialKlines && initialKlines.length > 0) {
       setKlines(initialKlines);
     }
-  }, [initialKlines, selectedSymbol, interval]);
+  }, [initialKlines]);
+
+  const utils = trpc.useUtils();
+
+  // Lazy load older candles when user scrolls left past the start of loaded data
+  const handleLoadMore = useCallback(async (beforeTime: number) => {
+    try {
+      const older = await utils.market.klines.fetch({
+        symbol: selectedSymbol,
+        interval,
+        limit: 200,
+        endTime: beforeTime - 1,  // fetch candles strictly before oldest loaded candle
+      });
+      if (older && older.length > 0) {
+        setKlines((prev) => {
+          // Deduplicate: skip candles already in state
+          const existingTimes = new Set(prev.map((k) => k.openTime));
+          const fresh = older.filter((k) => !existingTimes.has(k.openTime));
+          return fresh.length > 0 ? [...fresh, ...prev] : prev;
+        });
+      }
+    } catch (err) {
+      console.warn("[chart] lazy load failed:", err);
+    }
+  }, [selectedSymbol, interval, utils]);
 
   useEffect(() => {
     if (initialTicker && !Array.isArray(initialTicker)) {
@@ -1409,7 +1497,6 @@ const Dashboard = () => {
   }, [instrInfo?.currentLeverage]);
 
   const createPosition = trpc.trading.createPosition.useMutation();
-  const utils = trpc.useUtils();
 
   const { data: breakevenMap } = trpc.trading.feeBreakevenMap.useQuery(
     { takerFeeRate: 0.0005 },
@@ -1536,11 +1623,17 @@ const Dashboard = () => {
           {/* Chart Area */}
           <div className="flex-1 bg-[#09090b] border-b border-[#27272a] overflow-hidden">
             {klines && klines.length > 0 ? (
-              <MiniChart data={klines as KlineData[]} positions={symbolPositions} lastPrice={lastPrice} symbol={selectedSymbol} />
-            ) : (
+              <MiniChart data={klines as KlineData[]} positions={symbolPositions} lastPrice={lastPrice} symbol={selectedSymbol} interval={interval} onLoadMore={handleLoadMore} />
+            ) : initialKlines === null || initialKlines === undefined ? (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
                 <RefreshCw size={16} className="animate-spin mr-2" />
-                Loading market data...
+                Loading {interval} candles…
+              </div>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full gap-2 text-[#71717a] text-sm">
+                <RefreshCw size={16} className="opacity-40" />
+                <span>No {interval} data — WS accumulating 1m candles</span>
+                <span className="text-[10px] text-[#3f3f46]">Switch to 1m for live data</span>
               </div>
             )}
           </div>

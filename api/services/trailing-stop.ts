@@ -1,6 +1,6 @@
 import { tradingEvents, markPriceCache } from "./coindcx-ws";
 import { latestTickerCache } from "./streaming";
-import { STRATEGY_CONFIGS, type StrategyType } from "./strategy-config";
+import { type StrategyType } from "./strategy-config";
 import { getDb } from "../queries/connection";
 import { positions } from "@db/schema";
 import { eq, and } from "drizzle-orm";

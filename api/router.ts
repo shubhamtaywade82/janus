@@ -4,6 +4,7 @@ import { tradingRouter } from "./routers/trading-router";
 import { signalRouter } from "./routers/signal-router";
 import { logsRouter } from "./routers/logs-router";
 import { telegramRouter } from "./routers/telegram-router";
+import { botRouter } from "./routers/bot-router";
 import { autoExecutorRouter } from "./routers/auto-executor-router";
 import { llmRouter } from "./routers/llm-router";
 import { createRouter, publicQuery } from "./middleware";
@@ -16,6 +17,7 @@ export const appRouter = createRouter({
   signal: signalRouter,
   logs: logsRouter,
   telegram: telegramRouter,
+  bot: botRouter,
   autoExecutor: autoExecutorRouter,
   llm: llmRouter,
 });

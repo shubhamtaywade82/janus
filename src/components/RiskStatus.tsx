@@ -1,4 +1,3 @@
-import { useEffect } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
 import { cn } from "@/lib/utils";
