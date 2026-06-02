@@ -10,7 +10,7 @@ import {
   aggregateOrderBookMetrics,
   aggregateTradeTape,
 } from "../services/confluence";
-import { fetchOrderBook, fetchRecentTrades, fetchKlines, SUPPORTED_PAIRS } from "../services/binance";
+import { fetchKlines, SUPPORTED_PAIRS } from "../services/binance";
 import { subscribeToSymbol } from "../services/streaming";
 import { marketStateManager } from "../services/market-state";
 import { STRATEGY_CONFIGS, type StrategyType } from "../services/strategy-config";
@@ -37,7 +37,7 @@ signalEvents.setMaxListeners(50);
 async function getConfluenceInput(binanceSymbol: string) {
   const state = marketStateManager.get(binanceSymbol);
 
-  // 1. Order Book Metrics
+  // 1. Order Book Metrics — WS-only, never REST (prevents IP ban from 8×/tick calls)
   let obMetrics;
   if (state && state.orderBook) {
     obMetrics = {
@@ -49,16 +49,11 @@ async function getConfluenceInput(binanceSymbol: string) {
       midPrice: state.metrics.midPrice,
     };
   } else {
-    try {
-      const orderBook = await fetchOrderBook(binanceSymbol, 50);
-      obMetrics = aggregateOrderBookMetrics(orderBook.bids, orderBook.asks);
-    } catch (err: any) {
-      console.warn(`[signal-router] Failed to fetch order book for ${binanceSymbol} via REST (fallback to empty):`, err.message || err);
-      obMetrics = { spread: 0, spreadPercent: 0, bidDepth: 0, askDepth: 0, imbalance: 0, midPrice: 0 };
-    }
+    // WS not ready yet — neutral metrics; microstructure score will be 50 (no edge)
+    obMetrics = { spread: 0, spreadPercent: 0.05, bidDepth: 0, askDepth: 0, imbalance: 0, midPrice: 0 };
   }
 
-  // 2. Trade Tape Metrics
+  // 2. Trade Tape Metrics — WS-only, never REST
   let tapeMetrics;
   if (state && state.tradeWindow.size() > 0) {
     const trades = state.tradeWindow.values();
@@ -70,19 +65,8 @@ async function getConfluenceInput(binanceSymbol: string) {
       }))
     );
   } else {
-    try {
-      const recentTrades = await fetchRecentTrades(binanceSymbol, 50);
-      tapeMetrics = aggregateTradeTape(
-        recentTrades.map((t) => ({
-          price: t.price,
-          qty: t.qty,
-          isBuyerMaker: t.isBuyerMaker,
-        }))
-      );
-    } catch (err: any) {
-      console.warn(`[signal-router] Failed to fetch trades for ${binanceSymbol} via REST (fallback to empty):`, err.message || err);
-      tapeMetrics = { buyVolume: 0, sellVolume: 0, delta: 0, makerRatio: 0.5, avgTradeSize: 0, tradeCount: 0 };
-    }
+    // WS not ready yet — neutral metrics
+    tapeMetrics = { buyVolume: 0, sellVolume: 0, delta: 0, makerRatio: 0.5, avgTradeSize: 0, tradeCount: 0 };
   }
 
   // 3. Kline prices and volumes
