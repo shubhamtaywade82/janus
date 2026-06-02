@@ -104,12 +104,25 @@ export async function fetchPortfolioData(userId: number) {
           const marginCurrency = p.margin_currency_short_name || p.margin_currency || "USDT";
           const isInrMargin = marginCurrency === "INR";
 
-          // tickerMap keyed by Binance symbol (ETHUSDT), not CoinDCX pair (B-ETH_USDT)
-          const lastPrice = tickerMap.get(symbol) || parseFloat(p.mark_price || p.avg_price);
+          // Price priority:
+          //   1. p.mark_price  — CoinDCX mark price (what CoinDCX uses for PnL/liquidation)
+          //   2. markPriceCache — from CoinDCX private WS (freshest)
+          //   3. latestTickerCache — Binance last price (fallback only — can differ from CDX mark price)
+          const markPriceFromApi = parseFloat(p.mark_price || "0");
+          const markPriceFromWs = markPriceCache.get(p.pair) ?? 0;
+          const binanceLastPrice = tickerMap.get(symbol) ?? 0;
+          const lastPrice = (markPriceFromApi > 0 ? markPriceFromApi : 0)
+            || markPriceFromWs
+            || binanceLastPrice
+            || parseFloat(p.avg_price);
           const entryPrice = parseFloat(p.avg_price);
 
+          // Use exchange-reported unrealizedPnl if available (most accurate — matches CoinDCX app)
           let unrealizedPnl = 0;
-          if (side === "long") {
+          const exchangePnl = parseFloat(p.unrealized_pnl ?? p.unrealised_pnl ?? "");
+          if (!isNaN(exchangePnl) && exchangePnl !== 0) {
+            unrealizedPnl = exchangePnl;
+          } else if (side === "long") {
             unrealizedPnl = (lastPrice - entryPrice) * absSize;
           } else {
             unrealizedPnl = (entryPrice - lastPrice) * absSize;
@@ -372,11 +385,19 @@ export const tradingRouter = createRouter({
               const marginCurrency = p.margin_currency_short_name || p.margin_currency || "USDT";
               const isInrMargin = marginCurrency === "INR";
 
-              const lastPrice = tickerMap.get(symbol) || parseFloat(p.mark_price || p.avg_price);
+              const markPriceFromApi2 = parseFloat(p.mark_price || "0");
+              const markPriceFromWs2 = markPriceCache.get(p.pair) ?? 0;
+              const lastPrice = (markPriceFromApi2 > 0 ? markPriceFromApi2 : 0)
+                || markPriceFromWs2
+                || tickerMap.get(symbol)
+                || parseFloat(p.avg_price);
               const entryPrice = parseFloat(p.avg_price);
 
+              const exchangePnl2 = parseFloat(p.unrealized_pnl ?? p.unrealised_pnl ?? "");
               let unrealizedPnl = 0;
-              if (side === "long") {
+              if (!isNaN(exchangePnl2) && exchangePnl2 !== 0) {
+                unrealizedPnl = exchangePnl2;
+              } else if (side === "long") {
                 unrealizedPnl = (lastPrice - entryPrice) * absSize;
               } else {
                 unrealizedPnl = (entryPrice - lastPrice) * absSize;

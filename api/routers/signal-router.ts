@@ -24,8 +24,6 @@ import {
 import {
   detectRegimeForSymbol,
   latestRegimeCache,
-  regimeToStrategy,
-  type RegimeResult,
 } from "../services/regime-detector";
 import { globalAutoExecutor } from "../services/auto-executor";
 
@@ -124,179 +122,138 @@ async function getConfluenceInput(binanceSymbol: string) {
   return { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics };
 }
 
-// ─── Auto-analysis loop ───
+// ─── Per-symbol strategy + timing state ───
+// Each symbol gets its own regime-detected strategy and its own analysis schedule.
+const symbolStrategyMap = new Map<string, StrategyType>(); // binanceSymbol → strategy
+const symbolLastAnalyzedAt = new Map<string, number>();    // binanceSymbol → last analysis ms
+
 let autoAnalysisTimer: ReturnType<typeof setTimeout> | null = null;
-let activeStrategyType: StrategyType = "intraday";
-let autoRegimeDetect = true;  // when true, regime detector drives strategy selection
+let activeStrategyType: StrategyType = "intraday"; // fallback / manual-pin mode
+let autoRegimeDetect = true;
 let lastRegimeDetectAt = 0;
-const REGIME_DETECT_INTERVAL_MS = 60_000; // max once per 60s regardless of signal loop speed
+const REGIME_DETECT_INTERVAL_MS = 60_000;
+const MIN_LOOP_MS = 2_000; // loop ticks every 2s; per-symbol interval gates actual scoring
+
+// ─── Signal evaluator — routes to correct strategy evaluator for a symbol ───
+function evaluateSymbolSignal(
+  coindcxSymbol: string,
+  strategy: StrategyType,
+  currentPrice: number,
+  prices: number[],
+  volumes: number[],
+  highs: number[],
+  lows: number[],
+  obMetrics: ReturnType<typeof aggregateOrderBookMetrics>,
+  tapeMetrics: ReturnType<typeof aggregateTradeTape>,
+  extraMetrics?: Record<string, unknown>
+): typeof signals.$inferInsert {
+  const config = STRATEGY_CONFIGS[strategy];
+
+  if (strategy === "grid") {
+    const res = evaluateGridStrategy(currentPrice, prices, config.threshold);
+    return { symbol: coindcxSymbol, microScore: String(res.score), intraScore: "50.00", swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
+  }
+  if (strategy === "momentum_reversal") {
+    const res = evaluateMomentumReversal(currentPrice, prices, config.threshold);
+    return { symbol: coindcxSymbol, microScore: "50.00", intraScore: String(res.score), swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
+  }
+  if (strategy === "bb_reversion") {
+    const res = evaluateBBReversion(currentPrice, prices, config.threshold);
+    return { symbol: coindcxSymbol, microScore: "50.00", intraScore: String(res.score), swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
+  }
+  if (strategy === "ml_sizing") {
+    const res = evaluateMLSizing(currentPrice, prices, highs, lows, config.threshold);
+    return { symbol: coindcxSymbol, microScore: "50.00", intraScore: "50.00", swingScore: String(res.score), compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
+  }
+  if (strategy === "scalping_micro") {
+    const res = evaluateScalpingMicro(currentPrice, obMetrics, tapeMetrics, config.threshold);
+    return { symbol: coindcxSymbol, microScore: String(res.score), intraScore: "50.00", swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
+  }
+  // Confluence-based: scalping / intraday / swing
+  const analysis = analyzeConfluence(coindcxSymbol, obMetrics, tapeMetrics, prices, volumes, extraMetrics as any, config.weights, config.threshold);
+  return { symbol: coindcxSymbol, microScore: String(analysis.microScore), intraScore: String(analysis.intraScore), swingScore: String(analysis.swingScore), compositeScore: String(analysis.compositeScore), threshold: String(analysis.threshold), isGated: analysis.isGated, direction: analysis.direction, metadata: { ...analysis.indicators, strategy } };
+}
 
 async function runAutoAnalysis() {
-  // ─── Regime detection — throttled to once per 60s (prevents REST ban on fast loops like scalping_micro 2s) ───
-  if (autoRegimeDetect && Date.now() - lastRegimeDetectAt >= REGIME_DETECT_INTERVAL_MS) {
-    lastRegimeDetectAt = Date.now();
-    try {
-      // Use BTC + ETH as dual proxies — agree = high confidence, disagree = use BTC (market leader)
-      const [btcRegime, ethRegime] = await Promise.allSettled([
-        detectRegimeForSymbol("BTCUSDT"),
-        detectRegimeForSymbol("ETHUSDT"),
-      ]);
+  const now = Date.now();
 
-      const btcResult = btcRegime.status === "fulfilled" ? btcRegime.value : null;
-      const ethResult = ethRegime.status === "fulfilled" ? ethRegime.value : null;
+  // ─── Per-symbol regime detection — all 8 symbols in parallel, throttled to 60s ───
+  if (autoRegimeDetect && now - lastRegimeDetectAt >= REGIME_DETECT_INTERVAL_MS) {
+    lastRegimeDetectAt = now;
+    const regimeResults = await Promise.allSettled(
+      SUPPORTED_PAIRS.map((pair) => detectRegimeForSymbol(pair.binance))
+    );
 
-      // Prefer BTC; fall back to ETH; use whichever is available
-      const primary = btcResult ?? ethResult;
-      if (!primary) throw new Error("Both BTC and ETH regime detection failed");
+    regimeResults.forEach((result, i) => {
+      if (result.status === "fulfilled") {
+        const pair = SUPPORTED_PAIRS[i];
+        const prev = symbolStrategyMap.get(pair.binance);
+        const next = result.value.strategy;
+        latestRegimeCache.set(pair.binance, result.value);
+        symbolStrategyMap.set(pair.binance, next);
 
-      if (btcResult) latestRegimeCache.set("BTCUSDT", btcResult);
-      if (ethResult) latestRegimeCache.set("ETHUSDT", ethResult);
-
-      // If both agree use that; if they disagree defer to BTC (leads the market)
-      const agreedRegime = btcResult && ethResult && btcResult.regime === ethResult.regime
-        ? btcResult.regime
-        : primary.regime;
-
-      const suggestedStrategy = regimeToStrategy(agreedRegime);
-      if (suggestedStrategy !== activeStrategyType) {
-        const prevStrategy = activeStrategyType;
-        const agreement = btcResult && ethResult
-          ? btcResult.regime === ethResult.regime ? "BTC+ETH agree" : `BTC=${btcResult.regime} ETH=${ethResult.regime} → BTC wins`
-          : "single proxy";
-        console.log(`[signal-router] Regime auto-switch: ${prevStrategy} → ${suggestedStrategy} (${agreedRegime}, ${agreement})`);
-        activeStrategyType = suggestedStrategy;
-        signalEvents.emit("strategy-switch", {
-          from: prevStrategy,
-          to: suggestedStrategy,
-          regime: agreedRegime,
-          reason: primary.reason,
-          agreement,
-        });
+        if (prev && prev !== next) {
+          console.log(`[regime] ${pair.binance}: ${prev} → ${next} (${result.value.regime})`);
+          signalEvents.emit("strategy-switch", {
+            symbol: pair.binance,
+            from: prev,
+            to: next,
+            regime: result.value.regime,
+            reason: result.value.reason,
+          });
+        } else if (!prev) {
+          console.log(`[regime] ${pair.binance}: initial strategy = ${next} (${result.value.regime})`);
+        }
       }
-    } catch (err) {
-      console.error("[signal-router] Regime detection failed:", err);
-    }
+    });
   }
 
-  const config = STRATEGY_CONFIGS[activeStrategyType];
   const batchSignals: typeof signals.$inferSelect[] = [];
   try {
     const db = getDb();
+
     for (const pair of SUPPORTED_PAIRS) {
+      // Per-symbol strategy — fall back to activeStrategyType when auto-detect off or not yet detected
+      const strategy = autoRegimeDetect
+        ? (symbolStrategyMap.get(pair.binance) ?? activeStrategyType)
+        : activeStrategyType;
+
+      const config = STRATEGY_CONFIGS[strategy];
+
+      // Skip if this symbol was analyzed too recently for its strategy's interval
+      const lastAt = symbolLastAnalyzedAt.get(pair.binance) ?? 0;
+      if (now - lastAt < config.signalIntervalMs) continue;
+      symbolLastAnalyzedAt.set(pair.binance, now);
+
       try {
         const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = await getConfluenceInput(pair.binance);
-
-        let signalData: typeof signals.$inferInsert;
         const currentPrice = prices[prices.length - 1] || 0;
 
-        if (activeStrategyType === "grid") {
-          const res = evaluateGridStrategy(currentPrice, prices, config.threshold);
-          signalData = {
-            symbol: pair.coindcx,
-            microScore: String(res.score),
-            intraScore: "50.00",
-            swingScore: "50.00",
-            compositeScore: String(res.score),
-            threshold: String(config.threshold),
-            isGated: res.isGated,
-            direction: res.direction,
-            metadata: res.metadata,
-          };
-        } else if (activeStrategyType === "momentum_reversal") {
-          const res = evaluateMomentumReversal(currentPrice, prices, config.threshold);
-          signalData = {
-            symbol: pair.coindcx,
-            microScore: "50.00",
-            intraScore: String(res.score),
-            swingScore: "50.00",
-            compositeScore: String(res.score),
-            threshold: String(config.threshold),
-            isGated: res.isGated,
-            direction: res.direction,
-            metadata: res.metadata,
-          };
-        } else if (activeStrategyType === "bb_reversion") {
-          const res = evaluateBBReversion(currentPrice, prices, config.threshold);
-          signalData = {
-            symbol: pair.coindcx,
-            microScore: "50.00",
-            intraScore: String(res.score),
-            swingScore: "50.00",
-            compositeScore: String(res.score),
-            threshold: String(config.threshold),
-            isGated: res.isGated,
-            direction: res.direction,
-            metadata: res.metadata,
-          };
-        } else if (activeStrategyType === "ml_sizing") {
-          const res = evaluateMLSizing(currentPrice, prices, highs, lows, config.threshold);
-          signalData = {
-            symbol: pair.coindcx,
-            microScore: "50.00",
-            intraScore: "50.00",
-            swingScore: String(res.score),
-            compositeScore: String(res.score),
-            threshold: String(config.threshold),
-            isGated: res.isGated,
-            direction: res.direction,
-            metadata: res.metadata,
-          };
-        } else if (activeStrategyType === "scalping_micro") {
-          const res = evaluateScalpingMicro(currentPrice, obMetrics, tapeMetrics, config.threshold);
-          signalData = {
-            symbol: pair.coindcx,
-            microScore: String(res.score),
-            intraScore: "50.00",
-            swingScore: "50.00",
-            compositeScore: String(res.score),
-            threshold: String(config.threshold),
-            isGated: res.isGated,
-            direction: res.direction,
-            metadata: res.metadata,
-          };
-        } else {
-          // Standard Confluence (intraday / swing / scalping)
-          const analysis = analyzeConfluence(
-            pair.coindcx,
-            obMetrics,
-            tapeMetrics,
-            prices,
-            volumes,
-            extraMetrics,
-            config.weights,
-            config.threshold
-          );
-          signalData = {
-            symbol: pair.coindcx,
-            microScore: String(analysis.microScore),
-            intraScore: String(analysis.intraScore),
-            swingScore: String(analysis.swingScore),
-            compositeScore: String(analysis.compositeScore),
-            threshold: String(analysis.threshold),
-            isGated: analysis.isGated,
-            direction: analysis.direction,
-            metadata: analysis.indicators,
-          };
-        }
+        const signalData = evaluateSymbolSignal(
+          pair.coindcx, strategy, currentPrice,
+          prices, volumes, highs, lows,
+          obMetrics, tapeMetrics, extraMetrics
+        );
 
         const inserted = await db.insert(signals).values(signalData).returning().catch(() => []);
         if (inserted[0]) batchSignals.push(inserted[0]);
       } catch (err) {
-        console.error(`[signal-router] Auto-analysis failed for ${pair.binance}:`, err);
+        console.error(`[signal-router] Analysis failed for ${pair.binance}:`, err);
       }
     }
-    signalEvents.emit("update");
 
-    // Feed gated signals to auto-executor (fire-and-forget)
     if (batchSignals.length > 0) {
+      signalEvents.emit("update");
       globalAutoExecutor.onSignalBatch(batchSignals).catch((err) =>
         console.error("[auto-executor] Batch error:", err)
       );
     }
   } catch (err) {
-    console.error("[signal-router] Auto-analysis loop error:", err);
+    console.error("[signal-router] Loop error:", err);
   }
-  autoAnalysisTimer = setTimeout(runAutoAnalysis, config.signalIntervalMs);
+
+  // Loop always runs at MIN_LOOP_MS (2s); per-symbol intervals gate actual scoring
+  autoAnalysisTimer = setTimeout(runAutoAnalysis, MIN_LOOP_MS);
 }
 
 // Bootstrap database with historical klines once on startup to avoid REST rate limits during analysis
@@ -377,41 +334,9 @@ export function startAutoAnalysis(strategyType: StrategyType = "intraday", autoS
     subscribeToSymbol(pair.binance);
   }
 
-  const mode = autoRegimeDetect ? "regime-auto" : "fixed";
-  console.log(`[signal-router] Starting auto-analysis strategy=${strategyType} mode=${mode} interval=${STRATEGY_CONFIGS[strategyType].signalIntervalMs}ms`);
+  const mode = autoRegimeDetect ? "per-symbol-regime" : "fixed";
+  console.log(`[signal-router] Starting auto-analysis mode=${mode} fallback=${strategyType} loop=${MIN_LOOP_MS}ms`);
   runAutoAnalysis();
-  // First regime detection 15s after startup, then every 60s
-  setTimeout(runRegimeDetection, 15_000);
-}
-
-// ─── Regime detection + auto strategy switch ───
-
-async function runRegimeDetection() {
-  try {
-    // Use BTC as market proxy — it leads most altcoin regimes
-    const result: RegimeResult = await detectRegimeForSymbol("BTCUSDT");
-    latestRegimeCache.set("BTCUSDT", result);
-
-    if (result.strategy !== activeStrategyType) {
-      const prev = activeStrategyType;
-      console.log(`[regime] Auto-switch: ${prev} → ${result.strategy} (regime: ${result.regime} — ${result.reason})`);
-
-      if (autoAnalysisTimer) { clearTimeout(autoAnalysisTimer); autoAnalysisTimer = null; }
-      activeStrategyType = result.strategy;
-      signalEvents.emit("strategy-switch", {
-        from: prev,
-        to: result.strategy,
-        regime: result.regime,
-        reason: result.reason,
-        inputs: result.inputs,
-        timestamp: result.timestamp,
-      });
-      runAutoAnalysis();
-    }
-  } catch (err) {
-    console.error("[regime] Detection failed:", err);
-  }
-  setTimeout(runRegimeDetection, 60_000);
 }
 
 export const signalRouter = createRouter({
@@ -609,19 +534,37 @@ export const signalRouter = createRouter({
   }),
 
   // ─── Current regime + active strategy ───
-  regimeStatus: publicQuery.query(() => {
-    const btc = latestRegimeCache.get("BTCUSDT");
-    return {
-      regime: btc?.regime ?? "intraday_trend",
-      strategy: btc?.strategy ?? activeStrategyType,
-      activeStrategy: activeStrategyType,
-      reason: btc?.reason ?? "no data yet",
-      inputs: btc?.inputs,
-      timestamp: btc?.timestamp ?? null,
-    };
-  }),
+  // ─── Per-symbol regime status ───
+  regimeStatus: publicQuery
+    .input(z.object({ symbol: z.string().optional() }).optional())
+    .query(({ input }) => {
+      if (input?.symbol) {
+        // Single symbol query (used by Dashboard for the selected symbol)
+        const r = latestRegimeCache.get(input.symbol);
+        return {
+          symbol: input.symbol,
+          regime: r?.regime ?? "intraday_trend",
+          strategy: symbolStrategyMap.get(input.symbol) ?? activeStrategyType,
+          reason: r?.reason ?? "no data yet",
+          inputs: r?.inputs,
+          timestamp: r?.timestamp ?? null,
+        };
+      }
+      // All symbols (used by bot overview)
+      const all: Record<string, unknown> = {};
+      for (const pair of SUPPORTED_PAIRS) {
+        const r = latestRegimeCache.get(pair.binance);
+        all[pair.binance] = {
+          regime: r?.regime ?? "unknown",
+          strategy: symbolStrategyMap.get(pair.binance) ?? activeStrategyType,
+          reason: r?.reason ?? "",
+          timestamp: r?.timestamp ?? null,
+        };
+      }
+      return { symbols: all, fallbackStrategy: activeStrategyType, autoRegime: autoRegimeDetect };
+    }),
 
-  // ─── Live regime switch stream ───
+  // ─── Live per-symbol regime switch stream ───
   regimeStream: publicQuery.subscription(() => {
     return observable((emit) => {
       const onSwitch = (data: unknown) => emit.next(data);

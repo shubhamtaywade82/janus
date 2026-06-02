@@ -1606,7 +1606,7 @@ const Dashboard = () => {
               </div>
             </div>
             <div className="flex items-center gap-2">
-              <RegimeIndicator />
+              <RegimeIndicator symbol={selectedSymbol} />
               <div className="h-3 w-px bg-[#27272a]" />
               <span className="text-[10px] text-[#71717a]">
                 H: {tickerData ? parseFloat(tickerData.highPrice).toFixed(2) : "--"}

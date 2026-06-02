@@ -26,23 +26,28 @@ const STRATEGY_LABEL: Record<StrategyType, string> = {
   ml_sizing:          "ML Sizing",
 };
 
-export function RegimeIndicator() {
-  const [switchLog, setSwitchLog] = useState<{ from: string; to: string } | null>(null);
+export function RegimeIndicator({ symbol = "BTCUSDT" }: { symbol?: string }) {
+  const [switchLog, setSwitchLog] = useState<{ from: string; to: string; symbol?: string } | null>(null);
 
-  const { data: status } = trpc.signal.regimeStatus.useQuery(undefined, {
-    refetchInterval: 30_000,
-  });
+  const { data: status } = trpc.signal.regimeStatus.useQuery(
+    { symbol },
+    { refetchInterval: 30_000 }
+  );
 
   trpc.signal.regimeStream.useSubscription(undefined, {
     onData: (data: unknown) => {
-      const d = data as { from: string; to: string; regime: string };
-      setSwitchLog(d);
-      setTimeout(() => setSwitchLog(null), 10_000);
+      const d = data as { from: string; to: string; regime: string; symbol?: string };
+      // Only show switch log if it's for our symbol (or no symbol specified = global)
+      if (!d.symbol || d.symbol === symbol) {
+        setSwitchLog(d);
+        setTimeout(() => setSwitchLog(null), 10_000);
+      }
     },
   });
 
-  const regime = (status?.regime ?? "intraday_trend") as RegimeType;
-  const strategy = (status?.activeStrategy ?? "intraday") as StrategyType;
+  const singleStatus = status as { regime?: string; strategy?: string; reason?: string } | null;
+  const regime = (singleStatus?.regime ?? "intraday_trend") as RegimeType;
+  const strategy = (singleStatus?.strategy ?? "intraday") as StrategyType;
   const cfg = REGIME_CFG[regime] ?? REGIME_CFG.intraday_trend;
 
   return (
