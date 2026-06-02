@@ -118,9 +118,11 @@ async function binanceFetch(url: string, errorPrefix: string): Promise<any> {
 export async function fetchKlines(
   symbol: string,
   interval: string = "1m",
-  limit: number = 150
+  limit: number = 150,
+  endTime?: number          // ms timestamp — fetch candles BEFORE this time
 ): Promise<BinanceKline[]> {
-  const url = `${BINANCE_API_BASE}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+  let url = `${BINANCE_API_BASE}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
+  if (endTime) url += `&endTime=${endTime}`;
   const data = await binanceFetch(url, "Binance klines error") as any[];
   return data.map((d: any[]) => ({
     openTime: d[0],

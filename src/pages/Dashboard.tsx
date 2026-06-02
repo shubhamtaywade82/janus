@@ -31,7 +31,7 @@ interface KlineData {
 }
 
 // ─── TradingView Lightweight Chart Component ───
-const MiniChart = ({ data, positions, lastPrice, symbol, interval }: { data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string }) => {
+const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore }: { data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string; onLoadMore?: (beforeTime: number) => void }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
   const [chartInitialized, setChartInitialized] = useState(false);
@@ -94,6 +94,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval }: { data: Kli
   const prevDataLenRef = useRef<number>(0);
   const prevSymbolRef = useRef<string>(symbol);
   const prevIntervalRef = useRef<string>(interval);
+  const isLoadingMoreRef = useRef(false);
+  const onLoadMoreRef = useRef(onLoadMore);
 
   // ─── Tick animation: persistent lerp loop chasing target ───
   const animFrameRef = useRef<number | null>(null);
@@ -129,10 +131,9 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval }: { data: Kli
     animFrameRef.current = requestAnimationFrame(loop);
   }, []);
 
-  // Keep dataRef updated
-  useEffect(() => {
-    dataRef.current = data;
-  }, [data]);
+  // Keep refs updated
+  useEffect(() => { dataRef.current = data; }, [data]);
+  useEffect(() => { onLoadMoreRef.current = onLoadMore; }, [onLoadMore]);
 
   // 1. Initialize Chart instance once
   useEffect(() => {
@@ -264,6 +265,18 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval }: { data: Kli
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
 
+    // Lazy load older candles when user scrolls to the left edge
+    chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
+      if (!range) return;
+      // When left edge approaches the first bar (< 5 bars left of data start)
+      if (range.from > 5) return;
+      if (isLoadingMoreRef.current) return;
+      const oldest = dataRef.current[0];
+      if (!oldest) return;
+      isLoadingMoreRef.current = true;
+      onLoadMoreRef.current?.(oldest.openTime);
+    });
+
     setChartInitialized(true);
 
     return () => {
@@ -346,6 +359,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval }: { data: Kli
     prevLastTimeRef.current = lastTime;
     prevSymbolRef.current = symbol;
     prevIntervalRef.current = interval;
+    isLoadingMoreRef.current = false; // allow next lazy load after chart updated
 
     // Update HUD with live last candle
     const o = parseFloat(last.open);
@@ -1360,6 +1374,30 @@ const Dashboard = () => {
     }
   }, [initialKlines]);
 
+  const utils = trpc.useUtils();
+
+  // Lazy load older candles when user scrolls left past the start of loaded data
+  const handleLoadMore = useCallback(async (beforeTime: number) => {
+    try {
+      const older = await utils.market.klines.fetch({
+        symbol: selectedSymbol,
+        interval,
+        limit: 200,
+        endTime: beforeTime - 1,  // fetch candles strictly before oldest loaded candle
+      });
+      if (older && older.length > 0) {
+        setKlines((prev) => {
+          // Deduplicate: skip candles already in state
+          const existingTimes = new Set(prev.map((k) => k.openTime));
+          const fresh = older.filter((k) => !existingTimes.has(k.openTime));
+          return fresh.length > 0 ? [...fresh, ...prev] : prev;
+        });
+      }
+    } catch (err) {
+      console.warn("[chart] lazy load failed:", err);
+    }
+  }, [selectedSymbol, interval, utils]);
+
   useEffect(() => {
     if (initialTicker && !Array.isArray(initialTicker)) {
       setTicker(initialTicker);
@@ -1459,7 +1497,6 @@ const Dashboard = () => {
   }, [instrInfo?.currentLeverage]);
 
   const createPosition = trpc.trading.createPosition.useMutation();
-  const utils = trpc.useUtils();
 
   const { data: breakevenMap } = trpc.trading.feeBreakevenMap.useQuery(
     { takerFeeRate: 0.0005 },
@@ -1586,7 +1623,7 @@ const Dashboard = () => {
           {/* Chart Area */}
           <div className="flex-1 bg-[#09090b] border-b border-[#27272a] overflow-hidden">
             {klines && klines.length > 0 ? (
-              <MiniChart data={klines as KlineData[]} positions={symbolPositions} lastPrice={lastPrice} symbol={selectedSymbol} interval={interval} />
+              <MiniChart data={klines as KlineData[]} positions={symbolPositions} lastPrice={lastPrice} symbol={selectedSymbol} interval={interval} onLoadMore={handleLoadMore} />
             ) : (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
                 <RefreshCw size={16} className="animate-spin mr-2" />

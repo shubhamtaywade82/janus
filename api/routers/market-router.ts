@@ -30,11 +30,12 @@ export const marketRouter = createRouter({
         symbol: z.string().default("BTCUSDT"),
         interval: z.string().default("1m"),
         limit: z.number().min(1).max(1000).default(150),
+        endTime: z.number().optional(),   // ms timestamp — fetch candles before this time
       })
     )
     .query(async ({ input }) => {
       try {
-        const klines = await fetchKlines(input.symbol, input.interval, input.limit);
+        const klines = await fetchKlines(input.symbol, input.interval, input.limit, input.endTime);
         // Store in DB for caching
         const db = getDb();
         for (const k of klines.slice(-10)) {
