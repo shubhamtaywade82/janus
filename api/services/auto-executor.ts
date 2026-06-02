@@ -99,6 +99,26 @@ export class AutoExecutor {
     this.state.lastRun = Date.now();
   }
 
+  // Default config used when AUTO_EXECUTE=true but no DB row exists yet
+  private static readonly DEFAULT_CONFIG: AutoExecutorConfig = {
+    id: 0,
+    userId: 1,
+    enabled: true,
+    targetSymbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"],
+    defaultSizeUsdt: "50",
+    defaultLeverage: 3,
+    stopLossPct: "0.015",
+    tp1Pct: "0.015",
+    tp2Pct: "0.030",
+    useLlmAdvisor: false, // off by default until user configures LLM keys
+    llmConfidenceThreshold: 70,
+    maxPositionsPerSymbol: 1,
+    maxTotalPositions: 3,
+    paperStartingBalance: "10000",
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
   private async getConfig(): Promise<AutoExecutorConfig | null> {
     if (this.configCache && Date.now() - this.configCacheAt < this.CONFIG_TTL_MS) {
       return this.configCache;
@@ -110,10 +130,37 @@ export class AutoExecutor {
         .from(autoExecutorConfig)
         .where(eq(autoExecutorConfig.userId, 1))
         .limit(1);
-      this.configCache = rows[0] ?? null;
+
+      if (rows[0]) {
+        this.configCache = rows[0];
+      } else if (env.autoExecute) {
+        // AUTO_EXECUTE=true but no row yet — upsert defaults and use them
+        await db.insert(autoExecutorConfig).values({
+          userId: 1,
+          enabled: true,
+          targetSymbols: AutoExecutor.DEFAULT_CONFIG.targetSymbols as string[],
+          defaultSizeUsdt: AutoExecutor.DEFAULT_CONFIG.defaultSizeUsdt,
+          defaultLeverage: AutoExecutor.DEFAULT_CONFIG.defaultLeverage!,
+          stopLossPct: AutoExecutor.DEFAULT_CONFIG.stopLossPct,
+          tp1Pct: AutoExecutor.DEFAULT_CONFIG.tp1Pct,
+          tp2Pct: AutoExecutor.DEFAULT_CONFIG.tp2Pct,
+          useLlmAdvisor: AutoExecutor.DEFAULT_CONFIG.useLlmAdvisor,
+          llmConfidenceThreshold: AutoExecutor.DEFAULT_CONFIG.llmConfidenceThreshold!,
+          maxPositionsPerSymbol: AutoExecutor.DEFAULT_CONFIG.maxPositionsPerSymbol!,
+          maxTotalPositions: AutoExecutor.DEFAULT_CONFIG.maxTotalPositions!,
+          paperStartingBalance: AutoExecutor.DEFAULT_CONFIG.paperStartingBalance,
+        }).catch(() => {}); // ignore if already exists
+        this.configCache = AutoExecutor.DEFAULT_CONFIG;
+        console.log("[auto-executor] No config row found — created default config (AUTO_EXECUTE=true)");
+      } else {
+        this.configCache = null;
+      }
       this.configCacheAt = Date.now();
     } catch {
-      // Keep stale cache
+      // Keep stale cache; fall back to default if env switch is on
+      if (!this.configCache && env.autoExecute) {
+        this.configCache = AutoExecutor.DEFAULT_CONFIG;
+      }
     }
     return this.configCache;
   }

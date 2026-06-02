@@ -128,10 +128,13 @@ async function getConfluenceInput(binanceSymbol: string) {
 let autoAnalysisTimer: ReturnType<typeof setTimeout> | null = null;
 let activeStrategyType: StrategyType = "intraday";
 let autoRegimeDetect = true;  // when true, regime detector drives strategy selection
+let lastRegimeDetectAt = 0;
+const REGIME_DETECT_INTERVAL_MS = 60_000; // max once per 60s regardless of signal loop speed
 
 async function runAutoAnalysis() {
-  // ─── Regime detection (runs once per loop for ETHUSDT to auto-switch strategy) ───
-  if (autoRegimeDetect) {
+  // ─── Regime detection — throttled to once per 60s (prevents REST ban on fast loops like scalping_micro 2s) ───
+  if (autoRegimeDetect && Date.now() - lastRegimeDetectAt >= REGIME_DETECT_INTERVAL_MS) {
+    lastRegimeDetectAt = Date.now();
     try {
       const ethRegime = await detectRegimeForSymbol("ETHUSDT");
       latestRegimeCache.set("ETHUSDT", ethRegime);
@@ -139,6 +142,7 @@ async function runAutoAnalysis() {
       if (suggestedStrategy !== activeStrategyType) {
         console.log(`[signal-router] Regime auto-switch: ${activeStrategyType} → ${suggestedStrategy} (${ethRegime.regime})`);
         activeStrategyType = suggestedStrategy;
+        signalEvents.emit("strategy-switch", { from: activeStrategyType, to: suggestedStrategy, regime: ethRegime.regime, reason: ethRegime.reason });
       }
     } catch (err) {
       console.error("[signal-router] Regime detection failed:", err);

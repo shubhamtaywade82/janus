@@ -238,19 +238,40 @@ export async function fetchPortfolioData(userId: number) {
         }
       }
 
+      // Always merge paper positions from DB alongside live exchange positions
+      const paperPositions = await db
+        .select()
+        .from(positions)
+        .where(and(eq(positions.userId, userId), eq(positions.status, "open"), eq(positions.isPaper, true)));
+
+      const paperMapped = paperPositions.map((p) => ({
+        ...p,
+        isPaper: true as const,
+        entryPrice: p.entryPrice,
+        currentPrice: latestTickerCache.get(p.symbol)?.lastPrice?.toString() ?? p.currentPrice,
+        unrealizedPnl: p.unrealizedPnl,
+        margin: p.margin,
+      }));
+
+      const allPositions = [
+        ...openPositions.map((p) => ({ ...p, isPaper: false as const })),
+        ...paperMapped,
+      ];
+
       return {
-        openPositionsCount: openPositions.length,
+        openPositionsCount: allPositions.length,
+        livePositionsCount: openPositions.length,
+        paperPositionsCount: paperMapped.length,
         totalUnrealizedPnl: totalUnrealizedPnl.toFixed(4),
         totalRealizedPnl: totalRealizedPnl.toFixed(4),
         totalMargin: totalMargin.toFixed(4),
         walletUsdt: walletUsdt.toFixed(4),
         walletCurrency,
-        availableInr: availableInr.toFixed(4),   // free balance in native currency
-        lockedInr: lockedInr.toFixed(4),          // locked in positions/orders
+        availableInr: availableInr.toFixed(4),
+        lockedInr: lockedInr.toFixed(4),
         usdtInrRate: usdtInrRate.toFixed(4),
-        // equity = wallet + unrealizedPnl; client swaps in live PnL
         totalEquity: walletUsdt + totalUnrealizedPnl,
-        positions: openPositions,
+        positions: allPositions,
         recentTrades,
       };
     } catch (err) {

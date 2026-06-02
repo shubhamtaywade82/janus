@@ -36,13 +36,18 @@ regimeEvents.setMaxListeners(20);
 
 // ─── Regime → Strategy mapping ───
 export const REGIME_STRATEGY_MAP: Record<RegimeType, StrategyType> = {
-  ranging_tight:   "scalping_micro",
-  ranging:         "bb_reversion",
-  reversal:        "momentum_reversal",
-  intraday_trend:  "intraday",
-  swing_trend:     "swing",
-  high_volatility: "intraday",
+  ranging_tight:   "scalping_micro",  // ADX<15 + tight spread → pure microstructure
+  ranging:         "bb_reversion",    // ADX<20 normal → mean-revert to BB middle
+  reversal:        "momentum_reversal", // RSI extreme → catch exhaustion
+  intraday_trend:  "intraday",         // ADX 20-30 → EMA + momentum
+  swing_trend:     "swing",            // ADX>30 + 4h trend confirmed
+  high_volatility: "intraday",         // ATR>2% → wider stops, trend-follow
 };
+
+// `scalping`, `grid`, `ml_sizing` are manual-only strategies:
+// - scalping:    set via bot.setStrategy() when you want fast confluence scalps
+// - grid:        set manually for known consolidation zones
+// - ml_sizing:   set manually to overlay conviction-based sizing on any trend
 
 export function classifyRegime(input: RegimeInput): RegimeType {
   // Priority 1: Extreme volatility — don't scalp chaos

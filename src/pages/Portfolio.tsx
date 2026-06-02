@@ -50,6 +50,11 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
             )}
           />
           <span className="text-xs font-medium text-[#f4f4f5]">{position.symbol}</span>
+          {position.isPaper && (
+            <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-[#f59e0b]/10 text-[#f59e0b] border border-[#f59e0b]/30">
+              PAPER
+            </span>
+          )}
         </div>
       </td>
       <td className="px-3 py-2">
@@ -180,6 +185,7 @@ const SymbolTicker = memo(({ symbol, onPrice }: { symbol: string; onPrice: (sym:
 // ─── Main Portfolio Page ───
 export default function Portfolio() {
   const [statusFilter, setStatusFilter] = useState<string>("open");
+  const [portfolioMode, setPortfolioMode] = useState<"live" | "paper">("live");
 
   // Use portfolioStream subscription for live push updates
   const [portfolio, setPortfolio] = useState<any>(null);
@@ -231,11 +237,28 @@ export default function Portfolio() {
     { enabled: statusFilter !== "open", refetchInterval: 10000 }
   );
 
+  // Always-on direct DB query for paper positions — independent of portfolioStream
+  const { data: allDbOpenPositions } = trpc.trading.positions.useQuery(
+    { userId: 1, status: "open" },
+    { refetchInterval: 5000 }
+  );
+  const paperPositions = (allDbOpenPositions || []).filter((p: any) => p.isPaper);
+  const livePositionsFromStream: any[] = (portfolio?.positions || []).filter((p: any) => !p.isPaper);
+
+  // Paper wallet stats from auto-executor
+  const { data: paperWalletData } = trpc.autoExecutor.paperWallet.useQuery(
+    { userId: 1 },
+    { refetchInterval: 5000 }
+  );
+
   const openPositions: any[] = portfolio?.positions || [];
   const symbols = useMemo(
-    () => [...new Set(openPositions.map((p: any) => p.symbol as string))],
+    () => [...new Set([
+      ...openPositions.map((p: any) => p.symbol as string),
+      ...paperPositions.map((p: any) => p.symbol as string),
+    ])],
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [openPositions.map((p: any) => p.symbol).join(",")]
+    [[...openPositions, ...paperPositions].map((p: any) => p.symbol).join(",")]
   );
 
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
@@ -243,7 +266,13 @@ export default function Portfolio() {
     setLivePrices((prev) => prev[sym] === price ? prev : { ...prev, [sym]: price });
   }, []);
 
-  const allPositions = statusFilter === "open" ? openPositions : (dbPositions || []);
+  // For "open" tab: switch between live (from stream) and paper (from DB direct query)
+  const openLivePositions = livePositionsFromStream;
+  const allPositions = statusFilter !== "open"
+    ? (dbPositions || [])
+    : portfolioMode === "paper"
+      ? paperPositions
+      : openLivePositions;
 
   // Query historical positions and trades for tax metrics
   const { data: closedPositions } = trpc.trading.positions.useQuery(
@@ -294,6 +323,20 @@ export default function Portfolio() {
 
   // Recalculate totals using live prices
   const usdtInrRate = conversion?.conversion_price ?? 89.0;
+
+  // Paper portfolio computed values
+  const paperUnrealizedPnl = paperPositions.reduce((sum: number, p: any) => {
+    const lp = livePrices[p.symbol] ?? parseFloat(p.currentPrice || "0");
+    const entry = parseFloat(p.entryPrice || "0");
+    const size = parseFloat(p.size || "0");
+    return sum + (p.side === "long" ? (lp - entry) * size : (entry - lp) * size);
+  }, 0);
+  const paperFreeBalance = parseFloat(String(paperWalletData?.balance ?? 10000));
+  const paperLockedMargin = parseFloat(String(paperWalletData?.lockedMargin ?? 0));
+  const paperRealizedPnl = parseFloat(String(paperWalletData?.realizedPnl ?? 0));
+  const paperStartingBalance = parseFloat(String(paperWalletData?.startingBalance ?? 10000));
+  const paperEquity = paperFreeBalance + paperLockedMargin + paperUnrealizedPnl;
+
   const liveTotalUnrealizedPnl = openPositions.reduce((sum: number, p: any) => {
     const lp = livePrices[p.symbol] ?? parseFloat(p.currentPrice || "0");
     const entry = parseFloat(p.entryPrice || "0");
@@ -338,108 +381,173 @@ export default function Portfolio() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Wallet size={18} className="text-[#3b82f6]" />
+          <Wallet size={18} className={portfolioMode === "paper" ? "text-[#f59e0b]" : "text-[#3b82f6]"} />
           <div>
             <h2 className="text-sm font-semibold text-[#f4f4f5]">Portfolio</h2>
-            <p className="text-[10px] text-[#71717a]">Position tracking and risk metrics</p>
+            <p className="text-[10px] text-[#71717a]">
+              {portfolioMode === "paper" ? "Paper trading — virtual capital" : "Live account — real positions"}
+            </p>
           </div>
         </div>
-        <div className="flex items-center gap-2">
-          {["open", "closed", "liquidated"].map((s) => (
+        <div className="flex items-center gap-3">
+          {/* LIVE / PAPER mode toggle */}
+          <div className="flex rounded overflow-hidden border border-[#27272a] text-xs font-semibold">
             <button
-              key={s}
-              onClick={() => setStatusFilter(s)}
+              onClick={() => setPortfolioMode("live")}
               className={cn(
-                "px-3 py-1 rounded text-xs transition-colors capitalize",
-                statusFilter === s
-                  ? "bg-[#3b82f6]/10 text-[#3b82f6] border border-[#3b82f6]/30"
-                  : "bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5]"
+                "px-3 py-1.5 transition-colors",
+                portfolioMode === "live"
+                  ? "bg-[#22c55e]/10 text-[#22c55e]"
+                  : "bg-[#09090b] text-[#52525b] hover:text-[#f4f4f5]"
               )}
             >
-              {s}
+              LIVE
             </button>
-          ))}
+            <button
+              onClick={() => setPortfolioMode("paper")}
+              className={cn(
+                "px-3 py-1.5 border-l border-[#27272a] transition-colors",
+                portfolioMode === "paper"
+                  ? "bg-[#f59e0b]/10 text-[#f59e0b]"
+                  : "bg-[#09090b] text-[#52525b] hover:text-[#f4f4f5]"
+              )}
+            >
+              PAPER {paperPositions.length > 0 && <span className="ml-1 opacity-70">({paperPositions.length})</span>}
+            </button>
+          </div>
+          {/* Status filter */}
+          <div className="flex items-center gap-1">
+            {["open", "closed", "liquidated"].map((s) => (
+              <button
+                key={s}
+                onClick={() => setStatusFilter(s)}
+                className={cn(
+                  "px-3 py-1 rounded text-xs transition-colors capitalize",
+                  statusFilter === s
+                    ? "bg-[#3b82f6]/10 text-[#3b82f6] border border-[#3b82f6]/30"
+                    : "bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5]"
+                )}
+              >
+                {s}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Summary Cards — CoinDCX style */}
-      {(() => {
-        const walletBalanceUsdt = walletBase;
-        const walletBalanceInr = walletBalanceUsdt * usdtInrRate;
-        const currentValueUsdt = totalEquityUsdt;
-        const currentValueInr = currentValueUsdt * usdtInrRate;
-        const pnlUsdt = liveTotalUnrealizedPnl;
-        const pnlInr = pnlUsdt * usdtInrRate;
-        const pnlPct = walletBalanceUsdt > 0 ? (pnlUsdt / walletBalanceUsdt) * 100 : 0;
-        const availFree = parseFloat((portfolio as any)?.availableInr || "0");
-        const lockedMgn = parseFloat((portfolio as any)?.lockedInr || "0");
-        const walletCcy = (portfolio as any)?.walletCurrency ?? "INR";
-        const rate = parseFloat((portfolio as any)?.usdtInrRate || String(usdtInrRate));
-        return (
-          <div className="grid grid-cols-3 gap-3">
-            {/* Wallet Balance */}
-            <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <Wallet size={14} className="text-[#3b82f6]" />
-                <span className="text-[10px] text-[#71717a]">Wallet Balance</span>
+      {/* Summary Cards — switches between LIVE and PAPER mode */}
+      {portfolioMode === "live" ? (
+        // ─── LIVE cards ───
+        (() => {
+          const walletBalanceUsdt = walletBase;
+          const walletBalanceInr = walletBalanceUsdt * usdtInrRate;
+          const currentValueUsdt = totalEquityUsdt;
+          const currentValueInr = currentValueUsdt * usdtInrRate;
+          const pnlUsdt = liveTotalUnrealizedPnl;
+          const pnlInr = pnlUsdt * usdtInrRate;
+          const pnlPct = walletBalanceUsdt > 0 ? (pnlUsdt / walletBalanceUsdt) * 100 : 0;
+          const availFree = parseFloat((portfolio as any)?.availableInr || "0");
+          const lockedMgn = parseFloat((portfolio as any)?.lockedInr || "0");
+          const walletCcy = (portfolio as any)?.walletCurrency ?? "INR";
+          const rate = parseFloat((portfolio as any)?.usdtInrRate || String(usdtInrRate));
+          return (
+            <div className="grid grid-cols-3 gap-3">
+              <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <Wallet size={14} className="text-[#3b82f6]" />
+                  <span className="text-[10px] text-[#71717a]">Wallet Balance</span>
+                </div>
+                <div className={cn("text-xl font-bold text-[#f4f4f5] tabular-nums rounded px-1 -mx-1", marginFlash)}>
+                  {walletBalanceUsdt.toFixed(4)} USDT
+                </div>
+                <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">₹{walletBalanceInr.toFixed(2)} · Rate ₹{rate.toFixed(2)}</div>
+                <div className="mt-2 flex items-center justify-between text-[9px]">
+                  <span className="text-[#22c55e]">Available {walletCcy === "INR" ? `₹${availFree.toFixed(2)}` : `$${availFree.toFixed(2)}`}</span>
+                  <span className="text-[#f59e0b]">Locked {walletCcy === "INR" ? `₹${lockedMgn.toFixed(2)}` : `$${lockedMgn.toFixed(2)}`}</span>
+                </div>
               </div>
-              <div className={cn("text-xl font-bold text-[#f4f4f5] tabular-nums rounded px-1 -mx-1", marginFlash)}>
-                {walletBalanceUsdt.toFixed(4)} USDT
+              <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  <PieChart size={14} className="text-[#f59e0b]" />
+                  <span className="text-[10px] text-[#71717a]">Current Value</span>
+                </div>
+                <div className={cn("text-xl font-bold text-[#f4f4f5] tabular-nums rounded px-1 -mx-1", equityFlash)}>
+                  {currentValueUsdt.toFixed(4)} USDT
+                </div>
+                <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">₹{currentValueInr.toFixed(2)}</div>
+                <div className="mt-2 text-[9px] text-[#71717a]">{portfolio?.livePositionsCount || 0} live positions open</div>
               </div>
-              <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
-                ₹{walletBalanceInr.toFixed(2)} · Rate ₹{rate.toFixed(2)}
-              </div>
-              <div className="mt-2 flex items-center justify-between text-[9px]">
-                <span className="text-[#22c55e]">
-                  Available {walletCcy === "INR" ? `₹${availFree.toFixed(2)}` : `$${availFree.toFixed(2)}`}
-                </span>
-                <span className="text-[#f59e0b]">
-                  Locked {walletCcy === "INR" ? `₹${lockedMgn.toFixed(2)}` : `$${lockedMgn.toFixed(2)}`}
-                </span>
+              <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
+                <div className="flex items-center gap-2 mb-2">
+                  {isProfit ? <TrendingUp size={14} className="text-[#22c55e]" /> : <TrendingDown size={14} className="text-[#ef4444]" />}
+                  <span className="text-[10px] text-[#71717a]">Unrealized PnL</span>
+                </div>
+                <div className={cn("text-xl font-bold tabular-nums rounded px-1 -mx-1", isProfit ? "text-[#22c55e]" : "text-[#ef4444]", pnlFlash)}>
+                  {pnlUsdt >= 0 ? "+" : ""}{pnlUsdt.toFixed(4)} USDT
+                </div>
+                <div className={cn("text-[10px] mt-1 tabular-nums", isProfit ? "text-[#22c55e]/70" : "text-[#ef4444]/70")}>
+                  {pnlInr >= 0 ? "+" : ""}₹{pnlInr.toFixed(2)}
+                </div>
+                <div className={cn("mt-1.5 text-sm font-bold tabular-nums", isProfit ? "text-[#22c55e]" : "text-[#ef4444]")}>
+                  {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%
+                </div>
               </div>
             </div>
-
-            {/* Current Value (Equity) */}
-            <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
-              <div className="flex items-center gap-2 mb-2">
-                <PieChart size={14} className="text-[#f59e0b]" />
-                <span className="text-[10px] text-[#71717a]">Current Value</span>
-              </div>
-              <div className={cn("text-xl font-bold text-[#f4f4f5] tabular-nums rounded px-1 -mx-1", equityFlash)}>
-                {currentValueUsdt.toFixed(4)} USDT
-              </div>
-              <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
-                ₹{currentValueInr.toFixed(2)}
-              </div>
-              <div className="mt-2 text-[9px] text-[#71717a]">
-                {portfolio?.openPositionsCount || 0} open position{portfolio?.openPositionsCount !== 1 ? "s" : ""}
-              </div>
+          );
+        })()
+      ) : (
+        // ─── PAPER cards ───
+        <div className="grid grid-cols-3 gap-3">
+          <div className="bg-[#18181b] border border-[#f59e0b]/30 rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <Wallet size={14} className="text-[#f59e0b]" />
+              <span className="text-[10px] text-[#71717a]">Paper Wallet</span>
+              <span className="text-[8px] font-bold px-1 rounded bg-[#f59e0b]/10 text-[#f59e0b] border border-[#f59e0b]/20">VIRTUAL</span>
             </div>
-
-            {/* Active PnL */}
-            <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
-              <div className="flex items-center gap-2 mb-2">
-                {isProfit
-                  ? <TrendingUp size={14} className="text-[#22c55e]" />
-                  : <TrendingDown size={14} className="text-[#ef4444]" />}
-                <span className="text-[10px] text-[#71717a]">Active PnL</span>
-              </div>
-              <div className={cn("text-xl font-bold tabular-nums rounded px-1 -mx-1", isProfit ? "text-[#22c55e]" : "text-[#ef4444]", pnlFlash)}>
-                {pnlUsdt >= 0 ? "+" : ""}{pnlUsdt.toFixed(4)} USDT
-              </div>
-              <div className={cn("text-[10px] mt-1 tabular-nums", isProfit ? "text-[#22c55e]/70" : "text-[#ef4444]/70")}>
-                {pnlInr >= 0 ? "+" : ""}₹{pnlInr.toFixed(2)}
-              </div>
-              <div className={cn("mt-1.5 text-sm font-bold tabular-nums", isProfit ? "text-[#22c55e]" : "text-[#ef4444]")}>
-                {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%
-              </div>
+            <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">${paperFreeBalance.toFixed(2)}</div>
+            <div className="text-[10px] text-[#52525b] mt-1">Started with ${paperStartingBalance.toFixed(2)}</div>
+            <div className="mt-2 flex items-center justify-between text-[9px]">
+              <span className="text-[#22c55e]">Free ${paperFreeBalance.toFixed(2)}</span>
+              <span className="text-[#f59e0b]">Locked ${paperLockedMargin.toFixed(2)}</span>
             </div>
           </div>
-        );
-      })()}
+          <div className="bg-[#18181b] border border-[#f59e0b]/30 rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2">
+              <PieChart size={14} className="text-[#f59e0b]" />
+              <span className="text-[10px] text-[#71717a]">Paper Equity</span>
+            </div>
+            <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">${paperEquity.toFixed(2)}</div>
+            <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
+              {paperEquity >= paperStartingBalance
+                ? <span className="text-[#22c55e]">+${(paperEquity - paperStartingBalance).toFixed(2)} vs start</span>
+                : <span className="text-[#ef4444]">-${(paperStartingBalance - paperEquity).toFixed(2)} vs start</span>}
+            </div>
+            <div className="mt-2 text-[9px] text-[#71717a]">{paperPositions.length} paper positions open</div>
+          </div>
+          <div className="bg-[#18181b] border border-[#f59e0b]/30 rounded-lg p-4">
+            <div className="flex items-center gap-2 mb-2">
+              {paperUnrealizedPnl >= 0 ? <TrendingUp size={14} className="text-[#22c55e]" /> : <TrendingDown size={14} className="text-[#ef4444]" />}
+              <span className="text-[10px] text-[#71717a]">Paper PnL</span>
+            </div>
+            <div className={cn("text-xl font-bold tabular-nums", paperUnrealizedPnl >= 0 ? "text-[#22c55e]" : "text-[#ef4444]")}>
+              {paperUnrealizedPnl >= 0 ? "+" : ""}{paperUnrealizedPnl.toFixed(4)} USDT
+            </div>
+            <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
+              Realized: <span className={paperRealizedPnl >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"}>
+                {paperRealizedPnl >= 0 ? "+" : ""}{paperRealizedPnl.toFixed(4)}
+              </span>
+            </div>
+            <div className="mt-1.5 text-[10px] text-[#52525b]">
+              Total: <span className={cn("font-medium", (paperUnrealizedPnl + paperRealizedPnl) >= 0 ? "text-[#22c55e]" : "text-[#ef4444]")}>
+                {(paperUnrealizedPnl + paperRealizedPnl) >= 0 ? "+" : ""}{(paperUnrealizedPnl + paperRealizedPnl).toFixed(4)}
+              </span>
+            </div>
+          </div>
+        </div>
+      )}
 
-      {/* Indian VDA Tax Estimator Row */}
-      <div className="grid grid-cols-2 gap-3 mt-3">
+      {/* Indian VDA Tax Estimator Row — live mode only */}
+      {portfolioMode === "live" && <div className="grid grid-cols-2 gap-3 mt-3">
         {/* VDA Gains & Estimated Tax Card */}
         <div className="bg-[#ef4444]/5 border border-[#ef4444]/20 rounded-lg p-4">
           <div className="flex items-center gap-2 mb-2">
@@ -483,7 +591,7 @@ export default function Portfolio() {
             Estimated Tax Deducted at Source (1% of sell/short orders) withheld on exchange transfers.
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* Risk Warning — trigger when PnL < -50% of total margin */}
       {portfolio && parseFloat(portfolio.totalMargin || "0") > 0 && liveTotalUnrealizedPnl < -(parseFloat(portfolio.totalMargin || "0") * 0.5) && (
@@ -498,9 +606,37 @@ export default function Portfolio() {
       {/* Positions Table */}
       <div className="flex-1 bg-[#18181b] border border-[#27272a] rounded-lg overflow-hidden flex flex-col">
         <div className="px-4 py-2 border-b border-[#27272a] flex items-center justify-between">
-          <span className="text-xs font-semibold text-[#f4f4f5]">
-            {statusFilter === "open" ? "Open Positions" : statusFilter === "closed" ? "Closed Positions" : "Liquidated Positions"}
-          </span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs font-semibold text-[#f4f4f5]">
+              {statusFilter === "open" ? "Open Positions" : statusFilter === "closed" ? "Closed Positions" : "Liquidated Positions"}
+            </span>
+            {statusFilter === "open" && (
+              <div className="flex rounded overflow-hidden border border-[#27272a] text-[10px] font-semibold">
+                <button
+                  onClick={() => setPortfolioMode("live")}
+                  className={cn(
+                    "px-2.5 py-1 transition-colors",
+                    portfolioMode === "live"
+                      ? "bg-[#22c55e]/10 text-[#22c55e]"
+                      : "bg-[#18181b] text-[#52525b] hover:text-[#f4f4f5]"
+                  )}
+                >
+                  LIVE {openLivePositions.length > 0 && `(${openLivePositions.length})`}
+                </button>
+                <button
+                  onClick={() => setPortfolioMode("paper")}
+                  className={cn(
+                    "px-2.5 py-1 border-l border-[#27272a] transition-colors",
+                    portfolioMode === "paper"
+                      ? "bg-[#f59e0b]/10 text-[#f59e0b]"
+                      : "bg-[#18181b] text-[#52525b] hover:text-[#f4f4f5]"
+                  )}
+                >
+                  PAPER {paperPositions.length > 0 && `(${paperPositions.length})`}
+                </button>
+              </div>
+            )}
+          </div>
           <span className="text-[10px] text-[#71717a]">
             {allPositions?.length || 0} positions
           </span>
