@@ -23,11 +23,14 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
   const size = parseFloat(position.size || "0");
   const marginCurrency = position.marginCurrency || "USDT";
 
-  const rawPnl = position.side === "long"
-    ? (currentPrice - entryPrice) * size
-    : (entryPrice - currentPrice) * size;
-  const pnl = rawPnl;
+  // Use live price for real-time PnL when available; fall back to backend-provided value
+  const pnl = currentPrice > 0
+    ? (position.side === "long"
+        ? (currentPrice - entryPrice) * size
+        : (entryPrice - currentPrice) * size)
+    : parseFloat(position.unrealizedPnl || "0");
   const isProfit = pnl >= 0;
+  const roe = parseFloat(position.roe || "0");
 
   const priceFlash = useFlash(currentPrice);
   const pnlFlashRow = useFlash(pnl);
@@ -110,10 +113,16 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
           : "--"}
       </td>
       <td className="px-3 py-2">
-        <div className={cn("flex items-center gap-1 text-xs tabular-nums rounded px-1 -mx-1", isProfit ? "text-[#22c55e]" : "text-[#ef4444]", pnlFlashRow)}>
-          {isProfit ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
-          {isProfit ? "+" : ""}
-          {pnl.toFixed(4)}
+        <div className={cn("flex flex-col gap-0.5", isProfit ? "text-[#22c55e]" : "text-[#ef4444]", pnlFlashRow)}>
+          <div className="flex items-center gap-1 text-xs tabular-nums rounded px-1 -mx-1">
+            {isProfit ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
+            {isProfit ? "+" : ""}{pnl.toFixed(4)}
+          </div>
+          {roe !== 0 && (
+            <span className="text-[9px] tabular-nums opacity-70 px-1 -mx-1">
+              ROE {roe >= 0 ? "+" : ""}{roe.toFixed(2)}%
+            </span>
+          )}
         </div>
       </td>
       <td className="px-3 py-2">
@@ -369,12 +378,15 @@ export default function Portfolio() {
   const paperEquity = paperFreeBalance + paperLockedMargin + paperUnrealizedPnl;
 
   const liveTotalUnrealizedPnl = openPositions.reduce((sum: number, p: any) => {
-    const lp = livePrices[p.symbol] ?? parseFloat(p.currentPrice || "0");
+    if (p.isPaper) return sum;
+    const lp = livePrices[p.symbol] ?? 0;
     const entry = parseFloat(p.entryPrice || "0");
     const size = parseFloat(p.size || "0");
-    const raw = p.side === "long" ? (lp - entry) * size : (entry - lp) * size;
+    // Use live price for real-time calc; fall back to backend unrealizedPnl (exchange-reported or mark-price based)
+    const raw = lp > 0
+      ? (p.side === "long" ? (lp - entry) * size : (entry - lp) * size)
+      : parseFloat(p.unrealizedPnl || "0");
     // PnL currency = quote of symbol (ETHUSDT → USDT, never INR for current pairs)
-    // marginCurrency (INR) ≠ quote currency — margin is just collateral
     const quoteIsInr = (p.symbol as string).endsWith("INR");
     return sum + (quoteIsInr ? raw / usdtInrRate : raw);
   }, 0);
