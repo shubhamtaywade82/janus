@@ -21,6 +21,7 @@ import {
   evaluateMLSizing,
   evaluateScalpingMicro
 } from "../services/strategies";
+import { detectRegimeForSymbol, latestRegimeCache, type RegimeResult } from "../services/regime-detector";
 
 // ─── Signal update event bus ───
 export const signalEvents = new EventEmitter();
@@ -234,21 +235,52 @@ async function runAutoAnalysis() {
 
 export function startAutoAnalysis(strategyType: StrategyType = "intraday") {
   if (autoAnalysisTimer) {
-    if (activeStrategyType === strategyType) return; // already running same strategy
+    if (activeStrategyType === strategyType) return;
     clearTimeout(autoAnalysisTimer);
     autoAnalysisTimer = null;
   }
 
   activeStrategyType = strategyType;
 
-  // Keep WebSocket connections active for all supported symbols from startup
   for (const pair of SUPPORTED_PAIRS) {
-    console.log(`[signal-router] Bootstrapping WebSocket subscription for ${pair.binance}`);
     subscribeToSymbol(pair.binance);
   }
 
-  console.log(`[signal-router] Starting auto-analysis with strategy: ${strategyType} (interval: ${STRATEGY_CONFIGS[strategyType].signalIntervalMs}ms)`);
+  console.log(`[signal-router] Starting auto-analysis: strategy=${strategyType} interval=${STRATEGY_CONFIGS[strategyType].signalIntervalMs}ms`);
   runAutoAnalysis();
+  // First regime detection 15s after startup, then every 60s
+  setTimeout(runRegimeDetection, 15_000);
+}
+
+// ─── Regime detection + auto strategy switch ───
+let regimeTimer: ReturnType<typeof setTimeout> | null = null;
+
+async function runRegimeDetection() {
+  try {
+    // Use BTC as market proxy — it leads most altcoin regimes
+    const result: RegimeResult = await detectRegimeForSymbol("BTCUSDT");
+    latestRegimeCache.set("BTCUSDT", result);
+
+    if (result.strategy !== activeStrategyType) {
+      const prev = activeStrategyType;
+      console.log(`[regime] Auto-switch: ${prev} → ${result.strategy} (regime: ${result.regime} — ${result.reason})`);
+
+      if (autoAnalysisTimer) { clearTimeout(autoAnalysisTimer); autoAnalysisTimer = null; }
+      activeStrategyType = result.strategy;
+      signalEvents.emit("strategy-switch", {
+        from: prev,
+        to: result.strategy,
+        regime: result.regime,
+        reason: result.reason,
+        inputs: result.inputs,
+        timestamp: result.timestamp,
+      });
+      runAutoAnalysis();
+    }
+  } catch (err) {
+    console.error("[regime] Detection failed:", err);
+  }
+  regimeTimer = setTimeout(runRegimeDetection, 60_000);
 }
 
 export const signalRouter = createRouter({
@@ -442,6 +474,28 @@ export const signalRouter = createRouter({
       const onUpdate = () => emit.next({ updatedAt: Date.now() });
       signalEvents.on("update", onUpdate);
       return () => signalEvents.off("update", onUpdate);
+    });
+  }),
+
+  // ─── Current regime + active strategy ───
+  regimeStatus: publicQuery.query(() => {
+    const btc = latestRegimeCache.get("BTCUSDT");
+    return {
+      regime: btc?.regime ?? "intraday_trend",
+      strategy: btc?.strategy ?? activeStrategyType,
+      activeStrategy: activeStrategyType,
+      reason: btc?.reason ?? "no data yet",
+      inputs: btc?.inputs,
+      timestamp: btc?.timestamp ?? null,
+    };
+  }),
+
+  // ─── Live regime switch stream ───
+  regimeStream: publicQuery.subscription(() => {
+    return observable((emit) => {
+      const onSwitch = (data: unknown) => emit.next(data);
+      signalEvents.on("strategy-switch", onSwitch);
+      return () => signalEvents.off("strategy-switch", onSwitch);
     });
   }),
 });

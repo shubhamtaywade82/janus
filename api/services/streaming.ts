@@ -3,7 +3,7 @@ import WebSocket from "ws";
 import { getDb } from "../queries/connection";
 import { marketData, orderBookSnapshots, recentTicks } from "@db/schema";
 import { marketStateManager } from "./market-state";
-import { getOrCreateFeedHealth } from "./feed-health";
+import { getOrCreateFeedHealth, feedHealthRegistry } from "./feed-health";
 
 export const marketEvents = new EventEmitter();
 marketEvents.setMaxListeners(100);
@@ -17,6 +17,15 @@ interface ActiveSymbolStream {
 }
 
 export const activeStreams = new Map<string, ActiveSymbolStream>();
+
+// Global heartbeat — ticks all FeedHealth instances every 5s
+let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+function ensureHeartbeat() {
+  if (heartbeatInterval) return;
+  heartbeatInterval = setInterval(() => {
+    for (const [, health] of feedHealthRegistry) health.tick();
+  }, 5_000);
+}
 
 function getBinanceWsUrl(symbol: string): string {
   const s = symbol.toLowerCase();
@@ -223,6 +232,8 @@ export function subscribeToSymbol(symbol: string) {
       setTimeout(() => subscribeToSymbol(symbol), delay);
     }
   });
+
+  ensureHeartbeat();
 }
 
 export function unsubscribeFromSymbol(symbol: string) {

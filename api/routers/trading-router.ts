@@ -21,7 +21,26 @@ import { observable } from "@trpc/server/observable";
 import { tradingEvents, initCoinDCXPrivateWs, userBalancesCache, userPositionsCache, markPriceCache } from "../services/coindcx-ws";
 import { startExitMonitor, stopExitMonitor, getFeeBreakevenMap } from "../services/exit-manager";
 import { latestTickerCache, subscribeToSymbol } from "../services/streaming";
+import { globalRiskEngine, getOrCreateSession, updateSession, sessions, riskEvents } from "../services/risk-engine";
+import { registerPositionForTrailing, unregisterPosition } from "../services/trailing-stop";
 import { env } from "../lib/env";
+
+// Wire risk events → tradingEvents so frontend streams pick them up
+riskEvents.on("drawdown-limit-hit", ({ userId, drawdownPct }: { userId: number; drawdownPct: number }) => {
+  console.error(`[risk] Drawdown limit hit — userId=${userId} drawdown=${(drawdownPct * 100).toFixed(2)}%`);
+  tradingEvents.emit(`risk-alert:${userId}`, {
+    type: "drawdown_limit",
+    message: `Daily loss limit hit: ${(drawdownPct * 100).toFixed(2)}%. Trading suspended.`,
+  });
+});
+
+riskEvents.on("cooldown-started", ({ userId, consecutiveLosses }: { userId: number; consecutiveLosses: number }) => {
+  console.warn(`[risk] Cooldown started — userId=${userId} losses=${consecutiveLosses}`);
+  tradingEvents.emit(`risk-alert:${userId}`, {
+    type: "cooldown",
+    message: `${consecutiveLosses} consecutive losses — 30 minute cooldown active.`,
+  });
+});
 
 export async function fetchPortfolioData(userId: number) {
   const db = getDb();
@@ -413,7 +432,7 @@ export const tradingRouter = createRouter({
         stopLoss: z.string().optional(),
         takeProfit: z.string().optional(),
         signalId: z.number().optional(),
-        strategyType: z.enum(["scalping", "intraday", "swing"]).default("intraday"),
+        strategyType: z.enum(["scalping", "intraday", "swing", "grid", "momentum_reversal", "bb_reversion", "ml_sizing", "scalping_micro"]).default("intraday"),
       })
     )
     .mutation(async ({ input }) => {
@@ -425,6 +444,42 @@ export const tradingRouter = createRouter({
           code: "BAD_REQUEST",
           message: "Leverage exceeds maximum allowed safety cap of 10x.",
         });
+      }
+
+      // 1b. Risk Engine gate — capital %, daily drawdown, cooldown, margin health
+      {
+        let walletBalance = 0;
+        let usedMargin = 0;
+        const riskCreds = await db
+          .select()
+          .from(exchangeCredentials)
+          .where(and(eq(exchangeCredentials.userId, input.userId), eq(exchangeCredentials.exchange, "coindcx")))
+          .limit(1);
+
+        if (riskCreds[0]) {
+          try {
+            const wallets = await getFuturesWallet({ apiKey: riskCreds[0].apiKey, apiSecret: riskCreds[0].apiSecret });
+            for (const w of wallets) {
+              walletBalance += parseFloat(w.balance || "0");
+              usedMargin += parseFloat(w.locked_balance || "0");
+            }
+          } catch { /* non-fatal — use 0 as fallback */ }
+        }
+
+        const session = getOrCreateSession(input.userId, walletBalance || 10_000);
+        const notional = parseFloat(input.entryPrice) * parseFloat(input.size);
+        const riskDecision = globalRiskEngine.checkTradeAllowed(session, {
+          notional,
+          walletBalance: walletBalance || session.startingBalance,
+          usedMargin,
+        });
+
+        if (!riskDecision.approved) {
+          throw new TRPCError({
+            code: "PRECONDITION_FAILED",
+            message: `Risk check failed: ${riskDecision.reason}`,
+          });
+        }
       }
 
       // 2. Stop-Loss & Liquidation Price distance buffer check
@@ -524,6 +579,19 @@ export const tradingRouter = createRouter({
 
       tradingEvents.emit(`portfolio-update:${input.userId}`);
 
+      // Register for server-side trailing stop if stopLoss provided
+      if (input.stopLoss) {
+        registerPositionForTrailing({
+          id: result[0].id,
+          symbol: input.symbol,
+          side: input.side,
+          entryPrice: parseFloat(input.entryPrice),
+          stopLoss: parseFloat(input.stopLoss),
+          strategyType: input.strategyType as import("../services/strategy-config").StrategyType,
+          userId: input.userId,
+        });
+      }
+
       return { id: result[0].id, ...input, exchangeOrderId };
     }),
 
@@ -553,6 +621,7 @@ export const tradingRouter = createRouter({
         })
         .where(eq(positions.id, input.id));
 
+      unregisterPosition(input.id);
       tradingEvents.emit(`portfolio-update:${userId}`);
 
       return { success: true };
@@ -659,6 +728,36 @@ export const tradingRouter = createRouter({
     )
     .query(({ input }) => {
       return getFeeBreakevenMap(input.takerFeeRate);
+    }),
+
+  // ─── Risk session status ───
+  riskStatus: publicQuery
+    .input(z.object({ userId: z.number() }))
+    .query(({ input }) => {
+      const session = sessions.get(input.userId);
+      if (!session) return null;
+      const drawdownPct =
+        session.startingBalance > 0
+          ? Math.abs(Math.min(0, session.realizedPnl)) / session.startingBalance * 100
+          : 0;
+      return {
+        ...session,
+        drawdownPct,
+        drawdownLimit: globalRiskEngine.config.dailyDrawdownPct * 100,
+        maxPositionPct: globalRiskEngine.config.maxPositionPct * 100,
+        marginHealthHaltPct: globalRiskEngine.config.marginHealthHaltPct * 100,
+      };
+    }),
+
+  // ─── Risk alert stream — fires on drawdown/cooldown events ───
+  riskAlertStream: publicQuery
+    .input(z.object({ userId: z.number() }))
+    .subscription(({ input }) => {
+      return observable((emit) => {
+        const handler = (payload: unknown) => emit.next(payload);
+        tradingEvents.on(`risk-alert:${input.userId}`, handler);
+        return () => tradingEvents.off(`risk-alert:${input.userId}`, handler);
+      });
     }),
 
   // ─── Get portfolio summary ───
