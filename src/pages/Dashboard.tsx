@@ -570,9 +570,12 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     const toTime = (i: number) => (times[i] / 1000) as UTCTimestamp;
 
     const addOrUpdate = (key: string, values: (number | null)[], color: string, dash = false, scaleId = "right") => {
-      const lineData = values
-        .map((v, i) => v !== null ? { time: toTime(i), value: v } : null)
-        .filter(Boolean) as { time: UTCTimestamp; value: number }[];
+      // WhitespaceData (just {time}) forces a visual break — don't filter nulls, include them as whitespace
+      const lineData = values.map((v, i) =>
+        v !== null
+          ? { time: toTime(i), value: v }
+          : { time: toTime(i) }          // whitespace point = no line drawn = break
+      ) as { time: UTCTimestamp; value?: number }[];
       if (lineData.length === 0) return;
 
       if (!serMap.has(key)) {
