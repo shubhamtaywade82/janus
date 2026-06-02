@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, memo, useLayoutEffect } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
+import { PerformanceDashboard } from "@/components/PerformanceDashboard";
 import {
   Wallet,
   TrendingUp,
@@ -588,6 +589,9 @@ export default function Portfolio() {
           </div>
         </div>
       )}
+      {/* Performance Dashboard */}
+      <PerformanceDashboard userId={1} />
+
       {/* Hidden ticker subscriptions — one component per open symbol */}
       {symbols.map((sym) => (
         <SymbolTicker key={sym} symbol={sym} onPrice={handlePrice} />

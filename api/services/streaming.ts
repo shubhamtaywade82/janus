@@ -3,6 +3,7 @@ import WebSocket from "ws";
 import { getDb } from "../queries/connection";
 import { marketData, orderBookSnapshots, recentTicks } from "@db/schema";
 import { marketStateManager } from "./market-state";
+import { getOrCreateFeedHealth, feedHealthRegistry } from "./feed-health";
 
 export const marketEvents = new EventEmitter();
 marketEvents.setMaxListeners(100);
@@ -16,6 +17,15 @@ interface ActiveSymbolStream {
 }
 
 export const activeStreams = new Map<string, ActiveSymbolStream>();
+
+// Global heartbeat — ticks all FeedHealth instances every 5s
+let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+function ensureHeartbeat() {
+  if (heartbeatInterval) return;
+  heartbeatInterval = setInterval(() => {
+    for (const [, health] of feedHealthRegistry) health.tick();
+  }, 5_000);
+}
 
 function getBinanceWsUrl(symbol: string): string {
   const s = symbol.toLowerCase();
@@ -51,6 +61,7 @@ export function subscribeToSymbol(symbol: string) {
 
   ws.on("message", async (dataStr) => {
     try {
+      getOrCreateFeedHealth(symbol).recordMessage();
       const payload = JSON.parse(dataStr.toString());
       const { stream, data } = payload;
       if (!data) return;
@@ -209,14 +220,20 @@ export function subscribeToSymbol(symbol: string) {
   });
 
   ws.on("close", () => {
-    console.log(`[streaming] WS Connection closed for ${symbol}`);
-    // Attempt reconnect if still has subscribers
+    console.log(`[streaming] WS closed for ${symbol}`);
     const state = activeStreams.get(symbol);
     if (state && state.subscribers > 0) {
+      const health = getOrCreateFeedHealth(symbol);
+      health.status = "reconnecting";
+      health.reconnectAttempts++;
+      const delay = health.backoffMs();
+      console.log(`[streaming] Reconnecting ${symbol} in ${delay}ms (attempt ${health.reconnectAttempts})`);
       activeStreams.delete(symbol);
-      setTimeout(() => subscribeToSymbol(symbol), 5000);
+      setTimeout(() => subscribeToSymbol(symbol), delay);
     }
   });
+
+  ensureHeartbeat();
 }
 
 export function unsubscribeFromSymbol(symbol: string) {

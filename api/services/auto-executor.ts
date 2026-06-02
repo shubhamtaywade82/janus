@@ -1,338 +1,424 @@
 /**
  * Auto-Executor
- *
- * Wires the full pipeline:
- *   gated signal → risk engine → LLM advisor → CoinDCX order → DB record
- *
- * Lifecycle:
- *   startAutoExecutor()  — begin listening for gated signals
- *   stopAutoExecutor()   — detach listener, freeze all automation
- *
- * The executor is disabled by default (PLACE_ORDERS must be true AND
- * autoExecutorEnabled must be toggled via the bot-router).
+ * Converts gated signals to live positions automatically.
+ * 8-gate pipeline per signal:
+ *   1. AutoTrader enabled
+ *   2. Kill switch clear
+ *   3. Symbol in target list
+ *   4. No duplicate open position
+ *   5. Max total positions not exceeded
+ *   6. Funding rate acceptable
+ *   7. Correlation limit not exceeded
+ *   8. Risk engine approved
+ *   + Optional: LLM advisor confirmation
  */
 
 import { EventEmitter } from "events";
 import { getDb } from "../queries/connection";
-import { exchangeCredentials, trades, systemLogs } from "@db/schema";
+import { positions, exchangeCredentials, autoExecutorConfig, systemLogs } from "@db/schema";
 import { eq, and } from "drizzle-orm";
-import { signalEvents } from "../routers/signal-router";
+import { globalKillSwitch } from "./kill-switch";
+import { isFundingExtreme } from "./funding-filter";
+import { checkCorrelation } from "./correlation-guard";
 import { globalRiskEngine, getOrCreateSession, updateSession } from "./risk-engine";
-import { analyzeSignalWithLLM, getOllamaPoolStatus } from "./ollama";
+import { globalLlmAdvisor, type SignalContext } from "./llm-advisor";
+import { latestTickerCache } from "./streaming";
+import { markPriceCache, tradingEvents } from "./coindcx-ws";
+import { createFuturesOrder, getFuturesWallet } from "./coindcx";
+import { registerPositionForTrailing } from "./trailing-stop";
+import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
-import { createFuturesOrder } from "./coindcx";
-import { userBalancesCache } from "./coindcx-ws";
+import { snapshotEquity } from "./performance-tracker";
+import { getPaperWallet, lockPaperMargin, getPaperEquity } from "./paper-wallet";
 import { env } from "../lib/env";
-import type { ConfluenceScore } from "./confluence";
+import type { Signal, AutoExecutorConfig } from "@db/schema";
+import type { StrategyType } from "./strategy-config";
 
-// ─── Public event bus ───
+export const autoExecutorEvents = new EventEmitter();
+autoExecutorEvents.setMaxListeners(20);
 
-export const executorEvents = new EventEmitter();
-executorEvents.setMaxListeners(50);
-
-// ─── State ───
-
-export interface BotDecision {
-  id: string;
-  timestamp: number;
+export interface ExecutorDecision {
   symbol: string;
-  direction: "long" | "short" | "neutral";
-  compositeScore: number;
-  riskApproved: boolean;
-  riskReason?: string;
-  llmApproved: boolean;
-  llmConfidence: number;
-  llmReason: string;
-  executed: boolean;
-  orderId?: string;
-  skipReason?: string;
-}
-
-const MAX_DECISION_HISTORY = 100;
-const decisionHistory: BotDecision[] = [];
-
-let autoExecutorEnabled = false;
-let useLLMFilter = true;
-
-// Runtime stats
-export const executorStats = {
-  signalsReceived: 0,
-  tradesExecuted: 0,
-  tradesRejectedByRisk: 0,
-  tradesRejectedByLLM: 0,
-  startedAt: 0,
-};
-
-// ─── Helpers ───
-
-function pushDecision(d: BotDecision) {
-  decisionHistory.unshift(d);
-  if (decisionHistory.length > MAX_DECISION_HISTORY) decisionHistory.pop();
-  executorEvents.emit("decision", d);
-}
-
-async function getCredentialsForUser(userId: number) {
-  const database = getDb();
-  const creds = await database
-    .select()
-    .from(exchangeCredentials)
-    .where(and(eq(exchangeCredentials.userId, userId), eq(exchangeCredentials.exchange, "coindcx")))
-    .limit(1);
-  return creds[0] ?? null;
-}
-
-async function logSystemEvent(
-  level: "info" | "warn" | "error",
-  event: string,
-  message: string,
-  metadata?: Record<string, any>
-) {
-  try {
-    const database = getDb();
-    await database.insert(systemLogs).values({ level, component: "auto-executor", event, message, metadata });
-  } catch {
-    // non-critical
-  }
-}
-
-// ─── Core execution handler ───
-
-async function handleGatedSignal(signal: ConfluenceScore, userId: number) {
-  executorStats.signalsReceived++;
-
-  const decisionId = `${Date.now()}-${signal.symbol}`;
-
-  // Skip neutral direction
-  if (signal.direction === "neutral") return;
-
-  // Get wallet balance for risk session
-  const balances = userBalancesCache.get(userId);
-  const usdtWallet = balances?.find((b: any) => b.currency_short_name === "USDT" || b.balance_currency === "USDT");
-  const walletBalance = parseFloat(usdtWallet?.balance ?? usdtWallet?.available_balance ?? "0");
-
-  // Risk engine
-  const session = getOrCreateSession(userId, walletBalance || 500);
-  const estimatedNotional = walletBalance * 0.10; // 10% of balance as position size
-  const riskDecision = globalRiskEngine.checkTradeAllowed(session, {
-    notional: estimatedNotional,
-    walletBalance: walletBalance || 500,
-    usedMargin: 0,
-  });
-
-  if (!riskDecision.approved) {
-    executorStats.tradesRejectedByRisk++;
-    pushDecision({
-      id: decisionId,
-      timestamp: Date.now(),
-      symbol: signal.symbol,
-      direction: signal.direction,
-      compositeScore: signal.compositeScore,
-      riskApproved: false,
-      riskReason: riskDecision.reason,
-      llmApproved: false,
-      llmConfidence: 0,
-      llmReason: "",
-      executed: false,
-      skipReason: `Risk rejected: ${riskDecision.reason}`,
-    });
-    return;
-  }
-
-  // LLM advisor (optional, non-blocking)
-  const regime = latestRegimeCache.get(signal.symbol.replace("B-", "").replace("_", "")) ?? null;
-  let llmApproved = true;
-  let llmConfidence = 75;
-  let llmReason = "LLM filter disabled";
-
-  if (useLLMFilter) {
-    try {
-      const advice = await analyzeSignalWithLLM(signal, regime, []);
-      llmApproved   = advice.approved;
-      llmConfidence = advice.confidence;
-      llmReason     = advice.reasoning;
-
-      if (!advice.approved && !advice.skipped) {
-        executorStats.tradesRejectedByLLM++;
-        pushDecision({
-          id: decisionId,
-          timestamp: Date.now(),
-          symbol: signal.symbol,
-          direction: signal.direction,
-          compositeScore: signal.compositeScore,
-          riskApproved: true,
-          llmApproved: false,
-          llmConfidence,
-          llmReason,
-          executed: false,
-          skipReason: `LLM vetoed: ${llmReason}`,
-        });
-        return;
-      }
-    } catch (err: any) {
-      console.error("[auto-executor] LLM call failed:", err.message);
-      // Non-blocking — proceed without LLM
-      llmReason = "LLM error — proceeding";
-    }
-  }
-
-  // ─── Order execution ───
-
-  if (!env.placeOrders) {
-    pushDecision({
-      id: decisionId,
-      timestamp: Date.now(),
-      symbol: signal.symbol,
-      direction: signal.direction,
-      compositeScore: signal.compositeScore,
-      riskApproved: true,
-      llmApproved,
-      llmConfidence,
-      llmReason,
-      executed: false,
-      skipReason: "PLACE_ORDERS=false — paper mode",
-    });
-
-    await logSystemEvent("info", "paper-trade", `[paper] Would execute ${signal.direction} on ${signal.symbol} — score ${signal.compositeScore}`, {
-      signal: { direction: signal.direction, compositeScore: signal.compositeScore },
-      llmReason,
-    });
-
-    executorStats.tradesExecuted++;
-    return;
-  }
-
-  const creds = await getCredentialsForUser(userId);
-  if (!creds) {
-    pushDecision({
-      id: decisionId, timestamp: Date.now(), symbol: signal.symbol, direction: signal.direction,
-      compositeScore: signal.compositeScore, riskApproved: true, llmApproved, llmConfidence, llmReason,
-      executed: false, skipReason: "No CoinDCX credentials found for user",
-    });
-    return;
-  }
-
-  const coindcxMarket = signal.symbol; // Already in B-ETH_USDT form from signal-router
-  const side = signal.direction === "long" ? "buy" : "sell";
-  const quantity = walletBalance > 0 ? Math.floor((walletBalance * 0.10) / 100) / 10 : 0.01;
-
-  try {
-    const order = await createFuturesOrder(
-      { apiKey: creds.apiKey, apiSecret: creds.apiSecret },
-      {
-        market: coindcxMarket,
-        side,
-        order_type: "market",
-        total_quantity: quantity,
-        leverage: 5,
-      }
-    );
-
-    executorStats.tradesExecuted++;
-
-    // Record in DB
-    const database = getDb();
-    const updatedSession = globalRiskEngine.recordTrade(session, { pnl: 0 });
-    updateSession(updatedSession);
-
-    await database.insert(trades).values({
-      userId,
-      symbol: coindcxMarket,
-      side: side === "buy" ? "buy" : "sell",
-      orderType: "market",
-      price: String(order.price ?? 0),
-      size: String(quantity),
-      leverage: 5,
-      fee: "0",
-      tdsDeducted: "0",
-      total: String(quantity),
-      status: "filled",
-      exchangeOrderId: order.id,
-      clientOrderId: order.client_order_id,
-      executedAt: new Date(),
-    }).catch(() => {});
-
-    const decision: BotDecision = {
-      id: decisionId,
-      timestamp: Date.now(),
-      symbol: signal.symbol,
-      direction: signal.direction,
-      compositeScore: signal.compositeScore,
-      riskApproved: true,
-      llmApproved,
-      llmConfidence,
-      llmReason,
-      executed: true,
-      orderId: order.id,
-    };
-    pushDecision(decision);
-
-    await logSystemEvent("info", "trade-executed", `Executed ${signal.direction} ${coindcxMarket} qty=${quantity} order=${order.id}`, {
-      orderId: order.id, signal: signal.symbol, direction: signal.direction, score: signal.compositeScore,
-    });
-
-    executorEvents.emit("trade-executed", decision);
-  } catch (err: any) {
-    console.error("[auto-executor] Order placement failed:", err.message);
-    pushDecision({
-      id: decisionId, timestamp: Date.now(), symbol: signal.symbol, direction: signal.direction,
-      compositeScore: signal.compositeScore, riskApproved: true, llmApproved, llmConfidence, llmReason,
-      executed: false, skipReason: `Order error: ${err.message}`,
-    });
-    await logSystemEvent("error", "order-error", err.message, { symbol: signal.symbol });
-  }
-}
-
-// ─── Signal listener ───
-
-// The signal-router emits "update" when signals are stored, but doesn't
-// expose the gated signal objects directly. We add a "gated-signal" event
-// that the signal-router will emit when it writes a gated signal.
-// This allows auto-executor to subscribe cleanly.
-
-const USER_ID = 1; // Bot always trades on user 1 (admin)
-
-function onGatedSignal(signal: ConfluenceScore) {
-  if (!autoExecutorEnabled) return;
-  handleGatedSignal(signal, USER_ID).catch((err) => {
-    console.error("[auto-executor] Unhandled error in signal handler:", err);
-  });
-}
-
-// ─── Lifecycle ───
-
-export function startAutoExecutor(opts?: { useLLM?: boolean }) {
-  if (opts?.useLLM !== undefined) useLLMFilter = opts.useLLM;
-  if (autoExecutorEnabled) return;
-
-  autoExecutorEnabled = true;
-  executorStats.startedAt = Date.now();
-  signalEvents.on("gated-signal", onGatedSignal);
-
-  console.log(`[auto-executor] Started — placeOrders=${env.placeOrders} llm=${useLLMFilter}`);
-  logSystemEvent("info", "started", `Auto-executor started — placeOrders=${env.placeOrders} llmFilter=${useLLMFilter}`);
-}
-
-export function stopAutoExecutor() {
-  if (!autoExecutorEnabled) return;
-  autoExecutorEnabled = false;
-  signalEvents.off("gated-signal", onGatedSignal);
-  console.log("[auto-executor] Stopped");
-  logSystemEvent("info", "stopped", "Auto-executor stopped");
-}
-
-// ─── Status API ───
-
-export function getExecutorStatus() {
-  return {
-    enabled: autoExecutorEnabled,
-    placeOrders: env.placeOrders,
-    useLLMFilter,
-    stats: { ...executorStats },
-    recentDecisions: decisionHistory.slice(0, 20),
-    ollamaPool: getOllamaPoolStatus(),
+  action: "execute" | "skip";
+  reason: string;
+  signal?: {
+    direction: string;
+    compositeScore: string;
+    strategy: string;
   };
+  llmDecision?: {
+    decision: string;
+    confidence: number;
+    reasoning: string;
+    keyUsed: string;
+  };
+  ts: number;
 }
 
-export function setUseLLMFilter(enabled: boolean) {
-  useLLMFilter = enabled;
+export interface AutoExecutorState {
+  lastRun: number;
+  signalsProcessed: number;
+  executionsToday: number;
+  skipsToday: number;
+  lastDecision: ExecutorDecision | null;
 }
+
+export class AutoExecutor {
+  state: AutoExecutorState = {
+    lastRun: 0,
+    signalsProcessed: 0,
+    executionsToday: 0,
+    skipsToday: 0,
+    lastDecision: null,
+  };
+
+  // Cache config to avoid DB read on every signal
+  private configCache: AutoExecutorConfig | null = null;
+  private configCacheAt = 0;
+  private readonly CONFIG_TTL_MS = 30_000;
+
+  async onSignalBatch(batchSignals: Signal[]): Promise<void> {
+    if (!env.autoExecute) return;
+
+    const config = await this.getConfig();
+    if (!config?.enabled) return;
+    if (!globalKillSwitch.canTrade()) return;
+
+    const gated = batchSignals.filter(
+      (s) => s.isGated && s.direction !== "neutral" && s.direction !== null
+    );
+    if (gated.length === 0) return;
+
+    for (const signal of gated) {
+      try {
+        await this.processSignal(signal, config);
+      } catch (err) {
+        console.error(`[auto-executor] processSignal error for ${signal.symbol}:`, err);
+      }
+    }
+    this.state.lastRun = Date.now();
+  }
+
+  private async getConfig(): Promise<AutoExecutorConfig | null> {
+    if (this.configCache && Date.now() - this.configCacheAt < this.CONFIG_TTL_MS) {
+      return this.configCache;
+    }
+    try {
+      const db = getDb();
+      const rows = await db
+        .select()
+        .from(autoExecutorConfig)
+        .where(eq(autoExecutorConfig.userId, 1))
+        .limit(1);
+      this.configCache = rows[0] ?? null;
+      this.configCacheAt = Date.now();
+    } catch {
+      // Keep stale cache
+    }
+    return this.configCache;
+  }
+
+  private skip(signal: Signal, reason: string, extra?: Partial<ExecutorDecision>): void {
+    this.state.skipsToday++;
+    this.state.signalsProcessed++;
+    const dec: ExecutorDecision = {
+      symbol: signal.symbol,
+      action: "skip",
+      reason,
+      signal: { direction: signal.direction, compositeScore: signal.compositeScore, strategy: "" },
+      ts: Date.now(),
+      ...extra,
+    };
+    this.state.lastDecision = dec;
+    autoExecutorEvents.emit("decision", dec);
+    console.log(`[auto-executor] SKIP ${signal.symbol} — ${reason}`);
+  }
+
+  private async processSignal(signal: Signal, config: AutoExecutorConfig): Promise<void> {
+    this.state.signalsProcessed++;
+    // Convert CoinDCX symbol (B-ETH_USDT) → Binance format (ETHUSDT)
+    const symbol = signal.symbol.startsWith("B-")
+      ? signal.symbol.slice(2).replace("_USDT", "USDT").replace("_", "")
+      : signal.symbol;
+
+    const side = signal.direction as "long" | "short";
+    const targetSymbols = (config.targetSymbols as string[]) ?? ["BTCUSDT", "ETHUSDT"];
+
+    // Gate 1: symbol in target list
+    if (!targetSymbols.includes(symbol)) return this.skip(signal, `${symbol} not in target list`);
+
+    // Gate 2: kill switch
+    if (!globalKillSwitch.canTrade()) return this.skip(signal, "kill switch active");
+
+    // Gate 3: no duplicate open position for this symbol
+    const db = getDb();
+    const existing = await db
+      .select({ id: positions.id })
+      .from(positions)
+      .where(and(eq(positions.userId, 1), eq(positions.symbol, symbol), eq(positions.status, "open")))
+      .limit(1);
+    if (existing.length > 0) return this.skip(signal, "position already open");
+
+    // Gate 4: max total open positions
+    const openCount = await db
+      .select({ id: positions.id })
+      .from(positions)
+      .where(and(eq(positions.userId, 1), eq(positions.status, "open")))
+      .then((r) => r.length);
+    const maxTotal = config.maxTotalPositions ?? 3;
+    if (openCount >= maxTotal) return this.skip(signal, `max ${maxTotal} positions open`);
+
+    // Gate 5: funding rate filter
+    const fundingCheck = isFundingExtreme(symbol, side);
+    if (fundingCheck.blocked) return this.skip(signal, fundingCheck.reason);
+
+    // Gate 6: correlation guard
+    const corrCheck = await checkCorrelation(symbol, side, 1);
+    if (!corrCheck.allowed) return this.skip(signal, corrCheck.reason);
+
+    // Gate 7: risk engine
+    let walletFree = 0;
+    let walletLocked = 0;
+    const isPaperMode = !env.placeOrders;
+
+    const creds = await db
+      .select()
+      .from(exchangeCredentials)
+      .where(and(eq(exchangeCredentials.userId, 1), eq(exchangeCredentials.exchange, "coindcx")))
+      .limit(1);
+
+    if (isPaperMode) {
+      // Paper mode: use virtual wallet
+      const paperBalance = parseFloat(config.paperStartingBalance ?? "10000");
+      const pw = await getPaperWallet(1, paperBalance);
+      walletFree = pw.balance;
+      walletLocked = pw.lockedMargin;
+    } else if (creds[0]) {
+      try {
+        const liveWallets = await getFuturesWallet({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret });
+        for (const w of liveWallets) {
+          walletFree += parseFloat(w.balance ?? "0");
+          walletLocked += parseFloat(w.locked_balance ?? "0");
+        }
+      } catch { /* fallback to 0 */ }
+    }
+
+    const session = getOrCreateSession(1, walletFree || 10_000);
+    const sizeUsdt = parseFloat(config.defaultSizeUsdt ?? "50");
+    const riskCheck = globalRiskEngine.checkTradeAllowed(session, {
+      notional: sizeUsdt,
+      walletBalance: walletFree || session.startingBalance,
+      usedMargin: walletLocked,
+    });
+    if (!riskCheck.approved) return this.skip(signal, `risk: ${riskCheck.reason}`);
+
+    // Gate 8: LLM Advisor (optional)
+    let sizeMult = 1.0;
+    let llmDecision: ExecutorDecision["llmDecision"] | undefined;
+    const regimeData = latestRegimeCache.get("BTCUSDT");
+
+    if (config.useLlmAdvisor) {
+      const currentPrice = latestTickerCache.get(symbol)?.lastPrice ?? 0;
+      const metadata = signal.metadata as Record<string, unknown> | null;
+
+      const llmCtx: SignalContext = {
+        symbol,
+        direction: side,
+        compositeScore: parseFloat(signal.compositeScore),
+        threshold: parseFloat(signal.threshold),
+        regime: regimeData?.regime ?? "unknown",
+        strategy: regimeData?.strategy ?? "intraday",
+        currentPrice,
+        drawdownPct: session.startingBalance > 0
+          ? Math.abs(Math.min(0, session.realizedPnl)) / session.startingBalance * 100
+          : 0,
+        tradeCount: session.tradeCount,
+        openPositions: openCount,
+        rsi: metadata?.rsi as number | undefined,
+        ema20: metadata?.ema20 as number | undefined,
+        ema50: metadata?.ema50 as number | undefined,
+        spread: metadata?.spread as number | undefined,
+        imbalance: metadata?.imbalance as number | undefined,
+      };
+
+      const advice = await globalLlmAdvisor.analyzeSignal(llmCtx);
+      llmDecision = {
+        decision: advice.decision,
+        confidence: advice.confidence,
+        reasoning: advice.reasoning,
+        keyUsed: advice.keyUsed,
+      };
+
+      // Log to system_logs
+      await this.logLlmDecision(signal.id ?? 0, advice, symbol).catch(() => {});
+
+      const threshold = config.llmConfidenceThreshold ?? 70;
+      if (advice.decision === "skip" && advice.confidence >= threshold) {
+        return this.skip(signal, `LLM skip (${advice.confidence}%): ${advice.reasoning}`, { llmDecision });
+      }
+      sizeMult = advice.sizeMult ?? 1.0;
+    }
+
+    // Position sizing
+    const currentPrice =
+      markPriceCache.get(signal.symbol) ??
+      latestTickerCache.get(symbol)?.lastPrice;
+    if (!currentPrice || currentPrice <= 0) {
+      return this.skip(signal, "no price feed");
+    }
+
+    const notional = Math.min(sizeUsdt * sizeMult, (walletFree || session.startingBalance) * 0.20);
+    const leverage = Math.min(
+      config.defaultLeverage ?? 3,
+      STRATEGY_CONFIGS[regimeData?.strategy ?? "intraday"]?.maxLeverage ?? 5
+    );
+    const size = notional / currentPrice;
+    const slPct = parseFloat(config.stopLossPct ?? "0.015");
+    const tp1Pct = parseFloat(config.tp1Pct ?? "0.015");
+
+    const stopLoss = side === "long"
+      ? currentPrice * (1 - slPct)
+      : currentPrice * (1 + slPct);
+    const takeProfit = side === "long"
+      ? currentPrice * (1 + tp1Pct)
+      : currentPrice * (1 - tp1Pct);
+
+    // Execute
+    await this.executePosition({
+      userId: 1,
+      symbol,
+      side,
+      currentPrice,
+      size: parseFloat(size.toFixed(4)),
+      leverage,
+      notional,
+      stopLoss,
+      takeProfit,
+      signalId: signal.id ?? undefined,
+      strategyType: (regimeData?.strategy ?? "intraday") as StrategyType,
+      creds: creds[0],
+      isPaper: isPaperMode,
+    });
+
+    // Lock margin in paper wallet
+    if (isPaperMode) {
+      lockPaperMargin(1, notional / leverage);
+    }
+
+    // Update risk session
+    session.tradeCount++;
+    updateSession(session);
+
+    // Snapshot equity after execution
+    const equity = isPaperMode ? getPaperEquity(1) : walletFree - notional / leverage;
+    await snapshotEquity(1, equity, 0, session.realizedPnl);
+
+    this.state.executionsToday++;
+    const dec: ExecutorDecision = {
+      symbol,
+      action: "execute",
+      reason: `score ${signal.compositeScore} ≥ ${signal.threshold}, ${side}`,
+      signal: {
+        direction: side,
+        compositeScore: signal.compositeScore,
+        strategy: regimeData?.strategy ?? "intraday",
+      },
+      llmDecision,
+      ts: Date.now(),
+    };
+    this.state.lastDecision = dec;
+    autoExecutorEvents.emit("decision", dec);
+    console.log(`[auto-executor] EXECUTE ${symbol} ${side} size=${size.toFixed(4)} @ ${currentPrice}`);
+  }
+
+  private async executePosition(params: {
+    userId: number;
+    symbol: string;
+    side: "long" | "short";
+    currentPrice: number;
+    size: number;
+    leverage: number;
+    notional: number;
+    stopLoss: number;
+    takeProfit: number;
+    signalId?: number;
+    strategyType: StrategyType;
+    creds: { apiKey: string; apiSecret: string } | undefined;
+    isPaper: boolean;
+  }): Promise<void> {
+    const db = getDb();
+    let exchangeOrderId: string | undefined;
+
+    if (params.creds && env.placeOrders) {
+      try {
+        const coindcxSym = `B-${params.symbol.replace("USDT", "_USDT")}`;
+        const order = await createFuturesOrder(
+          { apiKey: params.creds.apiKey, apiSecret: params.creds.apiSecret },
+          {
+            market: coindcxSym,
+            side: params.side === "long" ? "buy" : "sell",
+            order_type: "market",
+            total_quantity: params.size,
+            price: params.currentPrice,
+            leverage: params.leverage,
+          }
+        );
+        exchangeOrderId = order?.id;
+        console.log(`[auto-executor] Exchange order placed: ${exchangeOrderId}`);
+      } catch (err: any) {
+        console.error(`[auto-executor] Exchange order failed: ${err.message}`);
+        throw err; // re-throw so processSignal catches it
+      }
+    }
+
+    const result = await db.insert(positions).values({
+      userId: params.userId,
+      symbol: params.symbol,
+      side: params.side,
+      entryPrice: String(params.currentPrice),
+      currentPrice: String(params.currentPrice),
+      size: String(params.size),
+      leverage: params.leverage,
+      margin: String((params.notional / params.leverage).toFixed(4)),
+      stopLoss: String(params.stopLoss.toFixed(2)),
+      takeProfit: String(params.takeProfit.toFixed(2)),
+      unrealizedPnl: "0",
+      realizedPnl: "0",
+      status: "open",
+      exchangeOrderId,
+      signalId: params.signalId,
+      strategyType: params.strategyType,
+      isPaper: params.isPaper,
+    }).returning({ id: positions.id });
+
+    const posId = result[0].id;
+    registerPositionForTrailing({
+      id: posId,
+      symbol: params.symbol,
+      side: params.side,
+      entryPrice: params.currentPrice,
+      stopLoss: params.stopLoss,
+      strategyType: params.strategyType,
+      userId: params.userId,
+    });
+
+    tradingEvents.emit(`portfolio-update:${params.userId}`);
+  }
+
+  private async logLlmDecision(
+    signalId: number,
+    decision: { decision: string; confidence: number; reasoning: string; keyUsed: string; latencyMs: number },
+    symbol: string
+  ): Promise<void> {
+    const db = getDb();
+    await db.insert(systemLogs).values({
+      level: "info",
+      component: "llm-advisor",
+      event: `signal_analysis`,
+      message: `${symbol}: ${decision.decision} (${decision.confidence}%) via ${decision.keyUsed}`,
+      metadata: { signalId, ...decision },
+    });
+  }
+}
+
+export const globalAutoExecutor = new AutoExecutor();

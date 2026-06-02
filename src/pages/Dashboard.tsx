@@ -2,6 +2,10 @@ import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
 import { ExitSignalToast } from "@/components/ExitSignalToast";
+import { RegimeIndicator } from "@/components/RegimeIndicator";
+import { RiskStatus } from "@/components/RiskStatus";
+import { AutoTraderPanel } from "@/components/AutoTraderPanel";
+import { LlmActivityFeed } from "@/components/LlmActivityFeed";
 import {
   Clock,
   Plus,
@@ -1515,6 +1519,8 @@ const Dashboard = () => {
               </div>
             </div>
             <div className="flex items-center gap-2">
+              <RegimeIndicator />
+              <div className="h-3 w-px bg-[#27272a]" />
               <span className="text-[10px] text-[#71717a]">
                 H: {tickerData ? parseFloat(tickerData.highPrice).toFixed(2) : "--"}
               </span>
@@ -1559,6 +1565,13 @@ const Dashboard = () => {
               <option value="DOGEUSDT">DOGEUSDT</option>
               <option value="AVAXUSDT">AVAXUSDT</option>
             </select>
+          </div>
+
+          <RiskStatus userId={1} />
+
+          {/* AutoTrader Panel */}
+          <div className="px-3 py-2 border-b border-[#27272a]">
+            <AutoTraderPanel userId={1} />
           </div>
 
           {/* Buy/Sell Tabs */}
@@ -1820,6 +1833,11 @@ const Dashboard = () => {
               </div>
             </div>
           )}
+
+          {/* LLM Activity Feed */}
+          <div className="h-48 border-t border-[#27272a] overflow-hidden flex flex-col">
+            <LlmActivityFeed />
+          </div>
 
           {/* Order Book */}
           <div className="flex-1 min-h-0 border-t border-[#27272a] overflow-hidden flex flex-col">

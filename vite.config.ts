@@ -4,6 +4,13 @@ const __dirname = import.meta.dirname
 import react from "@vitejs/plugin-react"
 import { defineConfig } from "vite"
 
+const aliases = {
+  "@": path.resolve(__dirname, "./src"),
+  "@contracts": path.resolve(__dirname, "./contracts"),
+  "@db": path.resolve(__dirname, "./db"),
+  "db": path.resolve(__dirname, "./db"),
+};
+
 // https://vite.dev/config/
 export default defineConfig({
   plugins: [
@@ -12,14 +19,7 @@ export default defineConfig({
   server: {
     port: 3010,
   },
-  resolve: {
-    alias: {
-      "@": path.resolve(__dirname, "./src"),
-      "@contracts": path.resolve(__dirname, "./contracts"),
-      "@db": path.resolve(__dirname, "./db"),
-      "db": path.resolve(__dirname, "./db"),
-    },
-  },
+  resolve: { alias: aliases },
   envDir: path.resolve(__dirname),
   build: {
     outDir: path.resolve(__dirname, "dist/public"),

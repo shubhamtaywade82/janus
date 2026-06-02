@@ -119,9 +119,10 @@ initCoinDCXPrivateWs().catch((err) => {
 import { startAutoAnalysis } from "./routers/signal-router";
 startAutoAnalysis("intraday", true); // true = regime auto-switch on
 
-// Conditionally start auto-executor on boot (requires BOT_AUTO_START=true)
-import { startAutoExecutor } from "./services/auto-executor";
-if (env.botAutoStart) {
-  startAutoExecutor({ useLLM: true });
-  console.log("[boot] Auto-executor started (BOT_AUTO_START=true)");
-}
+// Init LLM advisor (loads keys from DB + env-level Ollama config)
+import { globalLlmAdvisor } from "./services/llm-advisor";
+globalLlmAdvisor.init().catch((err) => {
+  console.error("[llm-advisor] Init failed:", err);
+});
+
+console.log(`[auto-executor] AUTO_EXECUTE=${env.autoExecute} | PLACE_ORDERS=${env.placeOrders}`);

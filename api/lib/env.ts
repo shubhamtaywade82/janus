@@ -27,9 +27,13 @@ export const env = {
   // OLLAMA_API_KEY_N   — individual numbered keys (OLLAMA_API_KEY_1, _2, …)
   // OLLAMA_TIMEOUT_MS  — per-request timeout in ms (default: 15000)
   ollamaBaseUrl: process.env.OLLAMA_BASE_URL ?? "http://localhost:11434",
+  ollamaEndpoint: process.env.OLLAMA_ENDPOINT ?? "http://localhost:11434",
+  ollamaApiKeys: (process.env.OLLAMA_API_KEYS ?? "").split(",").filter(Boolean),
   ollamaModel: process.env.OLLAMA_MODEL ?? "llama3.2",
 
   // ─── Bot automation ───
   // BOT_AUTO_START=true — auto-start the executor on server boot (default: false)
   botAutoStart: process.env.BOT_AUTO_START === "true",
+  // Auto-executor master switch — set AUTO_EXECUTE=true to enable autonomous trading
+  autoExecute: process.env.AUTO_EXECUTE === "true",
 };

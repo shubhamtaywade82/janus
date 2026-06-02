@@ -98,9 +98,11 @@ describe("RiskEngine.checkTradeAllowed", () => {
 
   it("rejects when margin usage >= 85%", () => {
     const session = makeSession();
+    // walletBalance=150, usedMargin=900 → total=1050 → 900/1050=85.7% > 85%
+    // notional=20 passes the 20% position size check (20 <= 150*0.20=30)
     const result = engine.checkTradeAllowed(session, {
-      notional: 100,
-      walletBalance: 150,   // 150 free + 900 locked = 1050 total → 900/1050 = 85.7%
+      notional: 20,
+      walletBalance: 150,
       usedMargin: 900,
     });
     expect(result.approved).toBe(false);
