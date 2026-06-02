@@ -184,12 +184,18 @@ const SymbolTicker = memo(({ symbol, onPrice }: { symbol: string; onPrice: (sym:
 
 // ─── Main Portfolio Page ───
 export default function Portfolio() {
-  const [statusFilter, setStatusFilter] = useState<string>("open");
+  const [statusFilter, setStatusFilter] = useState<string>(() =>
+    localStorage.getItem("janus_portfolio_status") ?? "open"
+  );
 
   // Auto-detect paper mode from server env (PLACE_ORDERS=false → default to PAPER view)
   const { data: botStatus } = trpc.autoExecutor.status.useQuery(undefined, { staleTime: 30_000 });
   const defaultMode = botStatus?.isPaperMode ? "paper" : "live";
-  const [portfolioMode, setPortfolioMode] = useState<"live" | "paper">(defaultMode);
+  const [portfolioMode, setPortfolioMode] = useState<"live" | "paper">(() => {
+    const saved = localStorage.getItem("janus_portfolio_mode");
+    if (saved === "live" || saved === "paper") return saved;
+    return defaultMode;
+  });
 
   // Sync once when botStatus first loads (before user manually toggles)
   const modeSyncedRef = useRef(false);
@@ -199,6 +205,11 @@ export default function Portfolio() {
       setPortfolioMode(botStatus.isPaperMode ? "paper" : "live");
     }
   }, [botStatus]);
+
+  // Persist toggle states to localStorage
+  useEffect(() => { localStorage.setItem("janus_portfolio_mode", portfolioMode); }, [portfolioMode]);
+  useEffect(() => { localStorage.setItem("janus_rate_mode", rateMode); }, [rateMode]);
+  useEffect(() => { localStorage.setItem("janus_portfolio_status", statusFilter); }, [statusFilter]);
 
   // Use portfolioStream subscription for live push updates
   const [portfolio, setPortfolio] = useState<any>(null);
@@ -238,6 +249,12 @@ export default function Portfolio() {
   });
 
   trpc.trading.portfolioStream.useSubscription({ userId: 1 }, portfolioStreamOpts.current);
+
+  const [rateMode, setRateMode] = useState<"live" | "static">(() => {
+    const saved = localStorage.getItem("janus_rate_mode");
+    return saved === "static" ? "static" : "live";
+  });
+  const STATIC_RATE = 98;
 
   const { data: conversion } = trpc.trading.currencyConversion.useQuery(
     undefined,
@@ -335,7 +352,8 @@ export default function Portfolio() {
   }, [closedPositions, liquidatedPositions, tradeHistory]);
 
   // Recalculate totals using live prices
-  const usdtInrRate = conversion?.conversion_price ?? 89.0;
+  const liveRate = conversion?.conversion_price ?? 89.0;
+  const usdtInrRate = rateMode === "static" ? STATIC_RATE : liveRate;
 
   // Paper portfolio computed values
   const paperUnrealizedPnl = paperPositions.reduce((sum: number, p: any) => {
@@ -428,6 +446,34 @@ export default function Portfolio() {
               PAPER {paperPositions.length > 0 && <span className="ml-1 opacity-70">({paperPositions.length})</span>}
             </button>
           </div>
+          {/* INR rate toggle */}
+          <div className="flex rounded overflow-hidden border border-[#27272a] text-[10px] font-medium">
+            <button
+              onClick={() => setRateMode("live")}
+              className={cn(
+                "px-2 py-1 transition-colors",
+                rateMode === "live"
+                  ? "bg-[#22c55e]/10 text-[#22c55e]"
+                  : "bg-[#09090b] text-[#52525b] hover:text-[#f4f4f5]"
+              )}
+              title="CoinDCX live USDT/INR rate"
+            >
+              ₹{liveRate.toFixed(2)}
+            </button>
+            <button
+              onClick={() => setRateMode("static")}
+              className={cn(
+                "px-2 py-1 border-l border-[#27272a] transition-colors",
+                rateMode === "static"
+                  ? "bg-[#f59e0b]/10 text-[#f59e0b]"
+                  : "bg-[#09090b] text-[#52525b] hover:text-[#f4f4f5]"
+              )}
+              title="Static rate ₹98/USDT"
+            >
+              ₹{STATIC_RATE}
+            </button>
+          </div>
+
           {/* Status filter */}
           <div className="flex items-center gap-1">
             {["open", "closed", "liquidated"].map((s) => (
@@ -473,7 +519,10 @@ export default function Portfolio() {
                 <div className={cn("text-xl font-bold text-[#f4f4f5] tabular-nums rounded px-1 -mx-1", marginFlash)}>
                   {walletBalanceUsdt.toFixed(4)} USDT
                 </div>
-                <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">₹{walletBalanceInr.toFixed(2)} · Rate ₹{rate.toFixed(2)}</div>
+                <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
+                  ₹{walletBalanceInr.toFixed(2)} · Rate ₹{usdtInrRate.toFixed(2)}
+                  {rateMode === "static" && <span className="ml-1 text-[#f59e0b]">(static)</span>}
+                </div>
                 <div className="mt-2 flex items-center justify-between text-[9px]">
                   <span className="text-[#22c55e]">Available {walletCcy === "INR" ? `₹${availFree.toFixed(2)}` : `$${availFree.toFixed(2)}`}</span>
                   <span className="text-[#f59e0b]">Locked {walletCcy === "INR" ? `₹${lockedMgn.toFixed(2)}` : `$${lockedMgn.toFixed(2)}`}</span>
