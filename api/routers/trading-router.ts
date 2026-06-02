@@ -237,16 +237,21 @@ export async function fetchPortfolioData(userId: number) {
             availableInr += free;   // in USDT here but reused field
             lockedInr += locked;
             walletCurrency = "USDT";
-            // Use exchange's authoritative realized_pnl when available
-            const wRpnl = parseFloat(w.realized_pnl || "0");
-            if (wRpnl !== 0) totalRealizedPnl = wRpnl;
+            // Use exchange's authoritative realized_pnl when the field is present and parseable
+            // (including 0 = break-even) — do NOT fall back to fee-derived value when exchange says 0
+            if (w.realized_pnl != null && w.realized_pnl !== "") {
+              const wRpnl = parseFloat(w.realized_pnl);
+              if (!isNaN(wRpnl)) totalRealizedPnl = wRpnl;
+            }
           } else if (currency === "INR") {
             walletUsdt += total / usdtInrRate;
             availableInr += free;
             lockedInr += locked;
             walletCurrency = "INR";
-            const wRpnl = parseFloat(w.realized_pnl || "0");
-            if (wRpnl !== 0) totalRealizedPnl = wRpnl / usdtInrRate;
+            if (w.realized_pnl != null && w.realized_pnl !== "") {
+              const wRpnl = parseFloat(w.realized_pnl);
+              if (!isNaN(wRpnl)) totalRealizedPnl = wRpnl / usdtInrRate;
+            }
           }
         }
       } catch {
