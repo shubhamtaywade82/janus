@@ -23,9 +23,11 @@ export class FVGPrimitive implements ISeriesPrimitive<Time> {
         return {
           draw(target: CanvasRenderingTarget2D) {
             if (!self._param || self._fvgs.length === 0) return;
-            const series = self._param.series as any;
+            try {
+            const series    = self._param.series as any;
+            const timeScale = self._param.chart.timeScale() as any;
             const toY = (p: number): number | null => series.priceToCoordinate(p) ?? null;
-            const toX = (t: number): number | null => series.timeToCoordinate((t / 1000) as Time) ?? null;
+            const toX = (t: number): number | null => timeScale.timeToCoordinate((t / 1000) as Time) ?? null;
 
             target.useBitmapCoordinateSpace(({ context: ctx, horizontalPixelRatio: hpr, verticalPixelRatio: vpr }) => {
               ctx.save();
@@ -75,6 +77,7 @@ export class FVGPrimitive implements ISeriesPrimitive<Time> {
               }
               ctx.restore();
             });
+            } catch { /* never crash the chart render loop */ }
           },
         };
       },

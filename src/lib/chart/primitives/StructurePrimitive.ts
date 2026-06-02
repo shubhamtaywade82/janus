@@ -26,9 +26,11 @@ export class StructurePrimitive implements ISeriesPrimitive<Time> {
         return {
           draw(target: CanvasRenderingTarget2D) {
             if (!self._param) return;
-            const series = self._param.series as any;
+            try {
+            const series    = self._param.series as any;
+            const timeScale = self._param.chart.timeScale() as any;
             const toY = (p: number): number | null => series.priceToCoordinate(p) ?? null;
-            const toX = (t: number): number | null => series.timeToCoordinate((t / 1000) as Time) ?? null;
+            const toX = (t: number): number | null => timeScale.timeToCoordinate((t / 1000) as Time) ?? null;
 
             target.useBitmapCoordinateSpace(({ context: ctx, horizontalPixelRatio: hpr, verticalPixelRatio: vpr }) => {
               ctx.save();
@@ -58,15 +60,22 @@ export class StructurePrimitive implements ISeriesPrimitive<Time> {
               // ─── Liquidity levels ───
               for (const liq of self._liquidity) {
                 const y = toY(liq.price);
-                if (y === null) continue;
+                if (y === null || liq.times.length === 0) continue;
+
+                // Start at first touch, end at sweep time OR right edge if still active
+                const x1 = toX(liq.times[0]);
+                if (x1 === null) continue;
+
+                const endTime = liq.swept && liq.sweptTime ? liq.sweptTime : null;
+                const x2 = endTime !== null ? (toX(endTime) ?? ctx.canvas.width / hpr) : ctx.canvas.width / hpr;
 
                 const color = liq.swept ? "rgba(113,113,122,0.30)" : "rgba(239,68,68,0.60)";
                 ctx.strokeStyle = color;
                 ctx.lineWidth   = 1;
                 ctx.setLineDash([6 * hpr, 4 * hpr]);
                 ctx.beginPath();
-                ctx.moveTo(0, Math.round(y * vpr));
-                ctx.lineTo(ctx.canvas.width, Math.round(y * vpr));
+                ctx.moveTo(Math.round(x1 * hpr), Math.round(y * vpr));
+                ctx.lineTo(Math.round(x2 * hpr), Math.round(y * vpr));
                 ctx.stroke();
                 ctx.setLineDash([]);
 
@@ -74,12 +83,13 @@ export class StructurePrimitive implements ISeriesPrimitive<Time> {
                 ctx.fillStyle    = color;
                 ctx.font         = `${Math.max(8, Math.round(8 * Math.min(hpr, vpr)))}px monospace`;
                 ctx.textBaseline = "bottom";
-                ctx.textAlign    = "right";
-                ctx.fillText(label, ctx.canvas.width - 4, Math.round(y * vpr) - 2);
+                ctx.textAlign    = "left";
+                ctx.fillText(label, Math.round(x2 * hpr) + 3, Math.round(y * vpr) - 2);
                 ctx.textAlign = "left";
               }
               ctx.restore();
             });
+            } catch { /* never crash the chart render loop */ }
           },
         };
       },

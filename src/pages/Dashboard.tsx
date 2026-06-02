@@ -321,12 +321,12 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       obPrimRef.current  = obPrim;
       fvgPrimRef.current = fvgPrim;
       strPrimRef.current = strPrim;
-      markersPluginRef.current = createSeriesMarkers(candlestickSeriesRef.current, []);
+      // createSeriesMarkers replaces the old .setMarkers() — create lazily only when needed
+      // to avoid interfering with auto-scroll and chart rendering pipeline
     } catch (err) {
       console.warn("[chart] SMC primitive attach failed:", err);
     }
     return () => {
-      // Detach on unmount — chart.remove() handles cleanup but be explicit
       obPrimRef.current  = null;
       fvgPrimRef.current = null;
       strPrimRef.current = null;
@@ -471,7 +471,14 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       tog?.liquidity  && pa?.liquidity  ? pa.liquidity  : []
     );
 
-    // Swing markers + displacement markers via createSeriesMarkers
+    // Swing markers + displacement markers — create plugin lazily on first use
+    if (!markersPluginRef.current && candlestickSeriesRef.current) {
+      try {
+        markersPluginRef.current = createSeriesMarkers(candlestickSeriesRef.current, []);
+      } catch (err) {
+        console.warn("[chart] createSeriesMarkers failed:", err);
+      }
+    }
     if (markersPluginRef.current) {
       const markers: SeriesMarker<Time>[] = [];
 
