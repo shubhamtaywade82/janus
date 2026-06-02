@@ -9,6 +9,7 @@ import {
   analyzeConfluence,
   aggregateOrderBookMetrics,
   aggregateTradeTape,
+  type ConfluenceScore,
 } from "../services/confluence";
 import { fetchOrderBook, fetchRecentTrades, fetchKlines, SUPPORTED_PAIRS } from "../services/binance";
 import { subscribeToSymbol } from "../services/streaming";
@@ -21,6 +22,11 @@ import {
   evaluateMLSizing,
   evaluateScalpingMicro
 } from "../services/strategies";
+import {
+  detectRegimeForSymbol,
+  latestRegimeCache,
+  regimeToStrategy,
+} from "../services/regime-detector";
 
 // ─── Signal update event bus ───
 export const signalEvents = new EventEmitter();
@@ -118,16 +124,32 @@ async function getConfluenceInput(binanceSymbol: string) {
 // ─── Auto-analysis loop ───
 let autoAnalysisTimer: ReturnType<typeof setTimeout> | null = null;
 let activeStrategyType: StrategyType = "intraday";
+let autoRegimeDetect = true;  // when true, regime detector drives strategy selection
 
 async function runAutoAnalysis() {
+  // ─── Regime detection (runs once per loop for ETHUSDT to auto-switch strategy) ───
+  if (autoRegimeDetect) {
+    try {
+      const ethRegime = await detectRegimeForSymbol("ETHUSDT");
+      latestRegimeCache.set("ETHUSDT", ethRegime);
+      const suggestedStrategy = regimeToStrategy(ethRegime.regime);
+      if (suggestedStrategy !== activeStrategyType) {
+        console.log(`[signal-router] Regime auto-switch: ${activeStrategyType} → ${suggestedStrategy} (${ethRegime.regime})`);
+        activeStrategyType = suggestedStrategy;
+      }
+    } catch (err) {
+      console.error("[signal-router] Regime detection failed:", err);
+    }
+  }
+
   const config = STRATEGY_CONFIGS[activeStrategyType];
   try {
     const db = getDb();
     for (const pair of SUPPORTED_PAIRS) {
       try {
         const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = await getConfluenceInput(pair.binance);
-        
-        let signalData;
+
+        let signalData: typeof signals.$inferInsert;
         const currentPrice = prices[prices.length - 1] || 0;
 
         if (activeStrategyType === "grid") {
@@ -196,7 +218,7 @@ async function runAutoAnalysis() {
             metadata: res.metadata,
           };
         } else {
-          // Standard Confluence
+          // Standard Confluence (intraday / swing / scalping)
           const analysis = analyzeConfluence(
             pair.coindcx,
             obMetrics,
@@ -221,6 +243,32 @@ async function runAutoAnalysis() {
         }
 
         await db.insert(signals).values(signalData).catch(() => {});
+
+        // ─── Emit gated-signal for auto-executor ───
+        if (signalData.isGated && signalData.direction !== "neutral") {
+          const confluenceForExecutor: ConfluenceScore = {
+            symbol: signalData.symbol,
+            microScore: parseFloat(signalData.microScore),
+            intraScore: parseFloat(signalData.intraScore),
+            swingScore: parseFloat(signalData.swingScore),
+            compositeScore: parseFloat(signalData.compositeScore),
+            threshold: parseFloat(signalData.threshold as string),
+            isGated: signalData.isGated,
+            direction: signalData.direction as "long" | "short" | "neutral",
+            indicators: {
+              spread: obMetrics.spread,
+              imbalance: obMetrics.imbalance,
+              vwap: prices[prices.length - 1] ?? 0,
+              rsi: (signalData.metadata as any)?.rsi ?? 50,
+              ema20: (signalData.metadata as any)?.ema20 ?? 0,
+              ema50: (signalData.metadata as any)?.ema50 ?? 0,
+              trendStrength: (signalData.metadata as any)?.trendStrength ?? 0,
+              volatilityRegime: (signalData.metadata as any)?.volatilityRegime,
+            },
+            timestamp: Date.now(),
+          };
+          signalEvents.emit("gated-signal", confluenceForExecutor);
+        }
       } catch (err) {
         console.error(`[signal-router] Auto-analysis failed for ${pair.binance}:`, err);
       }
@@ -232,9 +280,12 @@ async function runAutoAnalysis() {
   autoAnalysisTimer = setTimeout(runAutoAnalysis, config.signalIntervalMs);
 }
 
-export function startAutoAnalysis(strategyType: StrategyType = "intraday") {
+export function startAutoAnalysis(strategyType: StrategyType = "intraday", autoSwitch?: boolean) {
+  // autoSwitch=true → regime detector drives strategy; autoSwitch=false → pin to strategyType
+  if (autoSwitch !== undefined) autoRegimeDetect = autoSwitch;
+
   if (autoAnalysisTimer) {
-    if (activeStrategyType === strategyType) return; // already running same strategy
+    if (activeStrategyType === strategyType && autoSwitch === undefined) return; // no change
     clearTimeout(autoAnalysisTimer);
     autoAnalysisTimer = null;
   }
@@ -247,7 +298,8 @@ export function startAutoAnalysis(strategyType: StrategyType = "intraday") {
     subscribeToSymbol(pair.binance);
   }
 
-  console.log(`[signal-router] Starting auto-analysis with strategy: ${strategyType} (interval: ${STRATEGY_CONFIGS[strategyType].signalIntervalMs}ms)`);
+  const mode = autoRegimeDetect ? "regime-auto" : "fixed";
+  console.log(`[signal-router] Starting auto-analysis strategy=${strategyType} mode=${mode} interval=${STRATEGY_CONFIGS[strategyType].signalIntervalMs}ms`);
   runAutoAnalysis();
 }
 
