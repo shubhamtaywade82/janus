@@ -117,16 +117,12 @@ export async function fetchPortfolioData(userId: number) {
             || parseFloat(p.avg_price);
           const entryPrice = parseFloat(p.avg_price);
 
-          // Use exchange-reported unrealizedPnl if available (most accurate — matches CoinDCX app)
-          let unrealizedPnl = 0;
+          // Exchange PnL (most accurate) → signed-quantity formula fallback
+          // signed quantity: long = positive qty, short = negative qty → single formula covers both
           const exchangePnl = parseFloat(p.unrealized_pnl ?? p.unrealised_pnl ?? "");
-          if (!isNaN(exchangePnl) && exchangePnl !== 0) {
-            unrealizedPnl = exchangePnl;
-          } else if (side === "long") {
-            unrealizedPnl = (lastPrice - entryPrice) * absSize;
-          } else {
-            unrealizedPnl = (entryPrice - lastPrice) * absSize;
-          }
+          const unrealizedPnl = (!isNaN(exchangePnl) && exchangePnl !== 0)
+            ? exchangePnl
+            : (lastPrice - entryPrice) * sizeVal;
 
           // Margin is posted in marginCurrency (INR/USDT) — convert to USDT
           const lockedMarginRaw = parseFloat(p.locked_margin || p.locked_user_margin || "0");
@@ -141,6 +137,20 @@ export async function fetchPortfolioData(userId: number) {
           const pairQuote = (p.pair as string).split("_").pop() ?? "USDT";
           const pnlIsInr = pairQuote === "INR";
           const unrealizedPnlUsdt = pnlIsInr ? unrealizedPnl / usdtInrRate : unrealizedPnl;
+
+          // Derived position metrics (all in pair quote currency)
+          const posLeverage = Number(p.leverage) || 1;
+          const notional = absSize * lastPrice;
+          const initialMargin = notional / posLeverage;
+          const roe = initialMargin > 0 ? (unrealizedPnl / initialMargin) * 100 : 0;
+          const priceChangePct = entryPrice > 0 ? ((lastPrice - entryPrice) / entryPrice) * 100 : 0;
+          const liqPriceRaw = parseFloat(p.liquidation_price || "0");
+          const liqDistance = liqPriceRaw > 0
+            ? (sizeVal >= 0 ? lastPrice - liqPriceRaw : liqPriceRaw - lastPrice)
+            : 0;
+          const liqDistancePct = lastPrice > 0 && liqPriceRaw > 0
+            ? (liqDistance / lastPrice) * 100
+            : 0;
 
           totalMargin += lockedMarginUsdt;
           totalUnrealizedPnl += unrealizedPnlUsdt;
@@ -174,6 +184,13 @@ export async function fetchPortfolioData(userId: number) {
             status: "open",
             createdAt: new Date(),
             updatedAt: new Date(),
+            // Derived position metrics
+            notional: String(notional),
+            initialMargin: String(initialMargin),
+            roe: String(roe),
+            priceChangePct: String(priceChangePct),
+            liqDistance: String(liqDistance),
+            liqDistancePct: String(liqDistancePct),
           };
         });
 
@@ -220,11 +237,16 @@ export async function fetchPortfolioData(userId: number) {
             availableInr += free;   // in USDT here but reused field
             lockedInr += locked;
             walletCurrency = "USDT";
+            // Use exchange's authoritative realized_pnl when available
+            const wRpnl = parseFloat(w.realized_pnl || "0");
+            if (wRpnl !== 0) totalRealizedPnl = wRpnl;
           } else if (currency === "INR") {
             walletUsdt += total / usdtInrRate;
             availableInr += free;
             lockedInr += locked;
             walletCurrency = "INR";
+            const wRpnl = parseFloat(w.realized_pnl || "0");
+            if (wRpnl !== 0) totalRealizedPnl = wRpnl / usdtInrRate;
           }
         }
       } catch {
@@ -393,18 +415,28 @@ export const tradingRouter = createRouter({
                 || parseFloat(p.avg_price);
               const entryPrice = parseFloat(p.avg_price);
 
+              // Exchange PnL → signed-quantity formula fallback
               const exchangePnl2 = parseFloat(p.unrealized_pnl ?? p.unrealised_pnl ?? "");
-              let unrealizedPnl = 0;
-              if (!isNaN(exchangePnl2) && exchangePnl2 !== 0) {
-                unrealizedPnl = exchangePnl2;
-              } else if (side === "long") {
-                unrealizedPnl = (lastPrice - entryPrice) * absSize;
-              } else {
-                unrealizedPnl = (entryPrice - lastPrice) * absSize;
-              }
+              const unrealizedPnl = (!isNaN(exchangePnl2) && exchangePnl2 !== 0)
+                ? exchangePnl2
+                : (lastPrice - entryPrice) * sizeVal;
 
               const lockedMarginRaw = parseFloat(p.locked_margin || p.locked_user_margin || "0");
               const displayLockedMargin = isInrMargin ? lockedMarginRaw * usdtInrRate : lockedMarginRaw;
+
+              // Derived position metrics
+              const posLeverage2 = Number(p.leverage) || 1;
+              const notional2 = absSize * lastPrice;
+              const initialMargin2 = notional2 / posLeverage2;
+              const roe2 = initialMargin2 > 0 ? (unrealizedPnl / initialMargin2) * 100 : 0;
+              const priceChangePct2 = entryPrice > 0 ? ((lastPrice - entryPrice) / entryPrice) * 100 : 0;
+              const liqPriceRaw2 = parseFloat(p.liquidation_price || "0");
+              const liqDistance2 = liqPriceRaw2 > 0
+                ? (sizeVal >= 0 ? lastPrice - liqPriceRaw2 : liqPriceRaw2 - lastPrice)
+                : 0;
+              const liqDistancePct2 = lastPrice > 0 && liqPriceRaw2 > 0
+                ? (liqDistance2 / lastPrice) * 100
+                : 0;
 
               return {
                 id: idx + 10000,
@@ -426,6 +458,13 @@ export const tradingRouter = createRouter({
                 status: "open",
                 createdAt: new Date(),
                 updatedAt: new Date(),
+                // Derived position metrics
+                notional: String(notional2),
+                initialMargin: String(initialMargin2),
+                roe: String(roe2),
+                priceChangePct: String(priceChangePct2),
+                liqDistance: String(liqDistance2),
+                liqDistancePct: String(liqDistancePct2),
               };
             });
 
