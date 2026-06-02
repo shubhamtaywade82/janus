@@ -453,6 +453,28 @@ export function detectPremiumDiscount(swings: SwingPoint[]): PremiumDiscountZone
   };
 }
 
+// ─── 8. On-Balance Volume (OBV) ───
+
+export interface OBVPoint {
+  time:  number;  // openTime ms
+  value: number;  // running OBV
+}
+
+export function calculateOBV(klines: Kline[]): OBVPoint[] {
+  if (klines.length === 0) return [];
+  const result: OBVPoint[] = [];
+  let obv = 0;
+  result.push({ time: klines[0].time, value: 0 });
+
+  for (let i = 1; i < klines.length; i++) {
+    if (klines[i].close > klines[i - 1].close)      obv += klines[i].volume;
+    else if (klines[i].close < klines[i - 1].close) obv -= klines[i].volume;
+    // equal close → OBV unchanged
+    result.push({ time: klines[i].time, value: obv });
+  }
+  return result;
+}
+
 // ─── Aggregate ───
 
 export interface PriceActionData {
@@ -463,6 +485,7 @@ export interface PriceActionData {
   liquidity:       LiquidityLevel[];
   displacement:    DisplacementCandle[];
   premiumDiscount: PremiumDiscountZone | null;
+  obv:             OBVPoint[];
 }
 
 export function analyzeAll(klines: Kline[]): PriceActionData {
@@ -475,5 +498,6 @@ export function analyzeAll(klines: Kline[]): PriceActionData {
     liquidity:       detectLiquidity(klines, swings),
     displacement:    detectDisplacement(klines),
     premiumDiscount: detectPremiumDiscount(swings),
+    obv:             calculateOBV(klines),
   };
 }

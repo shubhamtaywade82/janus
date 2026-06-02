@@ -17,7 +17,7 @@ import {
   Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineStyle, createSeriesMarkers } from "lightweight-charts";
+import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineSeries, LineStyle, createSeriesMarkers } from "lightweight-charts";
 import type { UTCTimestamp, SeriesMarker, Time } from "lightweight-charts";
 import { OrderBlockPrimitive } from "@/lib/chart/primitives/OrderBlockPrimitive";
 import { FVGPrimitive } from "@/lib/chart/primitives/FVGPrimitive";
@@ -112,6 +112,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const fvgPrimRef  = useRef<FVGPrimitive | null>(null);
   const strPrimRef  = useRef<StructurePrimitive | null>(null);
   const markersPluginRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
+  // OBV series
+  const obvSeriesRef = useRef<any>(null);
 
   // ─── Tick animation: persistent lerp loop chasing target ───
   const animFrameRef = useRef<number | null>(null);
@@ -304,6 +306,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       fvgPrimRef.current = null;
       strPrimRef.current = null;
       markersPluginRef.current = null;
+      obvSeriesRef.current = null;
       setChartInitialized(false);
     };
   }, []);
@@ -511,6 +514,34 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       // Sort markers by time (required by lightweight-charts)
       markers.sort((a, b) => (a.time as number) - (b.time as number));
       markersPluginRef.current.setMarkers(markers);
+    }
+
+    // ─── OBV line series ───
+    if (tog?.obv && pa?.obv && pa.obv.length > 0 && chartRef.current) {
+      if (!obvSeriesRef.current) {
+        try {
+          const obvSeries = chartRef.current.addSeries(LineSeries, {
+            color:       "rgba(6,182,212,0.80)",
+            lineWidth:   1,
+            priceScaleId: "obv",
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          obvSeries.priceScale().applyOptions({
+            scaleMargins: { top: 0.85, bottom: 0 },
+            borderVisible: false,
+          });
+          obvSeriesRef.current = obvSeries;
+        } catch { /* safe */ }
+      }
+      if (obvSeriesRef.current) {
+        obvSeriesRef.current.setData(
+          pa.obv.map((p) => ({ time: (p.time / 1000) as UTCTimestamp, value: p.value }))
+        );
+      }
+    } else if (!tog?.obv && obvSeriesRef.current && chartRef.current) {
+      try { chartRef.current.removeSeries(obvSeriesRef.current); } catch { /* safe */ }
+      obvSeriesRef.current = null;
     }
 
     // Primitives call requestUpdate() internally via their setters above
@@ -1511,8 +1542,8 @@ const Dashboard = () => {
   const [overlayToggles, setOverlayToggles] = useState<OverlayToggles>(() => {
     try {
       const saved = localStorage.getItem("janus_chart_overlays");
-      return saved ? JSON.parse(saved) : { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false };
-    } catch { return { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false }; }
+      return saved ? JSON.parse(saved) : { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false };
+    } catch { return { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false }; }
   });
 
   const { data: paData } = trpc.market.priceAction.useQuery(

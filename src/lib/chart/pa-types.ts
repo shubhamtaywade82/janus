@@ -27,8 +27,10 @@ export interface DisplacementCandle {
 export interface PremiumDiscountZone {
   swingHigh: number; swingLow: number; equilibrium: number; premiumBottom: number; discountTop: number;
 }
+export interface OBVPoint { time: number; value: number; }
 export interface PriceActionData {
   swings: SwingPoint[]; orderBlocks: OrderBlock[]; fvgs: FairValueGap[];
   structure: StructureBreak[]; liquidity: LiquidityLevel[];
   displacement: DisplacementCandle[]; premiumDiscount: PremiumDiscountZone | null;
+  obv: OBVPoint[];
 }
