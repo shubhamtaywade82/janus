@@ -7,6 +7,12 @@ import { observable } from "@trpc/server/observable";
 import { globalAutoExecutor, autoExecutorEvents } from "../services/auto-executor";
 import { globalKillSwitch, killSwitchEvents } from "../services/kill-switch";
 import { computeMetrics } from "../services/performance-tracker";
+import {
+  resetPaperWallet,
+  getPaperLedger,
+  getPaperSnapshots,
+  snapshotPaperWallet,
+} from "../services/paper-wallet";
 import { env } from "../lib/env";
 
 export const autoExecutorRouter = createRouter({
@@ -76,7 +82,6 @@ export const autoExecutorRouter = createRouter({
     isAutoExecuteEnabled: env.autoExecute,
   })),
 
-  // ─── Paper wallet status ───
   // ─── Paper wallet — computed fresh from DB on every call (no in-memory cache) ───
   paperWallet: publicQuery
     .input(z.object({ userId: z.number() }))
@@ -126,23 +131,34 @@ export const autoExecutorRouter = createRouter({
       };
     }),
 
-  // ─── Reset paper wallet — clears realized PnL baseline by adjusting starting balance ───
+  // ─── Reset paper wallet — updates starting balance and clears in-memory state ───
   resetPaperWallet: publicQuery
     .input(z.object({ userId: z.number(), newBalance: z.number().default(10_000) }))
     .mutation(async ({ input }) => {
-      const db = getDb();
-      const existing = await db
-        .select({ id: autoExecutorConfig.id })
-        .from(autoExecutorConfig)
-        .where(eq(autoExecutorConfig.userId, input.userId))
-        .limit(1);
-      if (existing.length > 0) {
-        await db
-          .update(autoExecutorConfig)
-          .set({ paperStartingBalance: String(input.newBalance), updatedAt: new Date() })
-          .where(eq(autoExecutorConfig.userId, input.userId));
-      }
+      await resetPaperWallet(input.userId, input.newBalance);
       return { success: true, balance: input.newBalance };
+    }),
+
+  // ─── Paper wallet ledger entries (audit trail) ───
+  paperWalletLedger: publicQuery
+    .input(z.object({ userId: z.number(), limit: z.number().default(50) }))
+    .query(async ({ input }) => {
+      return getPaperLedger(input.userId, input.limit);
+    }),
+
+  // ─── Paper wallet snapshots (equity curve) ───
+  paperWalletSnapshots: publicQuery
+    .input(z.object({ userId: z.number(), limit: z.number().default(100) }))
+    .query(async ({ input }) => {
+      return getPaperSnapshots(input.userId, input.limit);
+    }),
+
+  // ─── Take a manual snapshot ───
+  takePaperSnapshot: publicQuery
+    .input(z.object({ userId: z.number() }))
+    .mutation(async ({ input }) => {
+      await snapshotPaperWallet(input.userId);
+      return { success: true };
     }),
 
   // ─── Live stream of execution decisions ───

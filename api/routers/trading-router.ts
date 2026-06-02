@@ -24,7 +24,7 @@ import { latestTickerCache, subscribeToSymbol } from "../services/streaming";
 import { globalRiskEngine, getOrCreateSession, sessions, riskEvents } from "../services/risk-engine";
 import { registerPositionForTrailing, unregisterPosition } from "../services/trailing-stop";
 import { globalKillSwitch } from "../services/kill-switch";
-import { releasePaperMargin } from "../services/paper-wallet";
+import { releasePaperMargin, lockPaperMargin as lockPaperMarginAsync } from "../services/paper-wallet";
 import { env } from "../lib/env";
 
 // Wire risk events → tradingEvents so frontend streams pick them up
@@ -668,7 +668,7 @@ export const tradingRouter = createRouter({
 
       // Release margin back to paper wallet if this was a paper position
       if (pos[0]?.isPaper) {
-        releasePaperMargin(userId, parseFloat(pos[0].margin), parseFloat(input.realizedPnl));
+        await releasePaperMargin(userId, parseFloat(pos[0].margin), parseFloat(input.realizedPnl), pos[0].id);
       }
 
       unregisterPosition(input.id);
@@ -934,7 +934,7 @@ export const tradingRouter = createRouter({
         .where(eq(exchangeCredentials.userId, input.userId));
     }),
 
-  // ─── Get futures wallet ───
+  // ─── Get futures wallet (with derived metrics) ───
   futuresWallet: publicQuery
     .input(z.object({ userId: z.number(), marginCurrency: z.enum(["USDT", "INR"]).optional() }))
     .query(async ({ input }) => {
@@ -951,7 +951,41 @@ export const tradingRouter = createRouter({
         )
         .orderBy(desc(futuresWallets.updatedAt))
         .limit(1);
-      return cached[0] || null;
+      if (!cached[0]) return null;
+
+      const w = cached[0];
+      const balance = parseFloat(w.balance);
+      const lockedBalance = parseFloat(w.lockedBalance);
+      const unrealizedPnl = parseFloat(w.unrealizedPnl);
+      const realizedPnl = parseFloat(w.realizedPnl);
+      const totalAccountEquity = parseFloat(w.totalAccountEquity);
+      const availableBalanceCross = parseFloat(w.availableBalanceCross);
+      const crossUserMargin = parseFloat(w.crossUserMargin);
+      const crossOrderMargin = parseFloat(w.crossOrderMargin);
+
+      // Derived metrics
+      const walletBalance = balance + lockedBalance;
+      const equity = walletBalance + unrealizedPnl;
+      const usedMargin = crossUserMargin + crossOrderMargin;
+      const freeMargin = Math.max(0, equity - usedMargin);
+      const marginUtilization = equity > 0 ? usedMargin / equity : 0;
+      const buyingPower = freeMargin * 10;
+      const maintenanceMargin = parseFloat(w.maintenanceMargin);
+      const marginBuffer = Math.max(0, equity - maintenanceMargin);
+      const marginBufferPct = equity > 0 ? marginBuffer / equity : 1;
+
+      return {
+        ...w,
+        // Computed fields
+        walletBalance,
+        equity,
+        usedMargin,
+        freeMargin,
+        marginUtilization,
+        buyingPower,
+        marginBuffer,
+        marginBufferPct,
+      };
     }),
 
   // ─── Get cross margin details (live from CoinDCX) ───

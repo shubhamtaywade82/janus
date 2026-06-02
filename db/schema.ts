@@ -248,6 +248,13 @@ export const futuresWallets = pgTable("futures_wallets", {
   withdrawableBalance: decimal("withdrawable_balance", { precision: 18, scale: 8 }).default("0").notNull(),
   crossUserMargin: decimal("cross_user_margin", { precision: 18, scale: 8 }).default("0").notNull(),
   crossOrderMargin: decimal("cross_order_margin", { precision: 18, scale: 8 }).default("0").notNull(),
+  // Extended wallet fields synced from CoinDCX
+  unrealizedPnl: decimal("unrealized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
+  realizedPnl: decimal("realized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
+  maintenanceMargin: decimal("maintenance_margin", { precision: 18, scale: 8 }).default("0").notNull(),
+  initialMargin: decimal("initial_margin", { precision: 18, scale: 8 }).default("0").notNull(),
+  liquidationValue: decimal("liquidation_value", { precision: 18, scale: 8 }).default("0").notNull(),
+  accountType: varchar("account_type", { length: 20 }).default("cross").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -328,3 +335,88 @@ export const equitySnapshots = pgTable("equity_snapshots", {
 }));
 
 export type EquitySnapshot = typeof equitySnapshots.$inferSelect;
+
+// ─── Trading Accounts (unified live/paper/backtest wallet model) ───
+export const tradingAccounts = pgTable(
+  "trading_accounts",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    // live | paper | backtest — only execution provider changes
+    mode: varchar("mode", { length: 20 }).default("paper").notNull(),
+    currency: marginCurrencyEnum("currency").default("USDT").notNull(),
+    initialBalance: decimal("initial_balance", { precision: 18, scale: 8 }).notNull(),
+    // walletBalance = initialBalance + cumulative realized PnL + deposits - withdrawals
+    walletBalance: decimal("wallet_balance", { precision: 18, scale: 8 }).notNull(),
+    // availableBalance = equity - lockedMargin
+    availableBalance: decimal("available_balance", { precision: 18, scale: 8 }).notNull(),
+    lockedMargin: decimal("locked_margin", { precision: 18, scale: 8 }).default("0").notNull(),
+    realizedPnl: decimal("realized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
+    unrealizedPnl: decimal("unrealized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
+    // equity = walletBalance + unrealizedPnl
+    equity: decimal("equity", { precision: 18, scale: 8 }).notNull(),
+    usedMargin: decimal("used_margin", { precision: 18, scale: 8 }).default("0").notNull(),
+    freeMargin: decimal("free_margin", { precision: 18, scale: 8 }).default("0").notNull(),
+    peakEquity: decimal("peak_equity", { precision: 18, scale: 8 }).notNull(),
+    drawdown: decimal("drawdown", { precision: 18, scale: 8 }).default("0").notNull(),
+    totalFeesPaid: decimal("total_fees_paid", { precision: 18, scale: 8 }).default("0").notNull(),
+    totalFundingPaid: decimal("total_funding_paid", { precision: 18, scale: 8 }).default("0").notNull(),
+    tradeCount: integer("trade_count").default(0).notNull(),
+    winCount: integer("win_count").default(0).notNull(),
+    status: varchar("status", { length: 20 }).default("active").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userModeIdx: index("idx_trading_accounts_user_mode").on(table.userId, table.mode),
+  })
+);
+
+export type TradingAccount = typeof tradingAccounts.$inferSelect;
+
+// ─── Account Ledger (event-driven audit trail — identical for live and paper) ───
+export const accountLedger = pgTable(
+  "account_ledger",
+  {
+    id: serial("id").primaryKey(),
+    accountId: integer("account_id").references(() => tradingAccounts.id).notNull(),
+    // deposit | reserve_margin | release_margin | fill | fee | funding | pnl_realization | withdrawal | reset
+    eventType: varchar("event_type", { length: 30 }).notNull(),
+    debit: decimal("debit", { precision: 18, scale: 8 }).default("0").notNull(),
+    credit: decimal("credit", { precision: 18, scale: 8 }).default("0").notNull(),
+    balanceBefore: decimal("balance_before", { precision: 18, scale: 8 }).notNull(),
+    balanceAfter: decimal("balance_after", { precision: 18, scale: 8 }).notNull(),
+    // order | position | manual | adjustment
+    referenceType: varchar("reference_type", { length: 20 }),
+    referenceId: integer("reference_id"),
+    metadata: jsonb("metadata"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    accountLedgerIdx: index("idx_account_ledger_account").on(table.accountId, table.createdAt),
+  })
+);
+
+export type AccountLedgerEntry = typeof accountLedger.$inferSelect;
+
+// ─── Account Snapshots (periodic state captures for dashboard + backtesting) ───
+export const accountSnapshots = pgTable(
+  "account_snapshots",
+  {
+    id: serial("id").primaryKey(),
+    accountId: integer("account_id").references(() => tradingAccounts.id).notNull(),
+    equity: decimal("equity", { precision: 18, scale: 8 }).notNull(),
+    availableBalance: decimal("available_balance", { precision: 18, scale: 8 }).notNull(),
+    lockedMargin: decimal("locked_margin", { precision: 18, scale: 8 }).notNull(),
+    realizedPnl: decimal("realized_pnl", { precision: 18, scale: 8 }).notNull(),
+    unrealizedPnl: decimal("unrealized_pnl", { precision: 18, scale: 8 }).notNull(),
+    openPositionsCount: integer("open_positions_count").default(0).notNull(),
+    drawdown: decimal("drawdown", { precision: 18, scale: 8 }).default("0").notNull(),
+    snapshotAt: timestamp("snapshot_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    accountSnapshotIdx: index("idx_account_snapshots_account_time").on(table.accountId, table.snapshotAt),
+  })
+);
+
+export type AccountSnapshot = typeof accountSnapshots.$inferSelect;
