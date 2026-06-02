@@ -101,15 +101,17 @@ class BinanceCircuitBreaker {
 
 export const binanceCircuitBreaker = new BinanceCircuitBreaker();
 
-async function binanceFetch(url: string, errorPrefix: string): Promise<any> {
-  binanceCircuitBreaker.checkOrThrow();
+// skipCircuitBreaker=true for low-frequency calls (klines) that aren't the source of 418s.
+// The circuit breaker protects high-frequency depth/trades calls only.
+async function binanceFetch(url: string, errorPrefix: string, skipCircuitBreaker = false): Promise<any> {
+  if (!skipCircuitBreaker) binanceCircuitBreaker.checkOrThrow();
   const res = await fetch(url);
   if (res.status === 418 || res.status === 429) {
-    binanceCircuitBreaker.onBanReceived();
+    if (!skipCircuitBreaker) binanceCircuitBreaker.onBanReceived();
     throw new Error(`${errorPrefix}: ${res.status}`);
   }
   if (!res.ok) throw new Error(`${errorPrefix}: ${res.status}`);
-  binanceCircuitBreaker.onSuccess();
+  if (!skipCircuitBreaker) binanceCircuitBreaker.onSuccess();
   return res.json();
 }
 
@@ -123,7 +125,8 @@ export async function fetchKlines(
 ): Promise<BinanceKline[]> {
   let url = `${BINANCE_API_BASE}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=${limit}`;
   if (endTime) url += `&endTime=${endTime}`;
-  const data = await binanceFetch(url, "Binance klines error") as any[];
+  // klines bypass the circuit breaker — low-frequency, not the source of rate-limit bans
+  const data = await binanceFetch(url, "Binance klines error", true) as any[];
   return data.map((d: any[]) => ({
     openTime: d[0],
     open: d[1],
@@ -141,7 +144,7 @@ export async function fetch24hTicker(symbol?: string): Promise<BinanceTicker24h 
   const url = symbol
     ? `${BINANCE_API_BASE}/fapi/v1/ticker/24hr?symbol=${symbol}`
     : `${BINANCE_API_BASE}/fapi/v1/ticker/24hr`;
-  return binanceFetch(url, "Binance 24h ticker error");
+  return binanceFetch(url, "Binance 24h ticker error", true);
 }
 
 export async function fetchOrderBook(
