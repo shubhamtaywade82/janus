@@ -185,7 +185,20 @@ const SymbolTicker = memo(({ symbol, onPrice }: { symbol: string; onPrice: (sym:
 // ─── Main Portfolio Page ───
 export default function Portfolio() {
   const [statusFilter, setStatusFilter] = useState<string>("open");
-  const [portfolioMode, setPortfolioMode] = useState<"live" | "paper">("live");
+
+  // Auto-detect paper mode from server env (PLACE_ORDERS=false → default to PAPER view)
+  const { data: botStatus } = trpc.autoExecutor.status.useQuery(undefined, { staleTime: 30_000 });
+  const defaultMode = botStatus?.isPaperMode ? "paper" : "live";
+  const [portfolioMode, setPortfolioMode] = useState<"live" | "paper">(defaultMode);
+
+  // Sync once when botStatus first loads (before user manually toggles)
+  const modeSyncedRef = useRef(false);
+  useEffect(() => {
+    if (botStatus && !modeSyncedRef.current) {
+      modeSyncedRef.current = true;
+      setPortfolioMode(botStatus.isPaperMode ? "paper" : "live");
+    }
+  }, [botStatus]);
 
   // Use portfolioStream subscription for live push updates
   const [portfolio, setPortfolio] = useState<any>(null);

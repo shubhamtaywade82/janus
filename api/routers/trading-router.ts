@@ -408,7 +408,21 @@ export const tradingRouter = createRouter({
               };
             });
 
-          return mapped;
+          // Always append paper DB positions — live API only returns exchange positions
+          const paperDbPositions = await db
+            .select()
+            .from(positions)
+            .where(and(
+              eq(positions.userId, userId),
+              eq(positions.status, "open"),
+              eq(positions.isPaper, true)
+            ))
+            .orderBy(desc(positions.createdAt));
+
+          return [
+            ...mapped.map((p) => ({ ...p, isPaper: false })),
+            ...paperDbPositions,
+          ];
         } catch (err) {
           console.error("[trading-router] Failed to fetch live positions from CoinDCX, falling back to local DB:", err);
         }
