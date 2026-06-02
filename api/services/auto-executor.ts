@@ -370,7 +370,7 @@ export class AutoExecutor {
 
     // Lock margin in paper wallet
     if (isPaperMode) {
-      lockPaperMargin(1, notional / leverage);
+      await lockPaperMargin(1, notional / leverage);
     }
 
     // Update risk session
@@ -378,7 +378,7 @@ export class AutoExecutor {
     updateSession(session);
 
     // Snapshot equity after execution
-    const equity = isPaperMode ? getPaperEquity(1) : walletFree - notional / leverage;
+    const equity = isPaperMode ? await getPaperEquity(1) : walletFree - notional / leverage;
     await snapshotEquity(1, equity, 0, session.realizedPnl);
 
     this.state.executionsToday++;

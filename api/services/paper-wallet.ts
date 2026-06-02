@@ -1,105 +1,119 @@
 /**
- * Paper Wallet
- * Tracks virtual balance for paper trading mode (PLACE_ORDERS=false).
+ * Paper Wallet — thin adapter over TradingAccountService for paper mode.
  *
- * Balance lifecycle:
- *   startingBalance (configurable, default $10,000)
- *   - margin locked when paper position opened
- *   + margin released + realizedPnl when paper position closed
+ * The underlying state lives in `trading_accounts` (mode="paper") with a full
+ * ledger in `account_ledger`. This file keeps the same function signatures so
+ * existing callers (auto-executor, trading-router) continue to work unchanged.
  *
- * State persists in-memory (resets on server restart).
- * Seeded from config.paperStartingBalance on first use.
+ * Equity formula:
+ *   equity           = walletBalance + unrealizedPnl
+ *   availableBalance = equity - lockedMargin
  */
 
-import { getDb } from "../queries/connection";
-import { positions } from "@db/schema";
-import { and, eq } from "drizzle-orm";
+import {
+  getOrCreateAccount,
+  reserveMargin,
+  releaseMargin,
+  updateUnrealizedPnl,
+  computeDerivedMetrics,
+  resetAccount,
+  takeAccountSnapshot,
+  getLedgerEntries,
+  getAccountSnapshots,
+} from "./trading-account";
 
-interface PaperWalletState {
-  userId: number;
-  startingBalance: number;
-  balance: number;         // free (not locked in positions)
-  lockedMargin: number;    // sum of margins in open paper positions
-  realizedPnl: number;
-  tradeCount: number;
+// In-memory account-id cache so we avoid one DB lookup per call
+const accountIdCache = new Map<number, number>(); // userId → accountId
+
+async function getAccountId(userId: number, startingBalance = 10_000): Promise<number> {
+  if (accountIdCache.has(userId)) return accountIdCache.get(userId)!;
+  const account = await getOrCreateAccount(userId, "paper", startingBalance);
+  accountIdCache.set(userId, account.id);
+  return account.id;
 }
 
-const wallets = new Map<number, PaperWalletState>();
+// ─── Public API ───
 
-export async function getPaperWallet(userId: number, startingBalance = 10_000): Promise<PaperWalletState> {
-  if (wallets.has(userId)) return wallets.get(userId)!;
+export async function getPaperWallet(userId: number, startingBalance = 10_000) {
+  const account = await getOrCreateAccount(userId, "paper", startingBalance);
+  accountIdCache.set(userId, account.id);
 
-  // Reconstruct from DB on first access (e.g., after server restart)
-  try {
-    const db = getDb();
-    const openPaperPositions = await db
-      .select({ margin: positions.margin, realizedPnl: positions.realizedPnl })
-      .from(positions)
-      .where(and(eq(positions.userId, userId), eq(positions.status, "open"), eq(positions.isPaper, true)));
+  const metrics = computeDerivedMetrics(account);
 
-    const lockedMargin = openPaperPositions.reduce((sum, p) => sum + parseFloat(p.margin), 0);
-
-    const closedPaperPositions = await db
-      .select({ realizedPnl: positions.realizedPnl })
-      .from(positions)
-      .where(and(eq(positions.userId, userId), eq(positions.status, "closed"), eq(positions.isPaper, true)));
-
-    const realizedPnl = closedPaperPositions.reduce((sum, p) => sum + parseFloat(p.realizedPnl ?? "0"), 0);
-    const tradeCount = closedPaperPositions.length;
-
-    const state: PaperWalletState = {
-      userId,
-      startingBalance,
-      balance: startingBalance - lockedMargin + realizedPnl,
-      lockedMargin,
-      realizedPnl,
-      tradeCount,
-    };
-    wallets.set(userId, state);
-    return state;
-  } catch {
-    const state: PaperWalletState = {
-      userId,
-      startingBalance,
-      balance: startingBalance,
-      lockedMargin: 0,
-      realizedPnl: 0,
-      tradeCount: 0,
-    };
-    wallets.set(userId, state);
-    return state;
-  }
-}
-
-export function lockPaperMargin(userId: number, margin: number): void {
-  const wallet = wallets.get(userId);
-  if (!wallet) return;
-  wallet.lockedMargin += margin;
-  wallet.balance -= margin;
-}
-
-export function releasePaperMargin(userId: number, margin: number, realizedPnl: number): void {
-  const wallet = wallets.get(userId);
-  if (!wallet) return;
-  wallet.lockedMargin = Math.max(0, wallet.lockedMargin - margin);
-  wallet.balance += margin + realizedPnl;
-  wallet.realizedPnl += realizedPnl;
-  wallet.tradeCount++;
-}
-
-export function getPaperEquity(userId: number): number {
-  const wallet = wallets.get(userId);
-  if (!wallet) return 0;
-  return wallet.balance + wallet.lockedMargin; // total = free + locked
-}
-
-export function resetPaperWallet(userId: number, newBalance: number): void {
-  wallets.set(userId, {
+  return {
     userId,
-    startingBalance: newBalance,
-    balance: newBalance,
-    lockedMargin: 0,
-    realizedPnl: 0,
-    tradeCount: 0,
-  });
+    accountId: account.id,
+    startingBalance: parseFloat(account.initialBalance),
+    balance: parseFloat(account.availableBalance),
+    lockedMargin: parseFloat(account.lockedMargin),
+    realizedPnl: parseFloat(account.realizedPnl),
+    unrealizedPnl: parseFloat(account.unrealizedPnl),
+    equity: metrics.equity,
+    usedMargin: metrics.usedMargin,
+    freeMargin: metrics.freeMargin,
+    marginUtilization: metrics.marginUtilization,
+    drawdown: metrics.drawdown,
+    drawdownPct: metrics.drawdownPct,
+    peakEquity: parseFloat(account.peakEquity),
+    winRate: metrics.winRate,
+    buyingPower: metrics.buyingPower,
+    healthScore: metrics.healthScore,
+    marginBuffer: metrics.marginBuffer,
+    marginBufferPct: metrics.marginBufferPct,
+    tradeCount: account.tradeCount,
+    winCount: account.winCount,
+    totalFeesPaid: parseFloat(account.totalFeesPaid),
+    totalFundingPaid: parseFloat(account.totalFundingPaid),
+    status: account.status,
+  };
+}
+
+export async function lockPaperMargin(userId: number, margin: number, positionId?: number): Promise<void> {
+  const accountId = await getAccountId(userId);
+  await reserveMargin(accountId, margin, positionId ?? 0);
+}
+
+export async function releasePaperMargin(
+  userId: number,
+  margin: number,
+  realizedPnl: number,
+  positionId?: number
+): Promise<void> {
+  const accountId = await getAccountId(userId);
+  const isWin = realizedPnl > 0;
+  await releaseMargin(accountId, margin, realizedPnl, positionId ?? 0, isWin);
+}
+
+export async function updatePaperUnrealizedPnl(userId: number, unrealizedPnl: number): Promise<void> {
+  const accountId = await getAccountId(userId);
+  await updateUnrealizedPnl(accountId, unrealizedPnl);
+}
+
+export async function getPaperEquity(userId: number): Promise<number> {
+  const wallet = await getPaperWallet(userId);
+  return wallet.equity;
+}
+
+export async function resetPaperWallet(userId: number, newBalance: number): Promise<void> {
+  const accountId = await getAccountId(userId);
+  await resetAccount(accountId, newBalance);
+  // Snapshot after reset so the equity curve shows the reset point
+  await takeAccountSnapshot(accountId);
+  // Clear cache so next getPaperWallet sees the new state
+  accountIdCache.delete(userId);
+}
+
+export async function snapshotPaperWallet(userId: number): Promise<void> {
+  const accountId = await getAccountId(userId);
+  await takeAccountSnapshot(accountId);
+}
+
+export async function getPaperLedger(userId: number, limit = 50) {
+  const accountId = await getAccountId(userId);
+  return getLedgerEntries(accountId, limit);
+}
+
+export async function getPaperSnapshots(userId: number, limit = 100) {
+  const accountId = await getAccountId(userId);
+  return getAccountSnapshots(accountId, limit);
 }

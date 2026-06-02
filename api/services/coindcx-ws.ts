@@ -5,6 +5,7 @@ import { exchangeCredentials, positions, futuresWallets } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { EventEmitter } from "events";
 import { latestTickerCache, marketEvents, activeStreams } from "./streaming";
+import { syncLiveAccountFromCoinDCX } from "./trading-account";
 
 export const tradingEvents = new EventEmitter();
 tradingEvents.setMaxListeners(100);
@@ -214,13 +215,26 @@ export async function initCoinDCXPrivateWs() {
               eq(futuresWallets.marginCurrency, currency as "INR" | "USDT")
             ))
             .limit(1);
+
+          // Extended fields — present in cross margin detail events
           const walletData = {
             balance: String(b.balance || "0"),
             lockedBalance: String(b.locked_balance || "0"),
+            totalAccountEquity: String(b.total_account_equity || b.equity || "0"),
+            availableBalanceCross: String(b.available_balance_cross || b.available_balance || b.balance || "0"),
+            marginRatioCross: String(b.margin_ratio_cross || b.margin_ratio || "0"),
+            withdrawableBalance: String(b.withdrawable_balance || b.balance || "0"),
             crossUserMargin: String(b.cross_user_margin || "0"),
             crossOrderMargin: String(b.cross_order_margin || "0"),
+            unrealizedPnl: String(b.unrealized_pnl || "0"),
+            realizedPnl: String(b.realized_pnl || "0"),
+            maintenanceMargin: String(b.maintenance_margin || "0"),
+            initialMargin: String(b.initial_margin || "0"),
+            liquidationValue: String(b.liquidation_value || "0"),
+            accountType: String(b.account_type || b.margin_mode || "cross"),
             updatedAt: new Date(),
           };
+
           if (existing[0]) {
             await db.update(futuresWallets).set(walletData).where(eq(futuresWallets.id, existing[0].id));
           } else {
@@ -230,6 +244,23 @@ export async function initCoinDCXPrivateWs() {
               marginCurrency: currency as "INR" | "USDT",
               ...walletData,
             });
+          }
+
+          // Mirror to unified trading_accounts (live mode)
+          if (currency === "USDT") {
+            const walletBalance = parseFloat(b.balance || "0") + parseFloat(b.locked_balance || "0");
+            const availableBalance = parseFloat(b.available_balance_cross || b.available_balance || b.balance || "0");
+            const lockedMargin = parseFloat(b.cross_user_margin || "0") + parseFloat(b.cross_order_margin || "0");
+            const unrealizedPnl = parseFloat(b.unrealized_pnl || "0");
+            const realizedPnl = parseFloat(b.realized_pnl || "0");
+
+            syncLiveAccountFromCoinDCX(1, {
+              walletBalance,
+              availableBalance,
+              lockedMargin,
+              unrealizedPnl,
+              realizedPnl,
+            }).catch((err) => console.error("[coindcx-ws] Failed to sync live account:", err));
           }
         }
       } catch (err) {
