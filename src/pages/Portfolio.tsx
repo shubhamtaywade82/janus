@@ -197,6 +197,12 @@ export default function Portfolio() {
     return defaultMode;
   });
 
+  const STATIC_RATE = 98;
+  const [rateMode, setRateMode] = useState<"live" | "static">(() => {
+    const saved = localStorage.getItem("janus_rate_mode");
+    return saved === "static" ? "static" : "live";
+  });
+
   // Sync once when botStatus first loads (before user manually toggles)
   const modeSyncedRef = useRef(false);
   useEffect(() => {
@@ -249,12 +255,6 @@ export default function Portfolio() {
   });
 
   trpc.trading.portfolioStream.useSubscription({ userId: 1 }, portfolioStreamOpts.current);
-
-  const [rateMode, setRateMode] = useState<"live" | "static">(() => {
-    const saved = localStorage.getItem("janus_rate_mode");
-    return saved === "static" ? "static" : "live";
-  });
-  const STATIC_RATE = 98;
 
   const { data: conversion } = trpc.trading.currencyConversion.useQuery(
     undefined,
