@@ -4,6 +4,8 @@ import { trpc } from "@/providers/trpc";
 import { ExitSignalToast } from "@/components/ExitSignalToast";
 import { RegimeIndicator } from "@/components/RegimeIndicator";
 import { RiskStatus } from "@/components/RiskStatus";
+import { AutoTraderPanel } from "@/components/AutoTraderPanel";
+import { LlmActivityFeed } from "@/components/LlmActivityFeed";
 import {
   Clock,
   Plus,
@@ -1567,6 +1569,11 @@ const Dashboard = () => {
 
           <RiskStatus userId={1} />
 
+          {/* AutoTrader Panel */}
+          <div className="px-3 py-2 border-b border-[#27272a]">
+            <AutoTraderPanel userId={1} />
+          </div>
+
           {/* Buy/Sell Tabs */}
           <div className="flex border-b border-[#27272a]">
             <button
@@ -1826,6 +1833,11 @@ const Dashboard = () => {
               </div>
             </div>
           )}
+
+          {/* LLM Activity Feed */}
+          <div className="h-48 border-t border-[#27272a] overflow-hidden flex flex-col">
+            <LlmActivityFeed />
+          </div>
 
           {/* Order Book */}
           <div className="flex-1 min-h-0 border-t border-[#27272a] overflow-hidden flex flex-col">

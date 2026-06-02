@@ -118,3 +118,11 @@ initCoinDCXPrivateWs().catch((err) => {
 // Start auto signal analysis loop (runs every 30s)
 import { startAutoAnalysis } from "./routers/signal-router";
 startAutoAnalysis();
+
+// Init LLM advisor (loads keys from DB + env-level Ollama config)
+import { globalLlmAdvisor } from "./services/llm-advisor";
+globalLlmAdvisor.init().catch((err) => {
+  console.error("[llm-advisor] Init failed:", err);
+});
+
+console.log(`[auto-executor] AUTO_EXECUTE=${env.autoExecute} | PLACE_ORDERS=${env.placeOrders}`);

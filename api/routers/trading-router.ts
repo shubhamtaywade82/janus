@@ -23,6 +23,8 @@ import { startExitMonitor, stopExitMonitor, getFeeBreakevenMap } from "../servic
 import { latestTickerCache, subscribeToSymbol } from "../services/streaming";
 import { globalRiskEngine, getOrCreateSession, updateSession, sessions, riskEvents } from "../services/risk-engine";
 import { registerPositionForTrailing, unregisterPosition } from "../services/trailing-stop";
+import { globalKillSwitch } from "../services/kill-switch";
+import { releasePaperMargin } from "../services/paper-wallet";
 import { env } from "../lib/env";
 
 // Wire risk events → tradingEvents so frontend streams pick them up
@@ -438,6 +440,14 @@ export const tradingRouter = createRouter({
     .mutation(async ({ input }) => {
       const db = getDb();
 
+      // 0. Kill switch — block all new positions if halt is active
+      if (!globalKillSwitch.canTrade()) {
+        throw new TRPCError({
+          code: "PRECONDITION_FAILED",
+          message: `Trading halted: ${globalKillSwitch.state?.reason ?? "kill switch active"}`,
+        });
+      }
+
       // 1. Leverage Cap check (10x maximum)
       if (input.leverage > 10) {
         throw new TRPCError({
@@ -620,6 +630,11 @@ export const tradingRouter = createRouter({
           updatedAt: new Date(),
         })
         .where(eq(positions.id, input.id));
+
+      // Release margin back to paper wallet if this was a paper position
+      if (pos[0]?.isPaper) {
+        releasePaperMargin(userId, parseFloat(pos[0].margin), parseFloat(input.realizedPnl));
+      }
 
       unregisterPosition(input.id);
       tradingEvents.emit(`portfolio-update:${userId}`);

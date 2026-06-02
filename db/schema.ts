@@ -123,6 +123,7 @@ export const positions = pgTable(
     settlementCurrencyAvgPrice: decimal("settlement_currency_avg_price", { precision: 18, scale: 8 }),
     priceInInr: decimal("price_in_inr", { precision: 18, scale: 8 }),
     strategyType: strategyTypeEnum("strategy_type").default("intraday"),
+    isPaper: boolean("is_paper").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
     closedAt: timestamp("closed_at"),
@@ -258,3 +259,61 @@ export const transactions = pgTable("transactions", {
 });
 
 export type Transaction = typeof transactions.$inferSelect;
+
+// ─── LLM API Keys (Ollama / OpenAI / Anthropic with rotation) ───
+export const llmApiKeys = pgTable("llm_api_keys", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  label: varchar("label", { length: 100 }).notNull(),
+  provider: varchar("provider", { length: 30 }).notNull().default("ollama"),
+  endpoint: varchar("endpoint", { length: 500 }).notNull(),
+  apiKey: varchar("api_key", { length: 500 }).default(""),
+  model: varchar("model", { length: 100 }).notNull().default("llama3"),
+  priority: integer("priority").notNull().default(1),
+  isActive: boolean("is_active").default(true).notNull(),
+  requestCount: integer("request_count").default(0).notNull(),
+  errorCount: integer("error_count").default(0).notNull(),
+  lastUsedAt: timestamp("last_used_at"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type LlmApiKey = typeof llmApiKeys.$inferSelect;
+
+// ─── Auto-Executor Config (per user) ───
+export const autoExecutorConfig = pgTable("auto_executor_config", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().unique(),
+  enabled: boolean("enabled").default(false).notNull(),
+  targetSymbols: jsonb("target_symbols").$type<string[]>().default(["BTCUSDT", "ETHUSDT"]),
+  defaultSizeUsdt: decimal("default_size_usdt", { precision: 12, scale: 2 }).default("50"),
+  defaultLeverage: integer("default_leverage").default(3),
+  stopLossPct: decimal("stop_loss_pct", { precision: 5, scale: 3 }).default("0.015"),
+  tp1Pct: decimal("tp1_pct", { precision: 5, scale: 3 }).default("0.015"),
+  tp2Pct: decimal("tp2_pct", { precision: 5, scale: 3 }).default("0.030"),
+  useLlmAdvisor: boolean("use_llm_advisor").default(true).notNull(),
+  llmConfidenceThreshold: integer("llm_confidence_threshold").default(70),
+  maxPositionsPerSymbol: integer("max_positions_per_symbol").default(1),
+  maxTotalPositions: integer("max_total_positions").default(3),
+  paperStartingBalance: decimal("paper_starting_balance", { precision: 12, scale: 2 }).default("10000"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type AutoExecutorConfig = typeof autoExecutorConfig.$inferSelect;
+
+// ─── Equity Snapshots (for equity curve + performance metrics) ───
+export const equitySnapshots = pgTable("equity_snapshots", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull(),
+  snapshotAt: timestamp("snapshot_at").defaultNow().notNull(),
+  totalEquityUsdt: decimal("total_equity_usdt", { precision: 18, scale: 4 }).notNull(),
+  unrealizedPnl: decimal("unrealized_pnl", { precision: 18, scale: 4 }).default("0"),
+  realizedPnlToday: decimal("realized_pnl_today", { precision: 18, scale: 4 }).default("0"),
+  openPositionCount: integer("open_position_count").default(0),
+  metadata: jsonb("metadata"),
+},
+(table) => ({
+  userSnapshotIdx: index("idx_equity_snapshots_user_time").on(table.userId, table.snapshotAt),
+}));
+
+export type EquitySnapshot = typeof equitySnapshots.$inferSelect;

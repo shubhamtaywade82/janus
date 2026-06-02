@@ -22,6 +22,7 @@ import {
   evaluateScalpingMicro
 } from "../services/strategies";
 import { detectRegimeForSymbol, latestRegimeCache, type RegimeResult } from "../services/regime-detector";
+import { globalAutoExecutor } from "../services/auto-executor";
 
 // ─── Signal update event bus ───
 export const signalEvents = new EventEmitter();
@@ -122,6 +123,7 @@ let activeStrategyType: StrategyType = "intraday";
 
 async function runAutoAnalysis() {
   const config = STRATEGY_CONFIGS[activeStrategyType];
+  const batchSignals: typeof signals.$inferSelect[] = [];
   try {
     const db = getDb();
     for (const pair of SUPPORTED_PAIRS) {
@@ -221,12 +223,20 @@ async function runAutoAnalysis() {
           };
         }
 
-        await db.insert(signals).values(signalData).catch(() => {});
+        const inserted = await db.insert(signals).values(signalData).returning().catch(() => []);
+        if (inserted[0]) batchSignals.push(inserted[0]);
       } catch (err) {
         console.error(`[signal-router] Auto-analysis failed for ${pair.binance}:`, err);
       }
     }
     signalEvents.emit("update");
+
+    // Feed gated signals to auto-executor (fire-and-forget)
+    if (batchSignals.length > 0) {
+      globalAutoExecutor.onSignalBatch(batchSignals).catch((err) =>
+        console.error("[auto-executor] Batch error:", err)
+      );
+    }
   } catch (err) {
     console.error("[signal-router] Auto-analysis loop error:", err);
   }
