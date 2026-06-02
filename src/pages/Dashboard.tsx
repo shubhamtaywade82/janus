@@ -25,6 +25,9 @@ import { StructurePrimitive } from "@/lib/chart/primitives/StructurePrimitive";
 import { ChartOverlayPanel } from "@/components/ChartOverlayPanel";
 import type { OverlayToggles } from "@/components/ChartOverlayPanel";
 import { IndicatorPanel } from "@/components/IndicatorPanel";
+import { AlertConfigPanel } from "@/components/AlertConfigPanel";
+import type { AlertConfig } from "@/lib/chart/alert-engine";
+import { checkIndicatorAlerts, checkSMCAlerts } from "@/lib/chart/alert-engine";
 import type { IndicatorConfig } from "@/components/IndicatorPanel";
 import { EMA_COLORS, SMA_COLORS } from "@/components/IndicatorPanel";
 import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP } from "@/lib/chart/indicators";
@@ -1614,6 +1617,12 @@ const Dashboard = () => {
     { staleTime: Infinity }
   );
 
+  // Reset alert tracking on symbol/interval change
+  useEffect(() => {
+    prevPaDataRef.current   = null;
+    prevKlinesLenRef.current = 0;
+  }, [selectedSymbol, interval]);
+
   // Step 1: Clear klines immediately when symbol or interval changes — prevents
   // stale data from the previous query key from briefly rendering on the chart.
   useEffect(() => {
@@ -1657,6 +1666,9 @@ const Dashboard = () => {
 
   // ─── SMC / Price Action overlay ───
   const [indicatorCfg, setIndicatorCfg] = useState<IndicatorConfig | null>(null);
+  const [alertCfg, setAlertCfg] = useState<AlertConfig | null>(null);
+  const prevPaDataRef = useRef<any>(null);
+  const prevKlinesLenRef = useRef(0);
 
   const [overlayToggles, setOverlayToggles] = useState<OverlayToggles>(() => {
     try {
@@ -1779,6 +1791,40 @@ const Dashboard = () => {
   const lastPrice = tickerData ? parseFloat(tickerData.lastPrice) : 0;
   const priceChange = tickerData ? parseFloat(tickerData.priceChangePercent) : 0;
 
+  // ─── Alert engine — runs when new candle or new SMC data arrives ───
+  const sendTelegramAlert = trpc.telegram.sendAlert.useMutation().mutate;
+
+  useEffect(() => {
+    if (!alertCfg || !indicatorCfg || klines.length < 3) return;
+    const isNewCandle = klines.length !== prevKlinesLenRef.current;
+    const isNewPaData = paData !== prevPaDataRef.current;
+    if (!isNewCandle && !isNewPaData) return;
+
+    const currentPrice = lastPrice || parseFloat(klines[klines.length - 1]?.close ?? "0");
+    const allEvents: import("@/lib/chart/alert-engine").AlertEvent[] = [];
+
+    if (isNewCandle) {
+      allEvents.push(...checkIndicatorAlerts(klines as any[], alertCfg, indicatorCfg, selectedSymbol));
+    }
+    if (isNewPaData && paData && prevPaDataRef.current) {
+      allEvents.push(...checkSMCAlerts(paData as any, prevPaDataRef.current, currentPrice, selectedSymbol, alertCfg));
+    }
+
+    for (const evt of allEvents) {
+      toast(evt.message, {
+        description: `${selectedSymbol} @ ${evt.price.toFixed(2)} — ${interval}`,
+        duration: 8_000,
+        style: { borderLeft: `3px solid ${evt.direction === "bullish" ? "#22c55e" : evt.direction === "bearish" ? "#ef4444" : "#f59e0b"}` },
+      });
+      try {
+        sendTelegramAlert({ message: `${evt.emoji} <b>${selectedSymbol} ${interval}</b>\n${evt.message}\nPrice: <code>${evt.price.toFixed(4)}</code>` });
+      } catch { /* Telegram may not be configured */ }
+    }
+
+    prevKlinesLenRef.current = klines.length;
+    prevPaDataRef.current    = paData ?? prevPaDataRef.current;
+  }, [klines.length, paData, alertCfg, indicatorCfg, selectedSymbol, interval, lastPrice, sendTelegramAlert]);
+
   const maxLeverage = instrInfo?.maxLeverage ?? 10;
   const availableBalance = instrInfo?.availableUsdtEquivalent ?? 0;
   const marginCurrency = instrInfo?.marginCurrency ?? "USDT";
@@ -1881,6 +1927,7 @@ const Dashboard = () => {
               <RegimeIndicator symbol={selectedSymbol} />
               <ChartOverlayPanel onChange={setOverlayToggles} />
               <IndicatorPanel onChange={setIndicatorCfg} />
+              <AlertConfigPanel onChange={setAlertCfg} />
               <div className="h-3 w-px bg-[#27272a]" />
               <span className="text-[10px] text-[#71717a]">
                 H: {tickerData ? parseFloat(tickerData.highPrice).toFixed(2) : "--"}
