@@ -281,18 +281,6 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
 
-    // Attach SMC primitives to candlestick series
-    const obPrim  = new OrderBlockPrimitive();
-    const fvgPrim = new FVGPrimitive();
-    const strPrim = new StructurePrimitive();
-    candlestickSeries.attachPrimitive(obPrim);
-    candlestickSeries.attachPrimitive(fvgPrim);
-    candlestickSeries.attachPrimitive(strPrim);
-    obPrimRef.current   = obPrim;
-    fvgPrimRef.current  = fvgPrim;
-    strPrimRef.current  = strPrim;
-    markersPluginRef.current = createSeriesMarkers(candlestickSeries, []);
-
     // Lazy load older candles when user scrolls to the left edge
     chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (!range) return;
@@ -319,6 +307,32 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       setChartInitialized(false);
     };
   }, []);
+
+  // 1b. Attach SMC primitives AFTER chart is confirmed ready (separate effect to avoid crashing init)
+  useEffect(() => {
+    if (!chartInitialized || !candlestickSeriesRef.current) return;
+    try {
+      const obPrim  = new OrderBlockPrimitive();
+      const fvgPrim = new FVGPrimitive();
+      const strPrim = new StructurePrimitive();
+      candlestickSeriesRef.current.attachPrimitive(obPrim);
+      candlestickSeriesRef.current.attachPrimitive(fvgPrim);
+      candlestickSeriesRef.current.attachPrimitive(strPrim);
+      obPrimRef.current  = obPrim;
+      fvgPrimRef.current = fvgPrim;
+      strPrimRef.current = strPrim;
+      markersPluginRef.current = createSeriesMarkers(candlestickSeriesRef.current, []);
+    } catch (err) {
+      console.warn("[chart] SMC primitive attach failed:", err);
+    }
+    return () => {
+      // Detach on unmount — chart.remove() handles cleanup but be explicit
+      obPrimRef.current  = null;
+      fvgPrimRef.current = null;
+      strPrimRef.current = null;
+      markersPluginRef.current = null;
+    };
+  }, [chartInitialized]);
 
   // 2. Update chart data — setData on full reload, update() on live tick
   useEffect(() => {

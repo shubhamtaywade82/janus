@@ -28,6 +28,7 @@ export class FVGPrimitive implements ISeriesPrimitive<Time> {
             const toX = (t: number): number | null => series.timeToCoordinate((t / 1000) as Time) ?? null;
 
             target.useBitmapCoordinateSpace(({ context: ctx, horizontalPixelRatio: hpr, verticalPixelRatio: vpr }) => {
+              ctx.save();
               for (const fvg of self._fvgs) {
                 const x1 = toX(fvg.startTime);
                 const x2 = toX(fvg.endTime);
@@ -72,6 +73,7 @@ export class FVGPrimitive implements ISeriesPrimitive<Time> {
                   ctx.fillText(`FVG ${fvg.fillPercent.toFixed(0)}%`, bx + 2, by + 2);
                 }
               }
+              ctx.restore();
             });
           },
         };

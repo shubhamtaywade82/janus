@@ -35,6 +35,7 @@ export class OrderBlockPrimitive implements ISeriesPrimitive<Time> {
             const toX = (t: number): number | null => series.timeToCoordinate((t / 1000) as Time) ?? null;
 
             target.useBitmapCoordinateSpace(({ context: ctx, horizontalPixelRatio: hpr, verticalPixelRatio: vpr }) => {
+              ctx.save();
               for (const block of self._blocks) {
                 const x1 = toX(block.time);
                 const y1 = toY(block.top);
@@ -64,6 +65,7 @@ export class OrderBlockPrimitive implements ISeriesPrimitive<Time> {
                 ctx.textBaseline = "top";
                 ctx.fillText(block.type === "bullish" ? "OB▲" : "OB▼", bx + 3, by + 2);
               }
+              ctx.restore();
             });
           },
         };

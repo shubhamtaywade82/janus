@@ -31,6 +31,7 @@ export class StructurePrimitive implements ISeriesPrimitive<Time> {
             const toX = (t: number): number | null => series.timeToCoordinate((t / 1000) as Time) ?? null;
 
             target.useBitmapCoordinateSpace(({ context: ctx, horizontalPixelRatio: hpr, verticalPixelRatio: vpr }) => {
+              ctx.save();
               // ─── BOS / CHoCH ───
               for (const sb of self._structure) {
                 const x1 = toX(sb.brokenSwingTime);
@@ -77,6 +78,7 @@ export class StructurePrimitive implements ISeriesPrimitive<Time> {
                 ctx.fillText(label, ctx.canvas.width - 4, Math.round(y * vpr) - 2);
                 ctx.textAlign = "left";
               }
+              ctx.restore();
             });
           },
         };
