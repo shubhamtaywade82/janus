@@ -24,7 +24,7 @@ import { globalRiskEngine, getOrCreateSession, updateSession } from "./risk-engi
 import { globalLlmAdvisor, type SignalContext } from "./llm-advisor";
 import { latestTickerCache } from "./streaming";
 import { markPriceCache, tradingEvents } from "./coindcx-ws";
-import { createFuturesOrder, getFuturesWallet } from "./coindcx";
+import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo } from "./coindcx";
 import { registerPositionForTrailing } from "./trailing-stop";
 import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
@@ -272,7 +272,28 @@ export class AutoExecutor {
       config.defaultLeverage ?? 3,
       STRATEGY_CONFIGS[regimeData?.strategy ?? "intraday"]?.maxLeverage ?? 5
     );
-    const size = notional / currentPrice;
+
+    // Validate size against instrument minimums
+    let rawSize = notional / currentPrice;
+    if (!isPaperMode && creds[0]) {
+      try {
+        const instrInfo = await getFuturesInstrumentInfo(symbol);
+        if (instrInfo) {
+          const minQty   = parseFloat(instrInfo.min_quantity ?? instrInfo.min_qty ?? "0");
+          const stepSize = parseFloat(instrInfo.step ?? instrInfo.quantity_step ?? "0");
+          if (minQty > 0 && rawSize < minQty) {
+            return this.skip(signal,
+              `size ${rawSize.toFixed(6)} < min qty ${minQty} for ${symbol} — increase defaultSizeUsdt`
+            );
+          }
+          // Round down to nearest step
+          if (stepSize > 0) {
+            rawSize = Math.floor(rawSize / stepSize) * stepSize;
+          }
+        }
+      } catch { /* non-fatal — proceed with raw size */ }
+    }
+    const size = rawSize;
     const slPct = parseFloat(config.stopLossPct ?? "0.015");
     const tp1Pct = parseFloat(config.tp1Pct ?? "0.015");
 

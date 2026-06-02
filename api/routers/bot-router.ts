@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import { observable } from "@trpc/server/observable";
-import { createRouter, publicQuery } from "../middleware";
+import { createRouter, publicQuery, adminQuery } from "../middleware";
 import { STRATEGY_CONFIGS, type StrategyType } from "../services/strategy-config";
 import { latestRegimeCache } from "../services/regime-detector";
 import { startAutoAnalysis } from "./signal-router";
@@ -47,7 +47,7 @@ export const botRouter = createRouter({
   }),
 
   // ─── Start auto-executor ───
-  start: publicQuery
+  start: adminQuery
     .input(z.object({ useLLM: z.boolean().optional().default(true) }))
     .mutation(async ({ input }) => {
       const db = getDb();
@@ -71,7 +71,7 @@ export const botRouter = createRouter({
     }),
 
   // ─── Stop auto-executor ───
-  stop: publicQuery.mutation(async () => {
+  stop: adminQuery.mutation(async () => {
     const db = getDb();
     const existing = await db
       .select({ id: autoExecutorConfig.id })
@@ -93,7 +93,7 @@ export const botRouter = createRouter({
   }),
 
   // ─── Override strategy (pins to fixed strategy, disables regime auto-switch) ───
-  setStrategy: publicQuery
+  setStrategy: adminQuery
     .input(z.object({ strategy: strategyTypeSchema }))
     .mutation(({ input }) => {
       startAutoAnalysis(input.strategy as StrategyType, false); // false = don't auto-switch
@@ -105,13 +105,13 @@ export const botRouter = createRouter({
     }),
 
   // ─── Re-enable automatic regime detection → strategy switching ───
-  enableAutoRegime: publicQuery.mutation(() => {
+  enableAutoRegime: adminQuery.mutation(() => {
     startAutoAnalysis(undefined, true); // true = auto-switch enabled
     return { ok: true, message: "Regime-based strategy auto-switching enabled" };
   }),
 
   // ─── Toggle LLM filter ───
-  setLLMFilter: publicQuery
+  setLLMFilter: adminQuery
     .input(z.object({ enabled: z.boolean() }))
     .mutation(async ({ input }) => {
       const db = getDb();
