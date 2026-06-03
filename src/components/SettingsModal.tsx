@@ -80,6 +80,11 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
     { enabled: isOpen }
   );
 
+  const { data: keyStatusList } = trpc.llm.keyStatus.useQuery(undefined, {
+    enabled: isOpen,
+    refetchInterval: 10_000,
+  });
+
   const addLlmKeyMutation = trpc.llm.addKey.useMutation({
     onSuccess: () => {
       toast.success("LLM key added to rotation pool");
@@ -253,6 +258,31 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
       toast.error(`Test failed: ${err.message}`);
     }
   };
+
+  const displayedKeys = [
+    ...(llmKeys || []).map((k) => ({ ...k, isEnv: false })),
+    ...(keyStatusList || [])
+      .filter((ks) => ks.id < 0)
+      .map((ks) => ({
+        id: ks.id,
+        userId: 1,
+        label: ks.label,
+        provider: ks.provider,
+        endpoint: "",
+        apiKey: "",
+        model: ks.model,
+        priority: 0,
+        isActive: ks.healthy,
+        requestCount: ks.requestCount ?? 0,
+        errorCount: 0,
+        createdAt: new Date(),
+        isEnv: true,
+      })),
+  ].sort((a, b) => {
+    if (a.priority === 0) return 1;
+    if (b.priority === 0) return -1;
+    return a.priority - b.priority;
+  });
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in">
@@ -438,13 +468,13 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
                   Active Rotation Pool
                 </h3>
 
-                {llmKeys === undefined ? (
+                {llmKeys === undefined || keyStatusList === undefined ? (
                   <div className="flex items-center justify-center py-6 text-xs text-[#71717a] gap-2">
                     <Loader2 size={14} className="animate-spin" /> Loading key rotation pool...
                   </div>
-                ) : llmKeys.length === 0 ? (
+                ) : displayedKeys.length === 0 ? (
                   <div className="text-center py-6 bg-[#18181b]/50 border border-[#27272a] border-dashed rounded text-xs text-[#52525b]">
-                    No keys in the database pool. Falling back to `.env` config.
+                    No LLM keys configured (database or env config).
                   </div>
                 ) : (
                   <div className="border border-[#27272a] rounded-lg overflow-hidden bg-[#0c0c0e]">
@@ -459,35 +489,59 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-[#18181b]">
-                        {llmKeys.map((k) => {
+                        {displayedKeys.map((k) => {
                           const test = testResults[k.id];
                           return (
                             <tr key={k.id} className="hover:bg-[#18181b]/30 transition-colors">
                               <td className="p-2">
-                                <span className="px-1.5 py-0.5 bg-[#27272a] text-[#f4f4f5] rounded text-[8px] font-bold">
-                                  Prio {k.priority}
-                                </span>
+                                {k.isEnv ? (
+                                  <span className="px-1.5 py-0.5 bg-[#a855f7]/20 border border-[#a855f7]/30 text-[#a855f7] rounded text-[8px] font-bold">
+                                    Env
+                                  </span>
+                                ) : (
+                                  <span className="px-1.5 py-0.5 bg-[#27272a] text-[#f4f4f5] rounded text-[8px] font-bold">
+                                    Prio {k.priority}
+                                  </span>
+                                )}
                               </td>
                               <td className="p-2">
-                                <div className="font-semibold text-[#f4f4f5]">{k.label}</div>
+                                <div className="font-semibold text-[#f4f4f5] flex items-center gap-1">
+                                  {k.label}
+                                  {k.isEnv && (
+                                    <span className="text-[7px] text-[#a855f7] bg-[#a855f7]/10 px-1 rounded font-normal">
+                                      Read-only
+                                    </span>
+                                  )}
+                                </div>
                                 <div className="text-[8px] text-[#71717a] capitalize">{k.provider}</div>
                               </td>
                               <td className="p-2 text-[#a1a1aa] truncate max-w-[80px]">
                                 {k.model}
                               </td>
                               <td className="p-2 text-center">
-                                <button
-                                  type="button"
-                                  onClick={() => handleToggleLlmKey(k.id, k.isActive)}
-                                  disabled={toggleLlmKeyMutation.isPending}
-                                  className="text-[#71717a] hover:text-[#f4f4f5] transition-colors outline-none inline-flex items-center"
-                                >
-                                  {k.isActive ? (
-                                    <ToggleRight className="text-[#22c55e]" size={20} />
-                                  ) : (
-                                    <ToggleLeft className="text-[#3f3f46]" size={20} />
-                                  )}
-                                </button>
+                                {k.isEnv ? (
+                                  <button
+                                    type="button"
+                                    disabled={true}
+                                    title="Environment fallbacks are active in rotation when DB pool is empty"
+                                    className="text-[#71717a] opacity-50 cursor-not-allowed outline-none inline-flex items-center"
+                                  >
+                                    <ToggleRight className="text-[#a855f7]" size={20} />
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleToggleLlmKey(k.id, k.isActive)}
+                                    disabled={toggleLlmKeyMutation.isPending}
+                                    className="text-[#71717a] hover:text-[#f4f4f5] transition-colors outline-none inline-flex items-center"
+                                  >
+                                    {k.isActive ? (
+                                      <ToggleRight className="text-[#22c55e]" size={20} />
+                                    ) : (
+                                      <ToggleLeft className="text-[#3f3f46]" size={20} />
+                                    )}
+                                  </button>
+                                )}
                               </td>
                               <td className="p-2 text-right space-x-1.5">
                                 <button
@@ -504,14 +558,25 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
                                   )}
                                   <span>Test</span>
                                 </button>
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteLlmKey(k.id)}
-                                  title="Delete key"
-                                  className="p-1.5 bg-[#ef4444]/10 border border-[#ef4444]/20 hover:bg-[#ef4444]/20 text-[#ef4444] rounded transition-all inline-flex"
-                                >
-                                  <Trash2 size={10} />
-                                </button>
+                                {k.isEnv ? (
+                                  <button
+                                    type="button"
+                                    disabled={true}
+                                    title="System config keys are read-only and cannot be deleted"
+                                    className="p-1.5 bg-[#27272a] border border-[#27272a] text-[#52525b] rounded cursor-not-allowed inline-flex"
+                                  >
+                                    <Trash2 size={10} />
+                                  </button>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleDeleteLlmKey(k.id)}
+                                    title="Delete key"
+                                    className="p-1.5 bg-[#ef4444]/10 border border-[#ef4444]/20 hover:bg-[#ef4444]/20 text-[#ef4444] rounded transition-all inline-flex"
+                                  >
+                                    <Trash2 size={10} />
+                                  </button>
+                                )}
                               </td>
                             </tr>
                           );
@@ -523,7 +588,7 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
 
                 {/* Show Test Results Inline */}
                 {Object.entries(testResults).map(([keyId, res]) => {
-                  const keyItem = llmKeys?.find((k) => k.id === parseInt(keyId));
+                  const keyItem = displayedKeys.find((k) => k.id === parseInt(keyId));
                   if (!keyItem || (!res.success && !res.error && !res.loading)) return null;
                   return (
                     <div
