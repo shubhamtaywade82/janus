@@ -682,14 +682,40 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       }
     }
 
-    // Bollinger Bands
+    // Bollinger Bands — split per-bar into squeeze (amber) and normal (cyan) segments.
+    // Squeeze = BB bands are inside Keltner channels (low-volatility coil).
     if (indicatorCfg.bb) {
       const { upper, middle, lower } = calcBB(closes, indicatorCfg.bbPeriod, indicatorCfg.bbMult);
-      addOrUpdate("bb-upper",  upper,  "rgba(6,182,212,0.70)");
-      addOrUpdate("bb-middle", middle, "rgba(6,182,212,0.40)", true);
-      addOrUpdate("bb-lower",  lower,  "rgba(6,182,212,0.70)");
-    } else {
+      // Compute squeeze state using same period as BB, kMult=1.5
+      const { upper: kcU, lower: kcL } = calcKeltner(
+        highs, lows, closes, indicatorCfg.bbPeriod, indicatorCfg.bbPeriod, 1.5
+      );
+      const sqz = upper.map((u, i) => {
+        const l = lower[i], ku = kcU[i], kl = kcL[i];
+        return u !== null && l !== null && ku !== null && kl !== null
+          ? (u as number) < (ku as number) && (l as number) > (kl as number)
+          : null;
+      });
+
+      // Per-band: value present only on squeeze bars; null (whitespace) otherwise
+      const split = (band: (number | null)[]) => ({
+        sq:   band.map((v, i) => sqz[i] === true  ? v : null),
+        norm: band.map((v, i) => sqz[i] === false ? v : null),
+      });
+
+      const ubands = split(upper), mbands = split(middle), lbands = split(lower);
+
+      addOrUpdate("bb-upper-sq",    ubands.sq,   "rgba(245,158,11,0.90)");
+      addOrUpdate("bb-upper-norm",  ubands.norm, "rgba(6,182,212,0.70)");
+      addOrUpdate("bb-middle-sq",   mbands.sq,   "rgba(245,158,11,0.55)", true);
+      addOrUpdate("bb-middle-norm", mbands.norm, "rgba(6,182,212,0.40)",  true);
+      addOrUpdate("bb-lower-sq",    lbands.sq,   "rgba(245,158,11,0.90)");
+      addOrUpdate("bb-lower-norm",  lbands.norm, "rgba(6,182,212,0.70)");
+      // Remove legacy single-color keys if present
       ["bb-upper", "bb-middle", "bb-lower"].forEach(removeKey);
+    } else {
+      ["bb-upper-sq", "bb-upper-norm", "bb-middle-sq", "bb-middle-norm",
+       "bb-lower-sq", "bb-lower-norm", "bb-upper", "bb-middle", "bb-lower"].forEach(removeKey);
     }
 
     // SuperTrend — split into separate continuous segments to prevent straight-line bridges across gaps
@@ -864,8 +890,6 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     if (indicatorCfg.macd) {
       const { macd, signal, histogram } = calcMACD(closes, indicatorCfg.macdFast, indicatorCfg.macdSlow, indicatorCfg.macdSignal);
       const macdScaleOpts = { scaleMargins: { top: 0.76, bottom: 0 }, borderVisible: false };
-      const upColor   = "rgba(14,203,129,0.70)";
-      const downColor = "rgba(246,70,93,0.70)";
 
       // Histogram (colored bars)
       if (!macdHistRef.current && chart) {

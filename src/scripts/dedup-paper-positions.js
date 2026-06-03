@@ -1,10 +1,10 @@
-// src/scripts/dedup-paper-positions.js
 #!/usr/bin/env node
+// src/scripts/dedup-paper-positions.js
 
-import { getDb } from "../api/queries/connection";
-import { positions } from "@db/schema";
+import { getDb } from "../../api/queries/connection.ts";
+import { positions } from "../../db/schema.ts";
 import { and, eq, desc } from "drizzle-orm";
-import { weightedEntryPrice } from "../lib/position-utils";
+import { weightedEntryPrice } from "../lib/position-utils.ts";
 
 /**
  * One‑off script to merge duplicate open paper positions.
