@@ -23,7 +23,7 @@
 | `src/components/AutoTraderPanel.tsx` | ~59 | ✅ direction colors done |
 | `src/components/AlertsModal.tsx` | ~45 | ✅ direction colors done |
 | `src/components/PerformanceDashboard.tsx` | ~40 | ✅ direction colors done |
-| `src/components/SettingsModal.tsx` | ~26 | ⬜ pending |
+| `src/components/SettingsModal.tsx` | ~26 | ✅ direction colors done |
 | `src/components/AlertConfigPanel.tsx` | ~15 | ⬜ pending |
 | `src/components/IndicatorPanel.tsx` | ~20 | ⬜ pending |
 | `src/components/RiskStatus.tsx` | ~18 | ⬜ pending |

@@ -349,7 +349,7 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
                 <h3 className="text-xs font-semibold text-[#3b82f6] border-b border-[#27272a]/50 pb-1 flex items-center justify-between">
                   <span>CoinDCX (Futures API)</span>
                   {credentials?.some((c) => c.exchange === "coindcx") && (
-                    <span className="text-[9px] bg-[#22c55e]/15 text-[#22c55e] px-1.5 py-0.5 rounded font-normal">Active</span>
+                    <span className="text-[9px] bg-j-up/15 text-j-up px-1.5 py-0.5 rounded font-normal">Active</span>
                   )}
                 </h3>
                 
@@ -390,7 +390,7 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
                 <h3 className="text-xs font-semibold text-[#f59e0b] border-b border-[#27272a]/50 pb-1 flex items-center justify-between">
                   <span>Binance (Execution Stream)</span>
                   {credentials?.some((c) => c.exchange === "binance") && (
-                    <span className="text-[9px] bg-[#22c55e]/15 text-[#22c55e] px-1.5 py-0.5 rounded font-normal">Active</span>
+                    <span className="text-[9px] bg-j-up/15 text-j-up px-1.5 py-0.5 rounded font-normal">Active</span>
                   )}
                 </h3>
                 
@@ -428,12 +428,12 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
 
               {/* Status Alerts */}
               {saveStatus === "success" && (
-                <div className="p-2 bg-[#22c55e]/15 border border-[#22c55e]/30 rounded text-[#22c55e] text-[10px] flex items-center gap-1.5">
+                <div className="p-2 bg-j-up/15 border border-j-up/30 rounded text-j-up text-[10px] flex items-center gap-1.5">
                   <Check size={12} /> API Credentials saved successfully!
                 </div>
               )}
               {saveStatus === "error" && (
-                <div className="p-2 bg-[#ef4444]/15 border border-[#ef4444]/30 rounded text-[#ef4444] text-[10px]">
+                <div className="p-2 bg-j-down/15 border border-j-down/30 rounded text-j-down text-[10px]">
                   {errorMessage}
                 </div>
               )}
@@ -536,7 +536,7 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
                                     className="text-[#71717a] hover:text-[#f4f4f5] transition-colors outline-none inline-flex items-center"
                                   >
                                     {k.isActive ? (
-                                      <ToggleRight className="text-[#22c55e]" size={20} />
+                                      <ToggleRight className="text-j-up" size={20} />
                                     ) : (
                                       <ToggleLeft className="text-[#3f3f46]" size={20} />
                                     )}
@@ -572,7 +572,7 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
                                     type="button"
                                     onClick={() => handleDeleteLlmKey(k.id)}
                                     title="Delete key"
-                                    className="p-1.5 bg-[#ef4444]/10 border border-[#ef4444]/20 hover:bg-[#ef4444]/20 text-[#ef4444] rounded transition-all inline-flex"
+                                    className="p-1.5 bg-j-down/10 border border-j-down/20 hover:bg-j-down/20 text-j-down rounded transition-all inline-flex"
                                   >
                                     <Trash2 size={10} />
                                   </button>
@@ -598,28 +598,28 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
                         res.loading
                           ? "bg-[#18181b]/40 border-[#27272a]"
                           : res.success
-                          ? "bg-[#22c55e]/10 border-[#22c55e]/25 text-[#22c55e]"
-                          : "bg-[#ef4444]/10 border-[#ef4444]/25 text-[#ef4444]"
+                          ? "bg-j-up/10 border-j-up/25 text-j-up"
+                          : "bg-j-down/10 border-j-down/25 text-j-down"
                       )}
                     >
                       <div className="flex items-center gap-1.5 font-semibold">
                         {res.loading ? (
                           <Loader2 size={11} className="animate-spin text-[#71717a]" />
                         ) : res.success ? (
-                          <CheckCircle size={11} className="text-[#22c55e]" />
+                          <CheckCircle size={11} className="text-j-up" />
                         ) : (
-                          <XCircle size={11} className="text-[#ef4444]" />
+                          <XCircle size={11} className="text-j-down" />
                         )}
                         <span>Testing Key "{keyItem.label}" :</span>
                         {res.loading && <span className="text-[#71717a] font-normal">Contacting API endpoint...</span>}
-                        {res.success && <span className="text-[#22c55e] font-bold">Success ({res.latencyMs}ms)</span>}
-                        {res.error && <span className="text-[#ef4444] font-bold">Failed</span>}
+                        {res.success && <span className="text-j-up font-bold">Success ({res.latencyMs}ms)</span>}
+                        {res.error && <span className="text-j-down font-bold">Failed</span>}
                       </div>
 
                       {res.success && (
                         <div className="text-[#a1a1aa] pl-4">
                           <span className="font-semibold text-[#e4e4e7]">Decision: </span>
-                          <span className="text-[#22c55e] font-bold mr-3">{res.decision?.toUpperCase()}</span>
+                          <span className="text-j-up font-bold mr-3">{res.decision?.toUpperCase()}</span>
                           <span className="font-semibold text-[#e4e4e7]">Reasoning: </span>
                           <span>"{res.reasoning}"</span>
                         </div>
