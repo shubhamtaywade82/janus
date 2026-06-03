@@ -326,9 +326,34 @@ sizeMult: 0.5 (reduce) | 1.0 (normal) | 1.5 (increase, only if very high convict
     }
   }
 
-  getKeyStatus(): { label: string; provider: string; model: string; healthy: boolean; requestCount?: number }[] {
+  getKeyById(id: number): LlmKey | undefined {
+    return this.keys.find((k) => k.id === id);
+  }
+
+  async testSpecificKey(key: LlmKey): Promise<LlmDecision> {
+    const testCtx: SignalContext = {
+      symbol: "BTCUSDT",
+      direction: "long",
+      compositeScore: 80,
+      threshold: 75,
+      regime: "intraday_trend",
+      strategy: "intraday",
+      currentPrice: 100000,
+      drawdownPct: 0,
+      tradeCount: 0,
+      openPositions: 0,
+    };
+    const prompt = this.buildPrompt(testCtx);
+    const t0 = Date.now();
+    const raw = await this.callLlm(key, prompt);
+    const parsed = this.parseResponse(raw);
+    return { ...parsed, keyUsed: key.label, latencyMs: Date.now() - t0 };
+  }
+
+  getKeyStatus(): { id: number; label: string; provider: string; model: string; healthy: boolean; requestCount?: number }[] {
     const now = Date.now();
     return this.keys.map((k) => ({
+      id: k.id,
       label: k.label,
       provider: k.provider,
       model: k.model,
