@@ -142,6 +142,111 @@ export function calcRSI(closes: number[], period = 14): (number | null)[] {
   return result;
 }
 
+// ─── Ichimoku Cloud ───
+export interface IchimokuResult {
+  tenkan:  (number | null)[];  // conversion line (9)
+  kijun:   (number | null)[];  // base line (26)
+  spanA:   (number | null)[];  // leading span A, shifted +26 (index = future bar)
+  spanB:   (number | null)[];  // leading span B (52), shifted +26
+  chikou:  (number | null)[];  // lagging span: close shifted -26
+}
+
+function donchianMid(highs: number[], lows: number[], i: number, period: number): number | null {
+  if (i < period - 1) return null;
+  let hi = -Infinity, lo = Infinity;
+  for (let j = i - period + 1; j <= i; j++) { hi = Math.max(hi, highs[j]); lo = Math.min(lo, lows[j]); }
+  return (hi + lo) / 2;
+}
+
+export function calcIchimoku(
+  highs: number[], lows: number[], closes: number[],
+  tenkanPeriod = 9, kijunPeriod = 26, senkouBPeriod = 52, displacement = 26
+): IchimokuResult {
+  const n = closes.length;
+  const total = n + displacement;  // extend arrays to hold future Span A/B values
+  const tenkan: (number | null)[] = new Array(total).fill(null);
+  const kijun:  (number | null)[] = new Array(total).fill(null);
+  const spanA:  (number | null)[] = new Array(total).fill(null);
+  const spanB:  (number | null)[] = new Array(total).fill(null);
+  const chikou: (number | null)[] = new Array(total).fill(null);
+
+  for (let i = 0; i < n; i++) {
+    tenkan[i] = donchianMid(highs, lows, i, tenkanPeriod);
+    kijun[i]  = donchianMid(highs, lows, i, kijunPeriod);
+    // Span A/B plotted displacement bars into the future
+    if (tenkan[i] !== null && kijun[i] !== null) {
+      spanA[i + displacement] = ((tenkan[i] as number) + (kijun[i] as number)) / 2;
+    }
+    const sB = donchianMid(highs, lows, i, senkouBPeriod);
+    if (sB !== null) spanB[i + displacement] = sB;
+    // Chikou = close plotted displacement bars in the past
+    if (i >= displacement) chikou[i - displacement] = closes[i];
+  }
+
+  return { tenkan, kijun, spanA, spanB, chikou };
+}
+
+// ─── ADX + DI lines ───
+export interface ADXResult {
+  adx:    (number | null)[];
+  diPlus: (number | null)[];
+  diMinus:(number | null)[];
+}
+export function calcADX(
+  highs: number[], lows: number[], closes: number[], period = 14
+): ADXResult {
+  const n = closes.length;
+  const adx:    (number | null)[] = new Array(n).fill(null);
+  const diPlus: (number | null)[] = new Array(n).fill(null);
+  const diMinus:(number | null)[] = new Array(n).fill(null);
+  if (n < period * 2) return { adx, diPlus, diMinus };
+
+  const trArr: number[]  = new Array(n).fill(0);
+  const dmPArr: number[] = new Array(n).fill(0);
+  const dmMArr: number[] = new Array(n).fill(0);
+
+  for (let i = 1; i < n; i++) {
+    trArr[i]  = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+    const upMove   = highs[i] - highs[i - 1];
+    const downMove = lows[i - 1] - lows[i];
+    dmPArr[i] = upMove > downMove && upMove > 0 ? upMove : 0;
+    dmMArr[i] = downMove > upMove && downMove > 0 ? downMove : 0;
+  }
+
+  // Wilder smoothing
+  let smoothTR = trArr.slice(1, period + 1).reduce((a, b) => a + b, 0);
+  let smoothDP = dmPArr.slice(1, period + 1).reduce((a, b) => a + b, 0);
+  let smoothDM = dmMArr.slice(1, period + 1).reduce((a, b) => a + b, 0);
+
+  const getDI = (dp: number, tr: number) => tr === 0 ? 0 : (dp / tr) * 100;
+  let adxSmooth = 0;
+  const dxArr: number[] = [];
+
+  for (let i = period; i < n; i++) {
+    if (i > period) {
+      smoothTR = smoothTR - smoothTR / period + trArr[i];
+      smoothDP = smoothDP - smoothDP / period + dmPArr[i];
+      smoothDM = smoothDM - smoothDM / period + dmMArr[i];
+    }
+    const dp = getDI(smoothDP, smoothTR);
+    const dm = getDI(smoothDM, smoothTR);
+    diPlus[i]  = dp;
+    diMinus[i] = dm;
+    const dx = dp + dm === 0 ? 0 : Math.abs(dp - dm) / (dp + dm) * 100;
+    dxArr.push(dx);
+
+    if (dxArr.length === period) {
+      adxSmooth = dxArr.reduce((a, b) => a + b, 0) / period;
+      adx[i] = adxSmooth;
+    } else if (dxArr.length > period) {
+      adxSmooth = (adxSmooth * (period - 1) + dx) / period;
+      adx[i] = adxSmooth;
+    }
+  }
+
+  return { adx, diPlus, diMinus };
+}
+
 // ─── Stochastic RSI ───
 export interface StochRSIResult {
   k: (number | null)[];  // smoothed %K

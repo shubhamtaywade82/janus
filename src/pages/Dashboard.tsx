@@ -29,7 +29,7 @@ import type { AlertConfig } from "@/lib/chart/alert-engine";
 import { checkIndicatorAlerts, checkSMCAlerts } from "@/lib/chart/alert-engine";
 import type { IndicatorConfig } from "@/components/IndicatorPanel";
 import { EMA_COLORS, SMA_COLORS } from "@/components/IndicatorPanel";
-import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, calcNW, calcMACD, calcStochRSI, calcPSAR } from "@/lib/chart/indicators";
+import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, calcNW, calcMACD, calcStochRSI, calcPSAR, calcIchimoku, calcADX } from "@/lib/chart/indicators";
 import type { PriceActionData } from "@/lib/chart/pa-types";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 
@@ -943,6 +943,43 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     } else {
       removeKey("psar-bull");
       removeKey("psar-bear");
+    }
+
+    // Ichimoku Cloud — 5 lines on main price pane
+    // Tenkan=orange, Kijun=blue, SpanA=green, SpanB=red, Chikou=gray
+    // Note: SpanA/SpanB extend `displacement` bars into the future — arrays are longer than closes
+    if (indicatorCfg.ichimoku) {
+      const { tenkan, kijun, spanA, spanB, chikou } = calcIchimoku(highs, lows, closes);
+      const n = closes.length;
+      const disp = 26;
+      // Main-pane lines (aligned with closes index)
+      addOrUpdate("ichi-tenkan", tenkan.slice(0, n), "rgba(239,68,68,0.85)");
+      addOrUpdate("ichi-kijun",  kijun.slice(0, n),  "rgba(59,130,246,0.85)");
+      addOrUpdate("ichi-chikou", chikou.slice(0, n),  "rgba(113,113,122,0.70)");
+      // Future cloud lines — map displacement-shifted indices to times by extending toTime
+      const futureSpanA: (number | null)[] = new Array(n).fill(null);
+      const futureSpanB: (number | null)[] = new Array(n).fill(null);
+      for (let i = n - disp; i < n; i++) {
+        futureSpanA[i] = spanA[i + disp] ?? null;
+        futureSpanB[i] = spanB[i + disp] ?? null;
+      }
+      addOrUpdate("ichi-spanA", futureSpanA, "hsl(var(--janus-up)/0.60)",   true);
+      addOrUpdate("ichi-spanB", futureSpanB, "hsl(var(--janus-down)/0.60)", true);
+    } else {
+      ["ichi-tenkan", "ichi-kijun", "ichi-chikou", "ichi-spanA", "ichi-spanB"].forEach(removeKey);
+    }
+
+    // ADX + DI lines — all on "adx" sub-pane
+    // ADX=amber (trend strength 0-100), +DI=green, -DI=red
+    if (indicatorCfg.adx) {
+      const { adx, diPlus, diMinus } = calcADX(highs, lows, closes, indicatorCfg.adxPeriod);
+      const adxScaleOpts = { scaleMargins: { top: 0.76, bottom: 0 }, borderVisible: false };
+      addOrUpdate("adx-line",    adx,     "rgba(245,158,11,0.90)",  false, "adx");
+      addOrUpdate("adx-diplus",  diPlus,  "hsl(var(--janus-up)/0.80)",   false, "adx");
+      addOrUpdate("adx-diminus", diMinus, "hsl(var(--janus-down)/0.80)", false, "adx");
+      serMap.get("adx-line")?.priceScale().applyOptions(adxScaleOpts);
+    } else {
+      ["adx-line", "adx-diplus", "adx-diminus"].forEach(removeKey);
     }
 
   }, [indicatorCfg, data, interval]);

@@ -42,6 +42,11 @@ export interface IndicatorConfig {
   psar:     boolean;
   psarStep: number;
   psarMax:  number;
+  // Ichimoku Cloud
+  ichimoku: boolean;
+  // ADX + DI lines
+  adx:       boolean;
+  adxPeriod: number;
 }
 
 const DEFAULTS: IndicatorConfig = {
@@ -53,6 +58,8 @@ const DEFAULTS: IndicatorConfig = {
   macd: false, macdFast: 12, macdSlow: 26, macdSignal: 9,
   stochRsi: false, stochRsiPeriod: 14, stochSmoothK: 3, stochSmoothD: 3,
   psar: false, psarStep: 0.02, psarMax: 0.2,
+  ichimoku: false,
+  adx: false, adxPeriod: 14,
 };
 
 const EMA_COLORS: Record<number, string> = {
@@ -107,7 +114,8 @@ export function IndicatorPanel({ onChange }: Props) {
     cfg.ema.length + cfg.sma.length +
     (cfg.bb ? 1 : 0) + (cfg.superTrend ? 1 : 0) + (cfg.knnSuperTrend ? 1 : 0) +
     (cfg.rsi ? 1 : 0) + (cfg.vwap ? 1 : 0) + (cfg.cvd ? 1 : 0) + (cfg.nw ? 1 : 0) +
-    (cfg.macd ? 1 : 0) + (cfg.stochRsi ? 1 : 0) + (cfg.psar ? 1 : 0);
+    (cfg.macd ? 1 : 0) + (cfg.stochRsi ? 1 : 0) + (cfg.psar ? 1 : 0) +
+    (cfg.ichimoku ? 1 : 0) + (cfg.adx ? 1 : 0);
 
   return (
     <div ref={panelRef} className="relative">
@@ -287,6 +295,28 @@ export function IndicatorPanel({ onChange }: Props) {
                 {cfg.psarStep}/{cfg.psarMax}
               </span>
             )}
+          </div>
+
+          {/* Ichimoku */}
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setCfg((c) => ({ ...c, ichimoku: !c.ichimoku }))}
+                className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
+                  cfg.ichimoku ? "bg-[#06b6d4]/20 border-[#06b6d4]/50" : "border-[#27272a]")} />
+              <span className="text-[10px] text-[#a1a1aa]">Ichimoku</span>
+            </div>
+            {cfg.ichimoku && <span className="text-[9px] text-[#52525b]">9,26,52</span>}
+          </div>
+
+          {/* ADX */}
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setCfg((c) => ({ ...c, adx: !c.adx }))}
+                className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
+                  cfg.adx ? "bg-[#f59e0b]/20 border-[#f59e0b]/50" : "border-[#27272a]")} />
+              <span className="text-[10px] text-[#a1a1aa]">ADX + DI</span>
+            </div>
+            {cfg.adx && <span className="text-[9px] text-[#52525b]">{cfg.adxPeriod}</span>}
           </div>
 
           <div className="border-t border-[#27272a] mt-2 pt-2">
