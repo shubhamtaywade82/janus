@@ -427,7 +427,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         high: parseFloat(d.high),
         low: parseFloat(d.low),
         close: parseFloat(d.close),
-      }));
+      })).sort((a, b) => (a.time as number) - (b.time as number));
       const volumeData = data.map((d) => {
         const o = parseFloat(d.open);
         const c = parseFloat(d.close);
@@ -436,7 +436,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
           value: parseFloat(d.volume),
           color: c >= o ? "rgba(14, 203, 129, 0.15)" : "rgba(246, 70, 93, 0.15)",
         };
-      });
+      }).sort((a, b) => (a.time as number) - (b.time as number));
       candlestickSeriesRef.current.setData(chartData);
       volumeSeriesRef.current.setData(volumeData);
 
@@ -584,6 +584,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       if (obvSeriesRef.current) {
         obvSeriesRef.current.setData(
           pa.obv.map((p) => ({ time: (p.time / 1000) as UTCTimestamp, value: p.value }))
+            .sort((a, b) => (a.time as number) - (b.time as number))
         );
       }
     } else if (!tog?.obv && obvSeriesRef.current && chartRef.current) {

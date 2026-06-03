@@ -292,7 +292,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
       <aside className="w-16 flex-shrink-0 flex flex-col items-center py-4 border-r border-[#27272a] bg-[#09090b]">
         {/* Logo */}
         <div className="mb-6">
-          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-[#22c55e] to-[#16a34a] flex items-center justify-center">
+          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-j-up to-j-up/70 flex items-center justify-center">
             <span className="text-white font-bold text-sm">J</span>
           </div>
         </div>
@@ -309,7 +309,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 className={cn(
                   "w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-200 group relative",
                   isActive
-                    ? "bg-[#22c55e]/10 text-[#22c55e]"
+                    ? "bg-j-up/10 text-j-up"
                     : "text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#18181b]"
                 )}
               >
@@ -340,7 +340,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
           {user && (
             <button
               onClick={logout}
-              className="w-10 h-10 rounded-lg flex items-center justify-center text-[#71717a] hover:text-[#ef4444] hover:bg-[#18181b] transition-all"
+              className="w-10 h-10 rounded-lg flex items-center justify-center text-[#71717a] hover:text-j-down hover:bg-[#18181b] transition-all"
             >
               <LogOut size={18} />
             </button>
@@ -379,7 +379,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             <div className="h-4 w-px bg-[#27272a]" />
             <div className="flex items-center gap-2 text-xs text-[#71717a]">
               <span className="flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-[#22c55e] animate-pulse" />
+                <span className="w-1.5 h-1.5 rounded-full bg-j-up animate-pulse" />
                 Binance Feed
               </span>
               <ChevronRight size={12} />
@@ -388,7 +388,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 CoinDCX Exec
               </span>
               <ChevronRight size={12} />
-              <span className="flex items-center gap-1 text-[#22c55e]">
+              <span className="flex items-center gap-1 text-j-up">
                 <Activity size={12} />
                 Live
               </span>
@@ -406,7 +406,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
             >
               <Bell size={14} className={cn(activeAlertsCount > 0 ? "text-[#f59e0b] animate-bounce" : "text-[#71717a]")} />
               {activeAlertsCount > 0 && (
-                <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-[#ef4444] text-[8px] text-white font-black rounded-full flex items-center justify-center border border-[#09090b] scale-95 shadow">
+                <span className="absolute -top-1 -right-1 w-3.5 h-3.5 bg-j-down text-[8px] text-white font-black rounded-full flex items-center justify-center border border-[#09090b] scale-95 shadow">
                   {activeAlertsCount}
                 </span>
               )}

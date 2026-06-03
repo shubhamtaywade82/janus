@@ -19,7 +19,7 @@
 | `src/pages/Signals.tsx` | ~107 | ✅ direction colors done |
 | `src/pages/RiskMetrics.tsx` | ~100 | ✅ direction colors done |
 | `src/pages/Logs.tsx` | ~39 | ✅ direction colors done |
-| `src/components/Layout.tsx` | ~23 | ⬜ pending |
+| `src/components/Layout.tsx` | ~23 | ✅ direction colors done |
 | `src/components/AutoTraderPanel.tsx` | ~59 | ✅ direction colors done |
 | `src/components/AlertsModal.tsx` | ~45 | ✅ direction colors done |
 | `src/components/PerformanceDashboard.tsx` | ~40 | ✅ direction colors done |
@@ -27,10 +27,10 @@
 | `src/components/AlertConfigPanel.tsx` | ~15 | ✅ already clean |
 | `src/components/IndicatorPanel.tsx` | ~20 | ✅ direction colors done |
 | `src/components/RiskStatus.tsx` | ~18 | ✅ direction colors done |
-| `src/components/ChartOverlayPanel.tsx` | ~9 | ⬜ pending |
-| `src/components/LlmActivityFeed.tsx` | ~14 | ⬜ pending |
-| `src/components/RegimeIndicator.tsx` | ~9 | ⬜ pending |
-| `src/components/KillSwitchButton.tsx` | ~5 | ⬜ pending |
+| `src/components/ChartOverlayPanel.tsx` | ~9 | ✅ direction colors done |
+| `src/components/LlmActivityFeed.tsx` | ~14 | ✅ direction colors done |
+| `src/components/RegimeIndicator.tsx` | ~9 | ✅ direction colors done |
+| `src/components/KillSwitchButton.tsx` | ~5 | ✅ direction colors done |
 
 ---
 

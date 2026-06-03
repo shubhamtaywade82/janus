@@ -26,10 +26,10 @@ const DEFAULTS: OverlayToggles = {
 
 const LAYERS: { key: keyof OverlayToggles; label: string; color: string; shortLabel: string }[] = [
   { key: "swings",          label: "Swing H/L",       shortLabel: "SwG",  color: "#71717a" },
-  { key: "orderBlocks",     label: "Order Blocks",     shortLabel: "OB",   color: "#22c55e" },
+  { key: "orderBlocks",     label: "Order Blocks",     shortLabel: "OB",   color: "hsl(var(--janus-up))" },
   { key: "fvg",             label: "Fair Value Gap",   shortLabel: "FVG",  color: "#a855f7" },
   { key: "structure",       label: "BOS / CHoCH",      shortLabel: "STR",  color: "#3b82f6" },
-  { key: "liquidity",       label: "EQH / EQL",        shortLabel: "LIQ",  color: "#ef4444" },
+  { key: "liquidity",       label: "EQH / EQL",        shortLabel: "LIQ",  color: "hsl(var(--janus-down))" },
   { key: "displacement",    label: "Displacement",     shortLabel: "DIS",  color: "#f59e0b" },
   { key: "premiumDiscount", label: "Prem / Disc",      shortLabel: "P/D",  color: "#52525b" },
   { key: "obv",             label: "OBV",              shortLabel: "OBV",  color: "#06b6d4" },

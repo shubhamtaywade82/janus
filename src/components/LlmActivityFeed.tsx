@@ -14,8 +14,8 @@ interface LlmEntry {
 }
 
 const DECISION_CFG = {
-  execute:      { label: "EXECUTE",  color: "text-[#22c55e] bg-[#22c55e]/10 border-[#22c55e]/30", icon: <Zap size={9} /> },
-  skip:         { label: "SKIP",     color: "text-[#ef4444] bg-[#ef4444]/10 border-[#ef4444]/30", icon: <XCircle size={9} /> },
+  execute:      { label: "EXECUTE",  color: "text-j-up bg-j-up/10 border-j-up/30", icon: <Zap size={9} /> },
+  skip:         { label: "SKIP",     color: "text-j-down bg-j-down/10 border-j-down/30", icon: <XCircle size={9} /> },
   reduce_size:  { label: "REDUCE",   color: "text-[#f59e0b] bg-[#f59e0b]/10 border-[#f59e0b]/30", icon: <MinusCircle size={9} /> },
 };
 
