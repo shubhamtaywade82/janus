@@ -1649,7 +1649,7 @@ const Dashboard = () => {
   const klineKeyRef = useRef(`${selectedSymbol}:${interval}`);
 
   const { data: initialKlines } = trpc.market.klines.useQuery(
-    { symbol: selectedSymbol, interval, limit: 150 },
+    { symbol: selectedSymbol, interval, limit: 500 },
     {
       staleTime: 0,           // always fetch fresh when key changes
       refetchInterval: interval === "1m" ? false : 30_000,
@@ -1693,7 +1693,7 @@ const Dashboard = () => {
       const older = await utils.market.klines.fetch({
         symbol: selectedSymbol,
         interval,
-        limit: 200,
+        limit: 500,
         endTime: beforeTime - 1,  // fetch candles strictly before oldest loaded candle
       });
       if (older && older.length > 0) {
