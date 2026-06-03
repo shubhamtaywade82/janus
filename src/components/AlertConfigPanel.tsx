@@ -12,6 +12,12 @@ const INDICATOR_ALERTS: { key: keyof AlertConfig; label: string; desc: string }[
   { key: "vwapCross",      label: "VWAP Cross",        desc: "Price crosses VWAP" },
 ];
 
+const KNN_ALERTS: { key: keyof AlertConfig; label: string; desc: string }[] = [
+  { key: "knnFlip",         label: "KNN Bias Flip",     desc: "KNN bias direction change + ST flip" },
+  { key: "knnRejection",    label: "KNN Rejection Orb", desc: "Wick rejection at ST level with volume" },
+  { key: "knnRegimeChange", label: "Regime Change",     desc: "Market switches trend ↔ range" },
+];
+
 const SMC_ALERTS: { key: keyof AlertConfig; label: string; desc: string }[] = [
   { key: "bosSignal",   label: "BOS",         desc: "New Break of Structure" },
   { key: "chochSignal", label: "CHoCH",        desc: "Change of Character (reversal)" },
@@ -89,6 +95,9 @@ export function AlertConfigPanel({ onChange }: Props) {
 
           <div className="text-[9px] text-[#3b82f6] mb-1 px-1">Indicators</div>
           {INDICATOR_ALERTS.map((a) => <Row key={a.key} {...a} />)}
+
+          <div className="text-[9px] text-[#10b981] mt-2 mb-1 px-1">KNN SuperTrend</div>
+          {KNN_ALERTS.map((a) => <Row key={a.key} {...a} />)}
 
           <div className="text-[9px] text-[#a855f7] mt-2 mb-1 px-1">SMC / ICT</div>
           {SMC_ALERTS.map((a) => <Row key={a.key} {...a} />)}

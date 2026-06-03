@@ -10,6 +10,7 @@ import {
   Activity,
   ChevronRight,
 } from "lucide-react";
+import { checkKnnAlerts, ALERT_DEFAULTS, type KnnSnapshotLike } from "@/lib/chart/alert-engine";
 import { cn } from "@/lib/utils";
 
 // ─── Market Regime Classifier ───
@@ -272,6 +273,63 @@ const SignalCard = ({ signal }: { signal: any }) => {
         </>
       )}
 
+      {/* KNN SuperTrend badge */}
+      {indicators.knn && (
+        <div className="mt-2 border-t border-[#27272a]/40 pt-2">
+          <div className="flex items-center gap-1 flex-wrap">
+            {/* KNN bias chip */}
+            <span className={cn(
+              "inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wide",
+              indicators.knn.bias === "bullish" ? "bg-[#0ecb81]/15 text-[#0ecb81]" :
+              indicators.knn.bias === "bearish" ? "bg-[#f6465d]/15 text-[#f6465d]" :
+              "bg-[#71717a]/15 text-[#71717a]"
+            )}>
+              KNN {indicators.knn.bias}
+            </span>
+            {/* Confidence pill */}
+            <span className={cn(
+              "text-[9px] px-1.5 py-0.5 rounded font-bold tabular-nums",
+              indicators.knn.confidence >= 75 ? "bg-[#0ecb81]/10 text-[#0ecb81]" :
+              indicators.knn.confidence >= 55 ? "bg-[#f59e0b]/10 text-[#f59e0b]" :
+              "bg-[#52525b]/10 text-[#52525b]"
+            )}>
+              {indicators.knn.confidence}%
+            </span>
+            {/* ST direction */}
+            <span className={cn(
+              "text-[9px] px-1.5 py-0.5 rounded font-semibold uppercase",
+              indicators.knn.stDirection === "bullish" ? "bg-[#22c55e]/10 text-[#22c55e]" : "bg-[#ef4444]/10 text-[#ef4444]"
+            )}>
+              ST {indicators.knn.stDirection}
+              {indicators.knn.stFlip && " ↺"}
+            </span>
+            {/* Regime badge */}
+            <span className={cn(
+              "text-[9px] px-1.5 py-0.5 rounded uppercase font-semibold ml-auto",
+              indicators.knn.regime === "trend" ? "bg-[#3b82f6]/10 text-[#3b82f6]" :
+              indicators.knn.regime === "weak_trend" ? "bg-[#8b5cf6]/10 text-[#8b5cf6]" :
+              indicators.knn.regime === "range" ? "bg-[#71717a]/10 text-[#71717a]" :
+              "bg-[#f59e0b]/10 text-[#f59e0b]"
+            )}>
+              {indicators.knn.regime?.replace("_", " ")}
+            </span>
+          </div>
+          {/* Rejection orb row */}
+          {indicators.knn.rejectionSignal && (
+            <div className={cn(
+              "mt-1 text-[9px] px-1.5 py-0.5 rounded font-semibold",
+              indicators.knn.rejectionType === "bullish_rejection" ? "bg-[#0ecb81]/10 text-[#0ecb81]" : "bg-[#f6465d]/10 text-[#f6465d]"
+            )}>
+              Rejection orb • vol×{indicators.knn.volumeScore?.toFixed(1)} • wick/body {indicators.knn.wickToBody?.toFixed(1)}
+            </div>
+          )}
+          {/* Note */}
+          <div className="mt-0.5 text-[8px] text-[#52525b] leading-tight italic">
+            {indicators.knn.note}
+          </div>
+        </div>
+      )}
+
       <div className="mt-1.5 flex items-center justify-between text-[9px] text-[#52525b]">
         <span>{ts ? ts.toLocaleTimeString() : "--"}</span>
         <span className={cn(age !== null && age < 2 ? "text-[#22c55e]" : "")}>
@@ -312,6 +370,30 @@ const Signals = () => {
     },
   });
   trpc.signal.stream.useSubscription(undefined, streamOptsRef.current);
+
+  // KNN SuperTrend alert stream — fires toast alerts on bias flips, rejection orbs, regime changes
+  const knnPrevRef = useRef<Record<string, KnnSnapshotLike>>({});
+  const knnStreamOptsRef = useRef({
+    onData: (data: { symbol: string; snapshot: KnnSnapshotLike }) => {
+      try {
+        const stored = localStorage.getItem("janus_alert_cfg");
+        const cfg = stored ? { ...ALERT_DEFAULTS, ...JSON.parse(stored) } : ALERT_DEFAULTS;
+        const prev = knnPrevRef.current[data.symbol] ?? null;
+        const alerts = checkKnnAlerts(data.snapshot, prev, cfg, data.symbol);
+        knnPrevRef.current[data.symbol] = data.snapshot;
+
+        for (const alert of alerts) {
+          const color = alert.direction === "bullish" ? "#0ecb81" : alert.direction === "bearish" ? "#f6465d" : "#a1a1aa";
+          toast(alert.message, {
+            description: `${alert.symbol} · KNN`,
+            duration: 6000,
+            style: { borderLeft: `3px solid ${color}` },
+          });
+        }
+      } catch { /* non-fatal */ }
+    },
+  });
+  trpc.signal.knnStream.useSubscription(undefined, knnStreamOptsRef.current);
 
   // Client-side interval trigger — fires analyzeAll at user-selected rate
   useEffect(() => {

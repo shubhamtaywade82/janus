@@ -26,6 +26,11 @@ import {
   latestRegimeCache,
 } from "../services/regime-detector";
 import { globalAutoExecutor } from "../services/auto-executor";
+import {
+  computeKnnSupertrend,
+  knnSnapshotCache,
+  type KnnSupertrendSnapshot,
+} from "../services/knn-supertrend";
 
 // ─── Signal update event bus ───
 export const signalEvents = new EventEmitter();
@@ -229,14 +234,52 @@ async function runAutoAnalysis() {
         const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = await getConfluenceInput(pair.binance);
         const currentPrice = prices[prices.length - 1] || 0;
 
+        // KNN SuperTrend — computed for every symbol regardless of active strategy
+        let knnSnapshot: KnnSupertrendSnapshot | null = null;
+        if (prices.length >= 30 && highs.length >= 30 && lows.length >= 30) {
+          try {
+            knnSnapshot = computeKnnSupertrend(pair.binance, "1m", prices, highs, lows, volumes);
+          } catch (knnErr) {
+            console.warn(`[knn] compute failed for ${pair.binance}:`, knnErr);
+          }
+        }
+
         const signalData = evaluateSymbolSignal(
           pair.coindcx, strategy, currentPrice,
           prices, volumes, highs, lows,
           obMetrics, tapeMetrics, extraMetrics
         );
 
+        // Merge KNN data into signal metadata (existing metadata is preserved)
+        if (knnSnapshot) {
+          signalData.metadata = {
+            ...(signalData.metadata as Record<string, unknown> ?? {}),
+            knn: {
+              bias: knnSnapshot.knn.bias,
+              confidence: knnSnapshot.knn.confidence,
+              agreement: knnSnapshot.knn.agreement,
+              neighbors: knnSnapshot.knn.neighbors,
+              stDirection: knnSnapshot.supertrend.direction,
+              stLevel: knnSnapshot.supertrend.level,
+              stFlip: knnSnapshot.supertrend.flip,
+              regime: knnSnapshot.regime,
+              entryAllowed: knnSnapshot.entryAllowed,
+              setupQuality: knnSnapshot.setupQuality,
+              rejectionSignal: knnSnapshot.rejection.signal,
+              rejectionType: knnSnapshot.rejection.type,
+              wickToBody: knnSnapshot.rejection.wickToBody,
+              volumeScore: knnSnapshot.rejection.volumeScore,
+              note: knnSnapshot.note,
+            },
+          };
+        }
+
         const inserted = await db.insert(signals).values(signalData).returning().catch(() => []);
-        if (inserted[0]) batchSignals.push(inserted[0]);
+        if (inserted[0]) {
+          batchSignals.push(inserted[0]);
+          // Emit KNN snapshot for subscriptions
+          if (knnSnapshot) signalEvents.emit("knn-snapshot", { symbol: pair.binance, snapshot: knnSnapshot });
+        }
       } catch (err) {
         console.error(`[signal-router] Analysis failed for ${pair.binance}:`, err);
       }
@@ -570,6 +613,26 @@ export const signalRouter = createRouter({
       const onSwitch = (data: unknown) => emit.next(data);
       signalEvents.on("strategy-switch", onSwitch);
       return () => signalEvents.off("strategy-switch", onSwitch);
+    });
+  }),
+
+  // ─── KNN SuperTrend: latest snapshot per symbol ───
+  knnLatest: publicQuery
+    .input(z.object({ symbol: z.string().optional() }))
+    .query(({ input }) => {
+      if (input.symbol) {
+        const snap = knnSnapshotCache.get(input.symbol);
+        return snap ? { [input.symbol]: snap } : {};
+      }
+      return Object.fromEntries(knnSnapshotCache.entries()) as Record<string, KnnSupertrendSnapshot>;
+    }),
+
+  // ─── KNN SuperTrend: real-time snapshot stream ───
+  knnStream: publicQuery.subscription(() => {
+    return observable<{ symbol: string; snapshot: KnnSupertrendSnapshot }>((emit) => {
+      const onSnapshot = (data: { symbol: string; snapshot: KnnSupertrendSnapshot }) => emit.next(data);
+      signalEvents.on("knn-snapshot", onSnapshot);
+      return () => signalEvents.off("knn-snapshot", onSnapshot);
     });
   }),
 });

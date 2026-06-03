@@ -26,6 +26,7 @@ import { latestTickerCache } from "./streaming";
 import { markPriceCache, tradingEvents } from "./coindcx-ws";
 import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo } from "./coindcx";
 import { registerPositionForTrailing } from "./trailing-stop";
+import { knnSnapshotCache } from "./knn-supertrend";
 import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
 import { snapshotEquity } from "./performance-tracker";
@@ -263,7 +264,25 @@ export class AutoExecutor {
     });
     if (!riskCheck.approved) return this.skip(signal, `risk: ${riskCheck.reason}`);
 
-    // Gate 8: LLM Advisor (optional)
+    // Gate 8: KNN SuperTrend filter
+    // Suppresses trades in range regimes and when KNN bias conflicts with signal direction.
+    const knnSnap = knnSnapshotCache.get(symbol);
+    if (knnSnap) {
+      if (knnSnap.regime === "range") {
+        return this.skip(signal, `KNN: range regime — signals suppressed for ${symbol}`);
+      }
+      const knnMinConf = 60;
+      const knnBias = knnSnap.knn.bias;
+      const knnConf = knnSnap.knn.confidence;
+      if (knnBias !== "neutral" && knnConf >= knnMinConf && knnBias !== side) {
+        return this.skip(signal, `KNN: bias=${knnBias} (${knnConf}%) conflicts with signal ${side}`);
+      }
+      if (knnConf < 40) {
+        return this.skip(signal, `KNN: very low confidence (${knnConf}%) — skipping ${symbol}`);
+      }
+    }
+
+    // Gate 9: LLM Advisor (optional)
     let sizeMult = 1.0;
     let llmDecision: ExecutorDecision["llmDecision"] | undefined;
     const regimeData = latestRegimeCache.get("BTCUSDT");
