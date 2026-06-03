@@ -14,7 +14,6 @@ import {
   Activity,
   Sparkles,
   Zap,
-  Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineSeries, LineStyle, createSeriesMarkers } from "lightweight-charts";
@@ -58,14 +57,39 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const [positionsY, setPositionsY] = useState<Record<number, { entryY: number | null; liqY: number | null }>>({});
   const priceLinesRef = useRef<any[]>([]);
 
-  const [isAlertMode, setIsAlertMode] = useState(false);
   const [alertRules, setAlertRules] = useState<any[]>([]);
   const customAlertLinesRef = useRef<any[]>([]);
-  const isAlertModeRef = useRef(false);
+  const [hoveredCrosshair, setHoveredCrosshair] = useState<{ price: number; y: number } | null>(null);
 
-  useEffect(() => {
-    isAlertModeRef.current = isAlertMode;
-  }, [isAlertMode]);
+  const handleContainerMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const container = chartContainerRef.current;
+    const series = candlestickSeriesRef.current;
+    if (!container || !series) return;
+
+    const rect = container.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // Check if within bounds of the plot area + price axis (exclude time axis at bottom, which is usually 26px)
+    if (x < 0 || x > rect.width || y < 0 || y > rect.height - 26) {
+      setHoveredCrosshair(null);
+      return;
+    }
+
+    const price = series.coordinateToPrice(y);
+    if (price) {
+      setHoveredCrosshair({
+        price: parseFloat(price.toFixed(2)),
+        y,
+      });
+    } else {
+      setHoveredCrosshair(null);
+    }
+  };
+
+  const handleContainerMouseLeave = () => {
+    setHoveredCrosshair(null);
+  };
 
   const loadAlertRules = useCallback(() => {
     const stored = localStorage.getItem("janus_alert_rules");
@@ -809,53 +833,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     customAlertLinesRef.current = newAlertLines;
   }, [alertRules, symbol, chartInitialized]);
 
-  // Subscribe to chart clicks for placing custom alerts
-  useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart || !chartInitialized) return;
 
-    const handleChartClick = (param: any) => {
-      if (!isAlertModeRef.current) return;
-      if (!param.point) return;
-
-      const series = candlestickSeriesRef.current;
-      if (!series) return;
-
-      const price = series.coordinateToPrice(param.point.y);
-      if (price) {
-        const roundedPrice = parseFloat(price.toFixed(2));
-        const operator = roundedPrice > lastPrice ? ">" : "<";
-
-        const newRule = {
-          id: Math.random().toString(36).substring(2, 9),
-          symbol: symbol,
-          type: "price",
-          operator,
-          value: roundedPrice,
-          isActive: true,
-        };
-
-        const stored = localStorage.getItem("janus_alert_rules");
-        const currentRules = stored ? JSON.parse(stored) : [];
-        const updatedRules = [...currentRules, newRule];
-        localStorage.setItem("janus_alert_rules", JSON.stringify(updatedRules));
-
-        window.dispatchEvent(new Event("janus_alerts_changed"));
-        
-        setIsAlertMode(false);
-        toast.success(`Price alert created at $${roundedPrice.toFixed(2)}!`);
-      }
-    };
-
-    chart.subscribeClick(handleChartClick);
-    return () => {
-      try {
-        chart.unsubscribeClick(handleChartClick);
-      } catch (err) {
-        // Safe check
-      }
-    };
-  }, [chartInitialized, symbol, lastPrice]);
 
   // Recalculate vertical coordinates of active positions on the canvas
   const updatePositionsCoordinates = useCallback(() => {
@@ -911,7 +889,12 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   }, [chartInitialized, updatePositionsCoordinates]);
 
   return (
-    <div ref={chartContainerRef} className="w-full h-full relative select-none">
+    <div
+      ref={chartContainerRef}
+      className="w-full h-full relative select-none"
+      onMouseMove={handleContainerMouseMove}
+      onMouseLeave={handleContainerMouseLeave}
+    >
       {/* HUD Info Overlay */}
       {hudData && (
         <div className="absolute top-2 left-4 z-10 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-md border border-white/5 pointer-events-none">
@@ -994,7 +977,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
                   <span
                     className="absolute px-2 py-0.5 rounded text-[10px] font-semibold font-mono bg-[#18181b]/90 border border-[#27272a] text-[#f4f4f5] shadow-md"
                     style={{
-                      right: "8px",
+                      right: "68px",
                       transform: "translateY(-50%)",
                     }}
                   >
@@ -1025,7 +1008,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
                     <span
                       className="absolute px-2 py-0.5 rounded text-[10px] font-semibold font-mono bg-[#18181b]/90 border border-[#27272a] text-[#f59e0b] shadow-md"
                       style={{
-                        right: "8px",
+                        right: "68px",
                         transform: "translateY(-50%)",
                       }}
                     >
@@ -1039,39 +1022,45 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         </div>
       )}
 
-      {/* Interactive Alert controls */}
-      <div className="absolute top-2 right-4 z-20 flex gap-2 pointer-events-auto items-center">
+      {/* Dynamic Cursor Price Alert Creator (+) Button */}
+      {hoveredCrosshair && (
         <button
-          onClick={() => setIsAlertMode(!isAlertMode)}
-          className={cn(
-            "h-7 px-2.5 rounded-full text-[10px] font-bold flex items-center gap-1.5 shadow-lg border transition-all select-none cursor-pointer",
-            isAlertMode
-              ? "bg-[#ef4444] border-[#ef4444] text-white hover:bg-[#dc2626]"
-              : "bg-[#18181b]/80 backdrop-blur-md border-white/10 text-[#f59e0b] hover:bg-[#27272a]/90 hover:border-white/20"
-          )}
-        >
-          <Bell size={11} className={cn(isAlertMode && "animate-pulse")} />
-          {isAlertMode ? "Cancel Mode" : "Add Price Alert"}
-        </button>
-      </div>
+          onClick={() => {
+            const roundedPrice = hoveredCrosshair.price;
+            const operator = roundedPrice > lastPrice ? ">" : "<";
 
-      {/* Alert Mode Banner */}
-      {isAlertMode && (
-        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-20 bg-[#f59e0b] text-[#09090b] text-[10px] font-bold px-4 py-1.5 rounded-full shadow-lg flex items-center gap-2 animate-bounce select-none pointer-events-auto border border-[#d97706]">
-          <Bell size={12} className="animate-pulse" />
-          <span>Click on the chart area to place a Price Alert line at that level.</span>
-          <button 
-            onClick={() => setIsAlertMode(false)}
-            className="ml-2 hover:bg-black/10 px-1.5 py-0.5 rounded font-bold text-[9px] uppercase cursor-pointer"
-          >
-            Cancel
-          </button>
-        </div>
+            const newRule = {
+              id: Math.random().toString(36).substring(2, 9),
+              symbol: symbol,
+              type: "price",
+              operator,
+              value: roundedPrice,
+              isActive: true,
+            };
+
+            const stored = localStorage.getItem("janus_alert_rules");
+            const currentRules = stored ? JSON.parse(stored) : [];
+            const updatedRules = [...currentRules, newRule];
+            localStorage.setItem("janus_alert_rules", JSON.stringify(updatedRules));
+
+            window.dispatchEvent(new Event("janus_alerts_changed"));
+            toast.success(`Price alert created at $${roundedPrice.toFixed(2)}!`);
+          }}
+          className="absolute z-30 w-5 h-5 bg-[#1c1c1f] hover:bg-[#f59e0b] text-[#e4e4e7] hover:text-black border border-[#3f3f46] rounded-full flex items-center justify-center cursor-pointer transition-all shadow-lg active:scale-95"
+          style={{
+            top: `${hoveredCrosshair.y}px`,
+            right: "55px",
+            transform: "translate(50%, -50%)",
+          }}
+          title={`Create Price Alert at $${hoveredCrosshair.price.toFixed(2)}`}
+        >
+          <Plus size={10} strokeWidth={3} />
+        </button>
       )}
 
       {/* Custom Alerts List Overlay */}
       {chartInitialized && alertRules.length > 0 && (
-        <div className="absolute bottom-2 right-4 z-10 flex flex-col gap-1 max-h-[120px] overflow-y-auto bg-[#09090b]/80 backdrop-blur-md p-2 rounded border border-[#27272a] font-mono text-[9px] pointer-events-auto max-w-[200px] shadow-lg">
+        <div className="absolute bottom-[38px] right-[68px] z-10 flex flex-col gap-1 max-h-[120px] overflow-y-auto bg-[#09090b]/80 backdrop-blur-md p-2 rounded border border-[#27272a] font-mono text-[9px] pointer-events-auto max-w-[200px] shadow-lg">
           <div className="text-[#71717a] font-bold mb-1 uppercase tracking-wider text-[8px]">Active Alert Lines</div>
           {alertRules
             .filter((rule) => rule.symbol === symbol && rule.type === "price")
@@ -1097,7 +1086,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
 
       {/* Active Position Floating Capsule */}
       {positions && positions.length > 0 && lastPrice > 0 && (
-        <div className="absolute top-11 right-4 z-10 flex flex-col gap-1.5 pointer-events-none">
+        <div className="absolute top-11 right-[68px] z-10 flex flex-col gap-1.5 pointer-events-none">
           {positions.map((pos) => {
             const entry = parseFloat(pos.entryPrice);
             const size = parseFloat(pos.size);
