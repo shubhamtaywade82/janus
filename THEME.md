@@ -20,7 +20,7 @@
 | `src/pages/RiskMetrics.tsx` | ~100 | ✅ direction colors done |
 | `src/pages/Logs.tsx` | ~39 | ✅ direction colors done |
 | `src/components/Layout.tsx` | ~23 | ⬜ pending |
-| `src/components/AutoTraderPanel.tsx` | ~59 | ⬜ pending |
+| `src/components/AutoTraderPanel.tsx` | ~59 | ✅ direction colors done |
 | `src/components/AlertsModal.tsx` | ~45 | ⬜ pending |
 | `src/components/PerformanceDashboard.tsx` | ~40 | ⬜ pending |
 | `src/components/SettingsModal.tsx` | ~26 | ⬜ pending |

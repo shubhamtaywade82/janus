@@ -83,7 +83,7 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
     <div className="border border-[#27272a] rounded-lg overflow-hidden">
       {/* Header */}
       <div className="flex items-center gap-2 px-3 py-2 bg-[#09090b]">
-        <Bot size={12} className={isEnabled ? "text-[#22c55e]" : "text-[#52525b]"} />
+        <Bot size={12} className={isEnabled ? "text-j-up" : "text-[#52525b]"} />
         <span className="text-[10px] font-semibold text-[#f4f4f5]">AutoTrader</span>
 
         {/* Enable/disable toggle */}
@@ -92,7 +92,7 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
           className={cn(
             "ml-1 px-2 py-0.5 rounded text-[9px] font-semibold border transition-all",
             isEnabled
-              ? "bg-[#22c55e]/10 text-[#22c55e] border-[#22c55e]/30"
+              ? "bg-j-up/10 text-j-up border-j-up/30"
               : "bg-[#18181b] text-[#71717a] border-[#27272a] hover:text-[#f4f4f5]"
           )}
         >
@@ -130,7 +130,7 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
           <div className="flex items-center gap-1.5 text-[9px]">
             <Activity size={9} className="text-[#52525b]" />
             <span className="text-[#52525b]">{status.lastDecision.symbol}</span>
-            <span className={cn("font-medium", status.lastDecision.action === "execute" ? "text-[#22c55e]" : "text-[#71717a]")}>
+            <span className={cn("font-medium", status.lastDecision.action === "execute" ? "text-j-up" : "text-[#71717a]")}>
               {status.lastDecision.action.toUpperCase()}
             </span>
             <span className="text-[#3f3f46] truncate max-w-[120px]">{status.lastDecision.reason}</span>
@@ -174,7 +174,7 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
             </div>
             <div>
               <div className="text-[#52525b]">PnL</div>
-              <div className={Number(paperWallet.realizedPnl) >= 0 ? "text-[#22c55e] tabular-nums" : "text-[#ef4444] tabular-nums"}>
+              <div className={Number(paperWallet.realizedPnl) >= 0 ? "text-j-up tabular-nums" : "text-j-down tabular-nums"}>
                 {Number(paperWallet.realizedPnl) >= 0 ? "+" : ""}{Number(paperWallet.realizedPnl).toFixed(2)}
               </div>
             </div>
@@ -205,7 +205,7 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
                     className={cn(
                       "px-1.5 py-0.5 rounded text-[8px] border transition-colors",
                       selected
-                        ? "bg-[#22c55e]/10 text-[#22c55e] border-[#22c55e]/30"
+                        ? "bg-j-up/10 text-j-up border-j-up/30"
                         : "bg-[#18181b] text-[#52525b] border-[#27272a] hover:text-[#f4f4f5]"
                     )}
                   >
@@ -221,7 +221,7 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
             <div>
               <div className="text-[9px] text-[#71717a] mb-1">
                 Allocation % of balance
-                <span className="ml-1 text-[#22c55e]">{(parseFloat(form.capitalAllocationPct) * 100).toFixed(0)}%</span>
+                <span className="ml-1 text-j-up">{(parseFloat(form.capitalAllocationPct) * 100).toFixed(0)}%</span>
               </div>
               <input
                 type="range"
@@ -240,7 +240,7 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
                 type="number"
                 value={form.defaultSizeUsdt}
                 onChange={(e) => setForm((f) => ({ ...f, defaultSizeUsdt: e.target.value }))}
-                className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-[#f4f4f5] outline-none focus:border-[#22c55e]"
+                className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-[#f4f4f5] outline-none focus:border-j-up"
               />
               <div className="text-[8px] text-[#52525b] mt-0.5">uses min(% cap, this)</div>
             </div>
@@ -305,7 +305,7 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
                 step="0.001"
                 value={parseFloat(form.stopLossPct) * 100}
                 onChange={(e) => setForm((f) => ({ ...f, stopLossPct: String(parseFloat(e.target.value) / 100) }))}
-                className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-[#f4f4f5] outline-none focus:border-[#ef4444]"
+                className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-[#f4f4f5] outline-none focus:border-j-down"
               />
             </div>
             <div>
@@ -315,7 +315,7 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
                 step="0.001"
                 value={parseFloat(form.tp1Pct) * 100}
                 onChange={(e) => setForm((f) => ({ ...f, tp1Pct: String(parseFloat(e.target.value) / 100) }))}
-                className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-[#f4f4f5] outline-none focus:border-[#22c55e]"
+                className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-[#f4f4f5] outline-none focus:border-j-up"
               />
             </div>
           </div>
@@ -381,7 +381,7 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
           <button
             onClick={handleSave}
             disabled={saveConfig.isPending}
-            className="w-full py-1.5 rounded bg-[#22c55e]/10 text-[#22c55e] border border-[#22c55e]/30 text-[10px] font-semibold hover:bg-[#22c55e]/20 transition-colors disabled:opacity-50"
+            className="w-full py-1.5 rounded bg-j-up/10 text-j-up border border-j-up/30 text-[10px] font-semibold hover:bg-j-up/20 transition-colors disabled:opacity-50"
           >
             {saveConfig.isPending ? "Saving…" : "Save Config"}
           </button>
