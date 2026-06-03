@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { TrendingUp } from "lucide-react";
 
@@ -49,6 +49,21 @@ interface Props { onChange: (cfg: IndicatorConfig) => void; }
 
 export function IndicatorPanel({ onChange }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
+        setExpanded(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [expanded]);
+
   const [cfg, setCfg] = useState<IndicatorConfig>(() => {
     try {
       const s = localStorage.getItem("janus_indicators");
@@ -72,7 +87,7 @@ export function IndicatorPanel({ onChange }: Props) {
     (cfg.rsi ? 1 : 0) + (cfg.vwap ? 1 : 0) + (cfg.cvd ? 1 : 0);
 
   return (
-    <div className="relative">
+    <div ref={panelRef} className="relative">
       <button
         onClick={() => setExpanded((v) => !v)}
         className={cn(

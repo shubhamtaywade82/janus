@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Layers } from "lucide-react";
 
@@ -41,6 +41,21 @@ interface Props {
 
 export function ChartOverlayPanel({ onChange }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
+        setExpanded(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [expanded]);
+
   const [toggles, setToggles] = useState<OverlayToggles>(() => {
     try {
       const saved = localStorage.getItem("janus_chart_overlays");
@@ -60,7 +75,7 @@ export function ChartOverlayPanel({ onChange }: Props) {
   const activeCount = Object.values(toggles).filter(Boolean).length;
 
   return (
-    <div className="relative">
+    <div ref={panelRef} className="relative">
       {/* Trigger button */}
       <button
         onClick={() => setExpanded((v) => !v)}

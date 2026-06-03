@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Bell, BellOff } from "lucide-react";
 import type { AlertConfig } from "@/lib/chart/alert-engine";
@@ -30,6 +30,21 @@ interface Props { onChange: (cfg: AlertConfig) => void; }
 
 export function AlertConfigPanel({ onChange }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
+        setExpanded(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [expanded]);
+
   const [cfg, setCfg] = useState<AlertConfig>(() => {
     try {
       const s = localStorage.getItem("janus_alert_cfg");
@@ -72,7 +87,7 @@ export function AlertConfigPanel({ onChange }: Props) {
   );
 
   return (
-    <div className="relative">
+    <div ref={panelRef} className="relative">
       <button
         onClick={() => setExpanded((v) => !v)}
         className={cn(
