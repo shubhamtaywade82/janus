@@ -29,7 +29,7 @@ function MiniEquityCurve({ data }: { data: EquityPoint[] }) {
     });
 
     const series = chart.addSeries(LineSeries, {
-      color: "#22c55e",
+      color: "hsl(var(--janus-up))",
       lineWidth: 2,
       lastValueVisible: false,
       priceLineVisible: false,
@@ -65,7 +65,7 @@ function DetailedEquityCurve({ data }: { data: EquityPoint[] }) {
       .sort((a, b) => a.time - b.time);
 
     const isNetPositive = points.length > 0 && points[points.length - 1].value >= points[0].value;
-    const themeColor = isNetPositive ? "#22c55e" : "#ef4444";
+    const themeColor = isNetPositive ? "hsl(var(--janus-up))" : "hsl(var(--janus-down))";
     const topColor = isNetPositive ? "rgba(34, 197, 94, 0.15)" : "rgba(239, 68, 68, 0.15)";
     const bottomColor = isNetPositive ? "rgba(34, 197, 94, 0.0)" : "rgba(239, 68, 68, 0.0)";
 
@@ -146,7 +146,7 @@ function StatCard({
   label: string; value: string; sub: string; icon: React.ReactNode;
   color: "green" | "red" | "yellow";
 }) {
-  const textColor = color === "green" ? "text-[#22c55e]" : color === "red" ? "text-[#ef4444]" : "text-[#f59e0b]";
+  const textColor = color === "green" ? "text-j-up" : color === "red" ? "text-j-down" : "text-[#f59e0b]";
   return (
     <div className="bg-[#09090b] border border-[#27272a] rounded-lg p-2.5">
       <div className="flex items-center gap-1 mb-1 text-[#52525b]">
@@ -165,8 +165,8 @@ function StatCardLarge({
   label: string; value: string; sub: string; icon: React.ReactNode;
   color: "green" | "red" | "yellow";
 }) {
-  const textColor = color === "green" ? "text-[#22c55e]" : color === "red" ? "text-[#ef4444]" : "text-[#f59e0b]";
-  const bgLight = color === "green" ? "bg-[#22c55e]/5 border-[#22c55e]/10" : color === "red" ? "bg-[#ef4444]/5 border-[#ef4444]/10" : "bg-[#f59e0b]/5 border-[#f59e0b]/10";
+  const textColor = color === "green" ? "text-j-up" : color === "red" ? "text-j-down" : "text-[#f59e0b]";
+  const bgLight = color === "green" ? "bg-j-up/5 border-j-up/10" : color === "red" ? "bg-j-down/5 border-j-down/10" : "bg-[#f59e0b]/5 border-[#f59e0b]/10";
   return (
     <div className={cn("bg-[#09090b] border border-[#27272a] rounded-xl p-4 flex flex-col justify-between hover:border-[#3f3f46] transition-colors shadow-sm", bgLight)}>
       <div className="flex items-center justify-between mb-2 text-[#71717a]">
@@ -295,11 +295,11 @@ export function PerformanceDashboard({ userId = 1, isFullPage = false }: { userI
                         <td className="px-3 py-2 text-[#a1a1aa] capitalize font-medium">{strat.replace("_", " ")}</td>
                         <td className="px-3 py-2 text-[#f4f4f5] tabular-nums font-medium">{data.trades}</td>
                         <td className="px-3 py-2 tabular-nums font-medium">
-                          <span className="text-[#22c55e]">{data.wins}</span>
+                          <span className="text-j-up">{data.wins}</span>
                           <span className="text-[#52525b]">/</span>
-                          <span className="text-[#ef4444]">{data.losses}</span>
+                          <span className="text-j-down">{data.losses}</span>
                         </td>
-                        <td className={cn("px-3 py-2 tabular-nums font-semibold", data.pnl >= 0 ? "text-[#22c55e]" : "text-[#ef4444]")}>
+                        <td className={cn("px-3 py-2 tabular-nums font-semibold", data.pnl >= 0 ? "text-j-up" : "text-j-down")}>
                           {data.pnl >= 0 ? "+" : ""}{data.pnl.toFixed(2)}
                         </td>
                       </tr>
@@ -366,11 +366,11 @@ export function PerformanceDashboard({ userId = 1, isFullPage = false }: { userI
                   <td className="px-3 py-1.5 text-[#a1a1aa] capitalize">{strat.replace("_", " ")}</td>
                   <td className="px-3 py-1.5 text-[#f4f4f5] tabular-nums">{data.trades}</td>
                   <td className="px-3 py-1.5 tabular-nums">
-                    <span className="text-[#22c55e]">{data.wins}</span>
+                    <span className="text-j-up">{data.wins}</span>
                     <span className="text-[#52525b]">/</span>
-                    <span className="text-[#ef4444]">{data.losses}</span>
+                    <span className="text-j-down">{data.losses}</span>
                   </td>
-                  <td className={cn("px-3 py-1.5 tabular-nums font-medium", data.pnl >= 0 ? "text-[#22c55e]" : "text-[#ef4444]")}>
+                  <td className={cn("px-3 py-1.5 tabular-nums font-medium", data.pnl >= 0 ? "text-j-up" : "text-j-down")}>
                     {data.pnl >= 0 ? "+" : ""}{data.pnl.toFixed(2)}
                   </td>
                 </tr>
