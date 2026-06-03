@@ -25,12 +25,13 @@ import { globalLlmAdvisor, type SignalContext } from "./llm-advisor";
 import { latestTickerCache } from "./streaming";
 import { markPriceCache, tradingEvents } from "./coindcx-ws";
 import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo } from "./coindcx";
-import { registerPositionForTrailing } from "./trailing-stop";
+import { registerPositionForTrailing, unregisterPosition } from "./trailing-stop";
 import { knnSnapshotCache } from "./knn-supertrend";
 import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
+import { ExitDecision } from "./exit-manager";
 import { snapshotEquity } from "./performance-tracker";
-import { getPaperWallet, lockPaperMargin, getPaperEquity } from "./paper-wallet";
+import { getPaperWallet, lockPaperMargin, releasePaperMargin, getPaperEquity } from "./paper-wallet";
 import { env } from "../lib/env";
 import type { Signal, AutoExecutorConfig } from "@db/schema";
 import type { StrategyType } from "./strategy-config";
@@ -65,6 +66,12 @@ export interface AutoExecutorState {
 }
 
 export class AutoExecutor {
+  constructor() {
+    // Subscribe to exit signals for default user (userId=1)
+    tradingEvents.on(`exit-signal:1`, this.handleExitSignal.bind(this));
+  }
+
+  /** Current executor state */
   state: AutoExecutorState = {
     lastRun: 0,
     signalsProcessed: 0,
@@ -514,6 +521,41 @@ export class AutoExecutor {
       message: `${symbol}: ${decision.decision} (${decision.confidence}%) via ${decision.keyUsed}`,
       metadata: { signalId, ...decision },
     });
+  }
+
+  // Handles exit‑signal events emitted by the exit‑manager
+  private async handleExitSignal(payload: {
+    positionId: number;
+    symbol: string;
+    strategyType: StrategyType;
+    currentPrice: number;
+    decision: ExitDecision;
+  }): Promise<void> {
+    const db = getDb();
+    const pos = await db.select().from(positions).where(eq(positions.id, payload.positionId)).limit(1);
+    if (pos.length === 0) return;
+    const position = pos[0];
+    const realizedPnl = payload.decision.feeAdjustedPnl;
+
+    await db
+      .update(positions)
+      .set({
+        status: "closed",
+        currentPrice: String(payload.currentPrice),
+        realizedPnl: String(realizedPnl),
+        unrealizedPnl: "0",
+        closedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(positions.id, payload.positionId));
+
+    if (position.isPaper) {
+      await releasePaperMargin(position.userId, parseFloat(position.margin), realizedPnl, position.id);
+    }
+
+    // Clean up trailing‑stop monitoring
+    unregisterPosition(position.id);
+    tradingEvents.emit(`portfolio-update:${position.userId}`);
   }
 }
 

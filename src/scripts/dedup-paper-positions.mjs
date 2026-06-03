@@ -1,10 +1,11 @@
-// src/scripts/dedup-paper-positions.ts
-import { getDb } from "../api/queries/connection";
+// src/scripts/dedup-paper-positions.mjs
+// ESM script to merge duplicate open paper positions (no TypeScript syntax)
+import { getDb } from "../api/queries/connection.js";
 import { positions } from "@db/schema";
 import { and, eq, desc } from "drizzle-orm";
 
-// Weighted entry price helper
-function weightedEntryPrice(existingEntry: string, existingSize: string, newEntry: string, newSize: string): string {
+// Weighted entry price helper (plain JS)
+function weightedEntryPrice(existingEntry, existingSize, newEntry, newSize) {
   const eSize = parseFloat(existingSize) || 0;
   const nSize = parseFloat(newSize) || 0;
   const total = eSize + nSize;
@@ -24,7 +25,7 @@ function weightedEntryPrice(existingEntry: string, existingSize: string, newEntr
     .orderBy(desc(positions.createdAt));
 
   // 2️⃣ Group by userId|symbol|side
-  const groups: Record<string, typeof positions.$inferSelect[]> = {};
+  const groups = {};
   for (const row of paperRows) {
     const key = `${row.userId}|${row.symbol}|${row.side}`;
     if (!groups[key]) groups[key] = [];

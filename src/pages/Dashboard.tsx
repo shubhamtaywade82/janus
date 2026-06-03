@@ -30,7 +30,8 @@ import type { AlertConfig } from "@/lib/chart/alert-engine";
 import { checkIndicatorAlerts, checkSMCAlerts } from "@/lib/chart/alert-engine";
 import type { IndicatorConfig } from "@/components/IndicatorPanel";
 import { EMA_COLORS, SMA_COLORS } from "@/components/IndicatorPanel";
-import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, calcNW, calcMACD, calcStochRSI, calcPSAR, calcIchimoku, calcADX, calcZScore, calcVolumeProfile, calcKeltner, calcDonchian } from "@/lib/chart/indicators";
+import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, calcNW, calcMACD, calcStochRSI, calcPSAR, calcIchimoku, calcADX, calcZScore, calcVolumeProfile, calcKeltner, calcDonchian, calcTTMSqueeze } from "@/lib/chart/indicators";
+import { detectMACDSignals, detectADXSignals, detectDirectionFlips, detectStochCross, detectZScoreSignals, detectIchimokuSignals, detectDonchianBreakout, detectNWBandTag, detectVWAPSignals, detectRSIDivergence, detectCVDDivergence } from "@/lib/chart/indicator-signals";
 import type { PriceActionData } from "@/lib/chart/pa-types";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 
@@ -173,6 +174,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const zScorePriceLinesRef = useRef<any[]>([]);
   // Volume Profile primitive
   const vpPrimRef = useRef<VolumeProfilePrimitive | null>(null);
+  // TTM Squeeze histogram series
+  const ttmSqHistRef = useRef<any>(null);
+  // Dedicated indicator signal markers plugin (separate from SMC markers)
+  const indicatorMarkersRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
 
   // ─── Tick animation: persistent lerp loop chasing target ───
   const animFrameRef = useRef<number | null>(null);
@@ -875,8 +880,16 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         } catch { /* safe */ }
       }
       if (macdHistRef.current) {
+        // 4-color histogram: strong/weak bull (green) + strong/weak bear (red)
         const histData = histogram
-          .map((v, i) => v !== null ? { time: toTime(i), value: v, color: v >= 0 ? upColor : downColor } : null)
+          .map((v, i) => {
+            if (v === null) return null;
+            const prev = histogram[i - 1] ?? v;
+            let color: string;
+            if (v >= 0) color = v > prev ? "rgba(14,203,129,0.90)" : "rgba(14,203,129,0.42)";
+            else        color = v < prev ? "rgba(246,70,93,0.90)"  : "rgba(246,70,93,0.42)";
+            return { time: toTime(i), value: v, color };
+          })
           .filter(Boolean)
           .sort((a, b) => (a!.time as number) - (b!.time as number)) as { time: UTCTimestamp; value: number; color: string }[];
         macdHistRef.current.setData(histData);
@@ -1032,6 +1045,38 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       ["donchian-upper", "donchian-middle", "donchian-lower"].forEach(removeKey);
     }
 
+    // TTM Squeeze — 4-color momentum histogram on "ttmsq" sub-pane
+    if (indicatorCfg.ttmSqueeze) {
+      const { momentum, histColor } = calcTTMSqueeze(
+        closes, highs, lows, indicatorCfg.ttmSqPeriod, indicatorCfg.ttmSqBBMult, indicatorCfg.ttmSqKMult
+      );
+      const ttmScaleOpts = { scaleMargins: { top: 0.78, bottom: 0 }, borderVisible: false };
+      if (!ttmSqHistRef.current && chart) {
+        try {
+          const h = chart.addSeries(HistogramSeries, { priceScaleId: "ttmsq", lastValueVisible: false, priceLineVisible: false });
+          h.priceScale().applyOptions(ttmScaleOpts);
+          ttmSqHistRef.current = h;
+        } catch { /* safe */ }
+      }
+      if (ttmSqHistRef.current) {
+        const colorMap: Record<string, string> = {
+          g_strong: "rgba(14,203,129,0.90)", g_weak: "rgba(14,203,129,0.42)",
+          r_strong: "rgba(246,70,93,0.90)",  r_weak: "rgba(246,70,93,0.42)",
+        };
+        const ttmData = momentum
+          .map((v, i) => {
+            if (v === null || histColor[i] === null) return null;
+            return { time: toTime(i), value: v, color: colorMap[histColor[i]!] ?? "rgba(113,113,122,0.50)" };
+          })
+          .filter(Boolean)
+          .sort((a, b) => (a!.time as number) - (b!.time as number)) as { time: UTCTimestamp; value: number; color: string }[];
+        ttmSqHistRef.current.setData(ttmData);
+      }
+    } else if (!indicatorCfg.ttmSqueeze && ttmSqHistRef.current && chart) {
+      try { chart.removeSeries(ttmSqHistRef.current); } catch { /* safe */ }
+      ttmSqHistRef.current = null;
+    }
+
     // Volume Profile — canvas primitive attached to candlestick series
     if (indicatorCfg.volumeProfile && candlestickSeriesRef.current) {
       const vpData = calcVolumeProfile(highs, lows, closes, volumes, indicatorCfg.volumeProfileBuckets);
@@ -1044,6 +1089,76 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       vpPrimRef.current.setData(null);
       try { candlestickSeriesRef.current?.detachPrimitive(vpPrimRef.current); } catch { /* safe */ }
       vpPrimRef.current = null;
+    }
+
+    // ── Indicator Signal Markers ─────────────────────────────────────────
+    // Collect signals from all active indicators, render on dedicated plugin.
+    if (candlestickSeriesRef.current) {
+      if (!indicatorMarkersRef.current) {
+        try { indicatorMarkersRef.current = createSeriesMarkers(candlestickSeriesRef.current, []); }
+        catch { /* safe */ }
+      }
+      const signals: ReturnType<typeof detectMACDSignals> = [];
+
+      if (indicatorCfg.macd) {
+        const { macd: m, signal: s } = calcMACD(closes, indicatorCfg.macdFast, indicatorCfg.macdSlow, indicatorCfg.macdSignal);
+        signals.push(...detectMACDSignals(m, s, times));
+      }
+      if (indicatorCfg.adx) {
+        const { adx, diPlus, diMinus } = calcADX(highs, lows, closes, indicatorCfg.adxPeriod);
+        signals.push(...detectADXSignals(adx, diPlus, diMinus, times));
+      }
+      if (indicatorCfg.superTrend) {
+        const { direction } = calcSuperTrend(highs, lows, closes, indicatorCfg.superTrendPeriod, indicatorCfg.superTrendMult);
+        signals.push(...detectDirectionFlips(direction, times, "ST"));
+      }
+      if (indicatorCfg.knnSuperTrend) {
+        // KNN ST direction is computed inline in Dashboard — recompute here for signals
+        const { direction } = calcSuperTrend(highs, lows, closes, 10, 3);
+        signals.push(...detectDirectionFlips(direction, times, "KNN"));
+      }
+      if (indicatorCfg.psar) {
+        const { direction } = calcPSAR(highs, lows, closes, indicatorCfg.psarStep, indicatorCfg.psarMax);
+        signals.push(...detectDirectionFlips(direction, times, "SAR"));
+      }
+      if (indicatorCfg.stochRsi) {
+        const { k, d } = calcStochRSI(closes, indicatorCfg.stochRsiPeriod, indicatorCfg.stochRsiPeriod, indicatorCfg.stochSmoothK, indicatorCfg.stochSmoothD);
+        signals.push(...detectStochCross(k, d, times));
+      }
+      if (indicatorCfg.zScore) {
+        const z = calcZScore(closes, indicatorCfg.zScorePeriod);
+        signals.push(...detectZScoreSignals(z, times));
+      }
+      if (indicatorCfg.ichimoku) {
+        const { tenkan, kijun, spanA, spanB } = calcIchimoku(highs, lows, closes);
+        signals.push(...detectIchimokuSignals(closes, tenkan, kijun, spanA, spanB, times));
+      }
+      if (indicatorCfg.donchian) {
+        const { upper, lower } = calcDonchian(highs, lows, indicatorCfg.donchianPeriod);
+        signals.push(...detectDonchianBreakout(closes, upper, lower, times));
+      }
+      if (indicatorCfg.nw) {
+        const { upper, lower } = calcNW(closes, indicatorCfg.nwBandwidth, indicatorCfg.nwMult);
+        signals.push(...detectNWBandTag(closes, upper, lower, times));
+      }
+      if (indicatorCfg.vwap) {
+        const { vwap } = calcVWAP(times, highs, lows, closes, volumes);
+        signals.push(...detectVWAPSignals(closes, vwap, times));
+      }
+      if (indicatorCfg.rsi) {
+        const rsiVals = calcRSI(closes, indicatorCfg.rsiPeriod);
+        signals.push(...detectRSIDivergence(closes, rsiVals, times));
+      }
+      if (indicatorCfg.cvd) {
+        const { cvd } = calcCVD(highs, lows, closes, volumes);
+        signals.push(...detectCVDDivergence(closes, cvd, times));
+      }
+
+      if (indicatorMarkersRef.current) {
+        indicatorMarkersRef.current.setMarkers(
+          signals.sort((a, b) => (a.time as number) - (b.time as number))
+        );
+      }
     }
 
   }, [indicatorCfg, data, interval]);

@@ -141,7 +141,7 @@ export function IndicatorPanel({ onChange }: Props) {
     (cfg.macd ? 1 : 0) + (cfg.stochRsi ? 1 : 0) + (cfg.psar ? 1 : 0) +
     (cfg.ichimoku ? 1 : 0) + (cfg.adx ? 1 : 0) +
     (cfg.zScore ? 1 : 0) + (cfg.volumeProfile ? 1 : 0) +
-    (cfg.keltner ? 1 : 0) + (cfg.donchian ? 1 : 0);
+    (cfg.keltner ? 1 : 0) + (cfg.donchian ? 1 : 0) + (cfg.ttmSqueeze ? 1 : 0);
 
   return (
     <div ref={panelRef} className="relative">
@@ -391,6 +391,21 @@ export function IndicatorPanel({ onChange }: Props) {
               <span className="text-[10px] text-[#a1a1aa]">Donchian Ch.</span>
             </div>
             {cfg.donchian && <span className="text-[9px] text-[#52525b]">{cfg.donchianPeriod}</span>}
+          </div>
+
+          {/* TTM Squeeze */}
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setCfg((c) => ({ ...c, ttmSqueeze: !c.ttmSqueeze }))}
+                className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
+                  cfg.ttmSqueeze ? "bg-[#f59e0b]/20 border-[#f59e0b]/50" : "border-[#27272a]")} />
+              <span className="text-[10px] text-[#a1a1aa]">TTM Squeeze</span>
+            </div>
+            {cfg.ttmSqueeze && (
+              <span className="text-[9px] text-[#52525b]">
+                {cfg.ttmSqPeriod},{cfg.ttmSqBBMult}/{cfg.ttmSqKMult}
+              </span>
+            )}
           </div>
 
           <div className="border-t border-[#27272a] mt-2 pt-2">
