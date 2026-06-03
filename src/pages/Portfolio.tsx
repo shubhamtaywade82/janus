@@ -50,7 +50,7 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
           <span
             className={cn(
               "w-1.5 h-1.5 rounded-full",
-              position.side === "long" ? "bg-[#22c55e]" : "bg-[#ef4444]"
+              position.side === "long" ? "bg-j-up" : "bg-j-down"
             )}
           />
           <span className="text-xs font-medium text-[#f4f4f5]">{position.symbol}</span>
@@ -66,8 +66,8 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
           className={cn(
             "text-xs px-1.5 py-0.5 rounded",
             position.side === "long"
-              ? "bg-[#22c55e]/10 text-[#22c55e]"
-              : "bg-[#ef4444]/10 text-[#ef4444]"
+              ? "bg-j-up/10 text-j-up"
+              : "bg-j-down/10 text-j-down"
           )}
         >
           {position.side.toUpperCase()}
@@ -99,7 +99,7 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
             "text-[9px] px-1 py-0.5 rounded",
             marginCurrency === "INR"
               ? "bg-[#f59e0b]/10 text-[#f59e0b]"
-              : "bg-[#22c55e]/10 text-[#22c55e]"
+              : "bg-j-up/10 text-j-up"
           )}>
             {marginCurrency}
           </span>
@@ -114,7 +114,7 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
           : "--"}
       </td>
       <td className="px-3 py-2">
-        <div className={cn("flex flex-col gap-0.5", isProfit ? "text-[#22c55e]" : "text-[#ef4444]", pnlFlashRow)}>
+        <div className={cn("flex flex-col gap-0.5", isProfit ? "text-j-up" : "text-j-down", pnlFlashRow)}>
           <div className="flex items-center gap-1 text-xs tabular-nums rounded px-1 -mx-1">
             {isProfit ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
             <AnimatedNumber value={pnl} decimals={4} duration={300} signed />
@@ -131,10 +131,10 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
           className={cn(
             "text-xs px-1.5 py-0.5 rounded",
             liqPercent < 5
-              ? "bg-[#ef4444]/10 text-[#ef4444]"
+              ? "bg-j-down/10 text-j-down"
               : liqPercent < 15
               ? "bg-[#f59e0b]/10 text-[#f59e0b]"
-              : "bg-[#22c55e]/10 text-[#22c55e]"
+              : "bg-j-up/10 text-j-up"
           )}
           title={`Liq: ${position.liquidationPrice || "--"}`}
         >
@@ -147,10 +147,10 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
           className={cn(
             "text-xs px-1.5 py-0.5 rounded",
             position.status === "open"
-              ? "bg-[#22c55e]/10 text-[#22c55e]"
+              ? "bg-j-up/10 text-j-up"
               : position.status === "closed"
               ? "bg-[#27272a] text-[#71717a]"
-              : "bg-[#ef4444]/10 text-[#ef4444]"
+              : "bg-j-down/10 text-j-down"
           )}
         >
           {position.status.toUpperCase()}
@@ -441,7 +441,7 @@ export default function Portfolio() {
               className={cn(
                 "px-3 py-1.5 transition-colors",
                 portfolioMode === "live"
-                  ? "bg-[#22c55e]/10 text-[#22c55e]"
+                  ? "bg-j-up/10 text-j-up"
                   : "bg-[#09090b] text-[#52525b] hover:text-[#f4f4f5]"
               )}
             >
@@ -466,7 +466,7 @@ export default function Portfolio() {
               className={cn(
                 "px-2 py-1 transition-colors",
                 rateMode === "live"
-                  ? "bg-[#22c55e]/10 text-[#22c55e]"
+                  ? "bg-j-up/10 text-j-up"
                   : "bg-[#09090b] text-[#52525b] hover:text-[#f4f4f5]"
               )}
               title="CoinDCX live USDT/INR rate"
@@ -536,7 +536,7 @@ export default function Portfolio() {
                   {rateMode === "static" && <span className="ml-1 text-[#f59e0b]">(static)</span>}
                 </div>
                 <div className="mt-2 flex items-center justify-between text-[9px]">
-                  <span className="text-[#22c55e]">Available {walletCcy === "INR" ? `₹${availFree.toFixed(2)}` : `$${availFree.toFixed(2)}`}</span>
+                  <span className="text-j-up">Available {walletCcy === "INR" ? `₹${availFree.toFixed(2)}` : `$${availFree.toFixed(2)}`}</span>
                   <span className="text-[#f59e0b]">Locked {walletCcy === "INR" ? `₹${lockedMgn.toFixed(2)}` : `$${lockedMgn.toFixed(2)}`}</span>
                 </div>
               </div>
@@ -555,16 +555,16 @@ export default function Portfolio() {
               </div>
               <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  {isProfit ? <TrendingUp size={14} className="text-[#22c55e]" /> : <TrendingDown size={14} className="text-[#ef4444]" />}
+                  {isProfit ? <TrendingUp size={14} className="text-j-up" /> : <TrendingDown size={14} className="text-j-down" />}
                   <span className="text-[10px] text-[#71717a]">Unrealized PnL</span>
                 </div>
-                <div className={cn("text-xl font-bold tabular-nums rounded px-1 -mx-1", isProfit ? "text-[#22c55e]" : "text-[#ef4444]", pnlFlash)}>
+                <div className={cn("text-xl font-bold tabular-nums rounded px-1 -mx-1", isProfit ? "text-j-up" : "text-j-down", pnlFlash)}>
                   <AnimatedNumber value={pnlUsdt} decimals={4} duration={400} signed suffix=" USDT" />
                 </div>
-                <div className={cn("text-[10px] mt-1 tabular-nums", isProfit ? "text-[#22c55e]/70" : "text-[#ef4444]/70")}>
+                <div className={cn("text-[10px] mt-1 tabular-nums", isProfit ? "text-j-up/70" : "text-j-down/70")}>
                   ₹<AnimatedNumber value={pnlInr} decimals={2} duration={400} signed />
                 </div>
-                <div className={cn("mt-1.5 text-sm font-bold tabular-nums", isProfit ? "text-[#22c55e]" : "text-[#ef4444]")}>
+                <div className={cn("mt-1.5 text-sm font-bold tabular-nums", isProfit ? "text-j-up" : "text-j-down")}>
                   <AnimatedNumber value={pnlPct} decimals={2} duration={400} signed suffix="%" />
                 </div>
               </div>
@@ -583,7 +583,7 @@ export default function Portfolio() {
             <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">$<AnimatedNumber value={paperFreeBalance} decimals={2} duration={400} /></div>
             <div className="text-[10px] text-[#52525b] mt-1">Started with ${paperStartingBalance.toFixed(2)}</div>
             <div className="mt-2 flex items-center justify-between text-[9px]">
-              <span className="text-[#22c55e]">Free $<AnimatedNumber value={paperFreeBalance} decimals={2} duration={400} /></span>
+              <span className="text-j-up">Free $<AnimatedNumber value={paperFreeBalance} decimals={2} duration={400} /></span>
               <span className="text-[#f59e0b]">Locked $<AnimatedNumber value={paperLockedMargin} decimals={2} duration={400} /></span>
             </div>
           </div>
@@ -595,26 +595,26 @@ export default function Portfolio() {
             <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">$<AnimatedNumber value={paperEquity} decimals={2} duration={400} /></div>
             <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
               {paperEquity >= paperStartingBalance
-                ? <span className="text-[#22c55e]">+${(paperEquity - paperStartingBalance).toFixed(2)} vs start</span>
-                : <span className="text-[#ef4444]">-${(paperStartingBalance - paperEquity).toFixed(2)} vs start</span>}
+                ? <span className="text-j-up">+${(paperEquity - paperStartingBalance).toFixed(2)} vs start</span>
+                : <span className="text-j-down">-${(paperStartingBalance - paperEquity).toFixed(2)} vs start</span>}
             </div>
             <div className="mt-2 text-[9px] text-[#71717a]">{paperPositions.length} paper positions open</div>
           </div>
           <div className="bg-[#18181b] border border-[#f59e0b]/30 rounded-lg p-4">
             <div className="flex items-center gap-2 mb-2">
-              {paperUnrealizedPnl >= 0 ? <TrendingUp size={14} className="text-[#22c55e]" /> : <TrendingDown size={14} className="text-[#ef4444]" />}
+              {paperUnrealizedPnl >= 0 ? <TrendingUp size={14} className="text-j-up" /> : <TrendingDown size={14} className="text-j-down" />}
               <span className="text-[10px] text-[#71717a]">Paper PnL</span>
             </div>
-            <div className={cn("text-xl font-bold tabular-nums", paperUnrealizedPnl >= 0 ? "text-[#22c55e]" : "text-[#ef4444]")}>
+            <div className={cn("text-xl font-bold tabular-nums", paperUnrealizedPnl >= 0 ? "text-j-up" : "text-j-down")}>
               <AnimatedNumber value={paperUnrealizedPnl} decimals={4} duration={400} signed suffix=" USDT" />
             </div>
             <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
-              Realized: <span className={paperRealizedPnl >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"}>
+              Realized: <span className={paperRealizedPnl >= 0 ? "text-j-up" : "text-j-down"}>
                 {paperRealizedPnl >= 0 ? "+" : ""}{paperRealizedPnl.toFixed(4)}
               </span>
             </div>
             <div className="mt-1.5 text-[10px] text-[#52525b]">
-              Total: <span className={cn("font-medium", (paperUnrealizedPnl + paperRealizedPnl) >= 0 ? "text-[#22c55e]" : "text-[#ef4444]")}>
+              Total: <span className={cn("font-medium", (paperUnrealizedPnl + paperRealizedPnl) >= 0 ? "text-j-up" : "text-j-down")}>
                 {(paperUnrealizedPnl + paperRealizedPnl) >= 0 ? "+" : ""}{(paperUnrealizedPnl + paperRealizedPnl).toFixed(4)}
               </span>
             </div>
@@ -625,15 +625,15 @@ export default function Portfolio() {
       {/* Indian VDA Tax Estimator Row — live mode only */}
       {portfolioMode === "live" && <div className="grid grid-cols-2 gap-3 mt-3">
         {/* VDA Gains & Estimated Tax Card */}
-        <div className="bg-[#ef4444]/5 border border-[#ef4444]/20 rounded-lg p-4">
+        <div className="bg-j-down/5 border border-j-down/20 rounded-lg p-4">
           <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle size={14} className="text-[#ef4444]" />
-            <span className="text-[10px] text-[#ef4444] font-semibold uppercase tracking-wide">
+            <AlertTriangle size={14} className="text-j-down" />
+            <span className="text-[10px] text-j-down font-semibold uppercase tracking-wide">
               Section 115BBH VDA Tax (India)
             </span>
           </div>
           <div className="flex items-baseline gap-2">
-            <div className="text-xl font-bold text-[#ef4444] tabular-nums">
+            <div className="text-xl font-bold text-j-down tabular-nums">
               ₹{(taxMetrics.estTaxUsdt * usdtInrRate).toFixed(2)}
             </div>
             <div className="text-xs text-[#71717a] tabular-nums">
@@ -643,7 +643,7 @@ export default function Portfolio() {
           <div className="text-[10px] text-[#71717a] mt-2 leading-relaxed">
             Estimated <span className="font-semibold text-[#f4f4f5]">31.2% Tax</span> (including 4% cess) on gross profit. 
             <br />
-            Gross FY Profits: <span className="text-[#22c55e] font-semibold">₹{(taxMetrics.totalGainsUsdt * usdtInrRate).toFixed(2)}</span> (losses are not offset).
+            Gross FY Profits: <span className="text-j-up font-semibold">₹{(taxMetrics.totalGainsUsdt * usdtInrRate).toFixed(2)}</span> (losses are not offset).
           </div>
         </div>
 
@@ -671,9 +671,9 @@ export default function Portfolio() {
 
       {/* Risk Warning — trigger when PnL < -50% of total margin */}
       {portfolio && parseFloat(portfolio.totalMargin || "0") > 0 && liveTotalUnrealizedPnl < -(parseFloat(portfolio.totalMargin || "0") * 0.5) && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#ef4444]/10 border border-[#ef4444]/30">
-          <AlertTriangle size={14} className="text-[#ef4444]" />
-          <span className="text-xs text-[#ef4444]">
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-j-down/10 border border-j-down/30">
+          <AlertTriangle size={14} className="text-j-down" />
+          <span className="text-xs text-j-down">
             Warning: Unrealized losses exceed 50% of total margin. Consider reducing positions.
           </span>
         </div>
@@ -698,7 +698,7 @@ export default function Portfolio() {
                       className={cn(
                         "px-2.5 py-1 transition-colors",
                         portfolioMode === "live"
-                          ? "bg-[#22c55e]/10 text-[#22c55e]"
+                          ? "bg-j-up/10 text-j-up"
                           : "bg-[#18181b] text-[#52525b] hover:text-[#f4f4f5]"
                       )}
                     >
@@ -785,7 +785,7 @@ export default function Portfolio() {
                         <td className="px-3 py-1">
                           <span className={cn(
                             "text-[10px] px-1 rounded",
-                            trade.side === "buy" ? "text-[#22c55e] bg-[#22c55e]/10" : "text-[#ef4444] bg-[#ef4444]/10"
+                            trade.side === "buy" ? "text-j-up bg-j-up/10" : "text-j-down bg-j-down/10"
                           )}>
                             {trade.side.toUpperCase()}
                           </span>

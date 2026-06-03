@@ -43,6 +43,17 @@ interface KlineData {
   volume: string;
 }
 
+const resolveCSSColor = (varName: string, fallback: string): string => {
+  if (typeof window === "undefined") return fallback;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  if (!value) return fallback;
+  if (value.startsWith("hsl") || value.startsWith("#") || value.startsWith("rgb")) {
+    return value;
+  }
+  const formatted = value.includes(",") ? value : value.split(/\s+/).join(", ");
+  return `hsl(${formatted})`;
+};
+
 // ─── TradingView Lightweight Chart Component ───
 const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg }: {
   data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string;
@@ -233,12 +244,12 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     chartRef.current = chart;
 
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "hsl(var(--janus-up-bright))",
-      downColor: "hsl(var(--janus-down-bright))",
-      borderUpColor: "hsl(var(--janus-up-bright))",
-      borderDownColor: "hsl(var(--janus-down-bright))",
-      wickUpColor: "hsl(var(--janus-up-bright))",
-      wickDownColor: "hsl(var(--janus-down-bright))",
+      upColor: resolveCSSColor("--janus-up-bright", "#0ecb81"),
+      downColor: resolveCSSColor("--janus-down-bright", "#f6465d"),
+      borderUpColor: resolveCSSColor("--janus-up-bright", "#0ecb81"),
+      borderDownColor: resolveCSSColor("--janus-down-bright", "#f6465d"),
+      wickUpColor: resolveCSSColor("--janus-up-bright", "#0ecb81"),
+      wickDownColor: resolveCSSColor("--janus-down-bright", "#f6465d"),
     });
     candlestickSeriesRef.current = candlestickSeries;
 
@@ -540,7 +551,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
             time:     (d.time / 1000) as Time,
             position: d.direction === "bullish" ? "belowBar" : "aboveBar",
             shape:    d.direction === "bullish" ? "arrowUp" : "arrowDown",
-            color:    d.direction === "bullish" ? "hsl(var(--janus-up))" : "hsl(var(--janus-down))",
+            color:    d.direction === "bullish" ? resolveCSSColor("--janus-up", "#0ecb81") : resolveCSSColor("--janus-down", "#f6465d"),
             size:     1.5,
             text:     `${d.atrMultiple.toFixed(1)}×`,
           });
@@ -749,7 +760,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         if (isNaN(entryPrice) || entryPrice <= 0) return null;
 
         const isLong = pos.side === "long";
-        const color = isLong ? "hsl(var(--janus-up-bright))" : "hsl(var(--janus-down-bright))";
+        const color = isLong ? resolveCSSColor("--janus-up-bright", "#0ecb81") : resolveCSSColor("--janus-down-bright", "#f6465d");
 
         try {
           const line = series.createPriceLine({
