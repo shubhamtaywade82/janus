@@ -730,6 +730,7 @@ export const tradingRouter = createRouter({
           realizedPnl: "0",
           status: "open",
           exchangeOrderId,
+          isPaper: !exchangeOrderId,
         }).returning({ id: positions.id });
         resultId = result[0].id;
         tradingEvents.emit(`portfolio-update:${input.userId}`);

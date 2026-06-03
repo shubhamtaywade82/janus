@@ -535,7 +535,9 @@ export class AutoExecutor {
     const pos = await db.select().from(positions).where(eq(positions.id, payload.positionId)).limit(1);
     if (pos.length === 0) return;
     const position = pos[0];
-    const realizedPnl = payload.decision.feeAdjustedPnl;
+
+    const realizedPnl = payload.decision.feeAdjustedPnl ?? 0;
+    const unrealizedPnl = payload.decision.unrealizedPnl ?? 0;
 
     await db
       .update(positions)
@@ -543,7 +545,7 @@ export class AutoExecutor {
         status: "closed",
         currentPrice: String(payload.currentPrice),
         realizedPnl: String(realizedPnl),
-        unrealizedPnl: "0",
+        unrealizedPnl: String(unrealizedPnl),
         closedAt: new Date(),
         updatedAt: new Date(),
       })
