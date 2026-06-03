@@ -49,6 +49,12 @@ export function LlmActivityFeed() {
     },
   });
 
+  // Load configuration to check if LLM Advisor is active
+  const { data: config } = trpc.autoExecutor.getConfig.useQuery({ userId: 1 }, {
+    refetchInterval: 15_000,
+  });
+  const isLlmActive = config?.useLlmAdvisor ?? false;
+
   const allEntries: LlmEntry[] = [
     ...entries,
     ...(logs?.map((log) => {
@@ -73,6 +79,14 @@ export function LlmActivityFeed() {
       <div className="flex items-center gap-2 px-3 py-2 border-b border-[#27272a]">
         <Brain size={12} className="text-[#a855f7]" />
         <span className="text-[10px] font-semibold text-[#f4f4f5]">LLM Advisor</span>
+        <span className={cn(
+          "px-1.5 py-0.5 rounded text-[8px] font-semibold border transition-colors",
+          isLlmActive
+            ? "bg-[#a855f7]/10 text-[#a855f7] border-[#a855f7]/30"
+            : "bg-[#18181b] text-[#71717a] border-[#27272a]"
+        )}>
+          {isLlmActive ? "ACTIVE" : "INACTIVE"}
+        </span>
         <span className="text-[9px] text-[#52525b] ml-auto">{allEntries.length} decisions</span>
       </div>
 

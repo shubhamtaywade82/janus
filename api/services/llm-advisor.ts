@@ -101,7 +101,8 @@ export class LlmAdvisor {
         .from(llmApiKeys)
         .where(eq(llmApiKeys.isActive, true))
         .orderBy(asc(llmApiKeys.priority));
-      this.keys = rows.map((r) => ({
+      
+      const dbKeys = rows.map((r) => ({
         id: r.id,
         label: r.label,
         provider: r.provider,
@@ -110,6 +111,37 @@ export class LlmAdvisor {
         model: r.model,
         priority: r.priority,
       }));
+
+      if (dbKeys.length > 0) {
+        this.keys = dbKeys;
+      } else {
+        const fallbacks: LlmKey[] = [];
+        if (env.ollamaApiKeys.length > 0) {
+          env.ollamaApiKeys.forEach((key, i) => {
+            fallbacks.push({
+              id: -(i + 1),
+              label: i === 0 ? "env-primary" : `env-backup-${i}`,
+              provider: "ollama",
+              endpoint: env.ollamaEndpoint,
+              apiKey: key,
+              model: env.ollamaModel,
+              priority: i + 1,
+            });
+          });
+        }
+        if (fallbacks.length === 0) {
+          fallbacks.push({
+            id: -99,
+            label: "local-ollama",
+            provider: "ollama",
+            endpoint: env.ollamaEndpoint,
+            apiKey: "",
+            model: env.ollamaModel,
+            priority: 1,
+          });
+        }
+        this.keys = fallbacks;
+      }
     } catch {
       // DB not ready yet — keep existing keys
     }
