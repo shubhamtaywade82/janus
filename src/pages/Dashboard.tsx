@@ -29,7 +29,7 @@ import type { AlertConfig } from "@/lib/chart/alert-engine";
 import { checkIndicatorAlerts, checkSMCAlerts } from "@/lib/chart/alert-engine";
 import type { IndicatorConfig } from "@/components/IndicatorPanel";
 import { EMA_COLORS, SMA_COLORS } from "@/components/IndicatorPanel";
-import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP } from "@/lib/chart/indicators";
+import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD } from "@/lib/chart/indicators";
 import type { PriceActionData } from "@/lib/chart/pa-types";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 
@@ -160,6 +160,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const obvSeriesRef = useRef<any>(null);
   // Indicator line series — keyed by "ema-21", "sma-50", "bb-upper", "st", "rsi", "vwap" etc.
   const indicatorSeriesRef = useRef<Map<string, any>>(new Map());
+  // RSI reference price lines (70/50/30)
+  const rsiPriceLinesRef = useRef<any[]>([]);
+  // CVD histogram series ref (per-bar delta; line goes through indicatorSeriesRef)
+  const cvdHistRef = useRef<any>(null);
 
   // ─── Tick animation: persistent lerp loop chasing target ───
   const animFrameRef = useRef<number | null>(null);
@@ -674,31 +678,77 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       ["bb-upper", "bb-middle", "bb-lower"].forEach(removeKey);
     }
 
-    // SuperTrend — two series (bull/bear), whitespace for inactive bars, series removed when no data
+    // SuperTrend — split into separate continuous segments to prevent straight-line bridges across gaps
+    const removePrefixKeys = (prefix: string) => {
+      Array.from(serMap.keys()).forEach((key) => {
+        if (key.startsWith(`${prefix}-`)) {
+          removeKey(key);
+        }
+      });
+    };
+
     const renderST = (prefix: string, stValues: (number | null)[], stDirection: ("up" | "down" | null)[],
                       bullColor: string, bearColor: string) => {
-      const bullRaw = stValues.map((v, i) => stDirection[i] === "up"   ? v : null);
-      const bearRaw = stValues.map((v, i) => stDirection[i] === "down" ? v : null);
-      const hasBull = bullRaw.some((v) => v !== null);
-      const hasBear = bearRaw.some((v) => v !== null);
+      // Clean up previous segments
+      removePrefixKeys(prefix);
 
-      for (const [key, raw, color, hasData] of [
-        [`${prefix}-bull`, bullRaw, bullColor, hasBull],
-        [`${prefix}-bear`, bearRaw, bearColor, hasBear],
-      ] as [string, (number | null)[], string, boolean][]) {
-        if (!hasData) { removeKey(key); continue; }
-        const lineData = (raw.map((v, i) =>
-          v !== null ? { time: toTime(i), value: v } : { time: toTime(i) }
-        ) as { time: UTCTimestamp; value?: number }[])
-          .sort((a, b) => (a.time as number) - (b.time as number));
-        if (!serMap.has(key)) {
-          try {
-            const s = chart.addSeries(LineSeries, { color, lineWidth: 1, priceScaleId: "right", lastValueVisible: false, priceLineVisible: false });
-            serMap.set(key, s);
-          } catch { continue; }
-        }
-        serMap.get(key)?.setData(lineData);
+      interface Segment {
+        direction: "up" | "down";
+        data: { time: UTCTimestamp; value: number }[];
       }
+      const segments: Segment[] = [];
+      let currentSegment: Segment | null = null;
+
+      for (let i = 0; i < stValues.length; i++) {
+        const val = stValues[i];
+        const dir = stDirection[i];
+
+        if (val === null || dir === null) {
+          if (currentSegment) {
+            segments.push(currentSegment);
+            currentSegment = null;
+          }
+          continue;
+        }
+
+        if (!currentSegment || currentSegment.direction !== dir) {
+          if (currentSegment) {
+            segments.push(currentSegment);
+          }
+          currentSegment = {
+            direction: dir,
+            data: [],
+          };
+        }
+
+        currentSegment.data.push({
+          time: toTime(i),
+          value: val,
+        });
+      }
+      if (currentSegment) {
+        segments.push(currentSegment);
+      }
+
+      // Add each segment as a distinct LineSeries
+      segments.forEach((seg, idx) => {
+        const key = `${prefix}-seg-${idx}`;
+        const color = seg.direction === "up" ? bullColor : bearColor;
+        try {
+          const s = chart.addSeries(LineSeries, {
+            color,
+            lineWidth: 1.5,
+            priceScaleId: "right",
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          serMap.set(key, s);
+          s.setData(seg.data);
+        } catch {
+          // Safe check
+        }
+      });
+
       // clean up legacy single-series key
       removeKey(prefix);
     };
@@ -707,7 +757,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const { values, direction } = calcSuperTrend(highs, lows, closes, indicatorCfg.superTrendPeriod, indicatorCfg.superTrendMult);
       renderST("st", values, direction, "rgba(34,197,94,0.90)", "rgba(239,68,68,0.90)");
     } else {
-      ["st", "st-bull", "st-bear"].forEach(removeKey);
+      removePrefixKeys("st");
+      removeKey("st");
     }
 
     // KNN SuperTrend — fixed params (period=10, mult=3) matching backend knn-supertrend service
@@ -715,23 +766,84 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const { values, direction } = calcSuperTrend(highs, lows, closes, 10, 3);
       renderST("knn-st", values, direction, "rgba(6,182,212,0.90)", "rgba(251,146,60,0.90)");
     } else {
-      ["knn-st", "knn-st-bull", "knn-st-bear"].forEach(removeKey);
+      removePrefixKeys("knn-st");
+      removeKey("knn-st");
     }
 
-    // RSI sub-pane
+    // RSI sub-pane with 70/50/30 reference lines
     if (indicatorCfg.rsi) {
       const rsiValues = calcRSI(closes, indicatorCfg.rsiPeriod);
       addOrUpdate("rsi", rsiValues, "rgba(168,85,247,0.85)", false, "rsi");
+      const rsiSeries = serMap.get("rsi");
+      if (rsiSeries && rsiPriceLinesRef.current.length === 0) {
+        const lineOpts = [
+          { price: 70, color: "rgba(239,68,68,0.50)",  lineWidth: 1, lineStyle: 2, title: "OB" },
+          { price: 50, color: "rgba(113,113,122,0.35)", lineWidth: 1, lineStyle: 3, title: "" },
+          { price: 30, color: "rgba(34,197,94,0.50)",  lineWidth: 1, lineStyle: 2, title: "OS" },
+        ] as const;
+        rsiPriceLinesRef.current = lineOpts.map((o) => rsiSeries.createPriceLine(o));
+      }
     } else {
+      // Clean up price lines when RSI toggled off
+      const rsiSeries = serMap.get("rsi");
+      if (rsiSeries) {
+        rsiPriceLinesRef.current.forEach((l) => { try { rsiSeries.removePriceLine(l); } catch { /* safe */ } });
+      }
+      rsiPriceLinesRef.current = [];
       removeKey("rsi");
     }
 
-    // VWAP
+    // VWAP + ±1σ/±2σ bands (volume-weighted standard deviation)
     if (indicatorCfg.vwap) {
-      const vwapValues = calcVWAP(times, highs, lows, closes, volumes);
-      addOrUpdate("vwap", vwapValues, "rgba(245,158,11,0.90)");
+      const { vwap, upper1, lower1, upper2, lower2 } = calcVWAP(times, highs, lows, closes, volumes);
+      addOrUpdate("vwap",    vwap,   "rgba(245,158,11,0.90)");
+      addOrUpdate("vwap-u1", upper1, "rgba(245,158,11,0.50)", true);
+      addOrUpdate("vwap-l1", lower1, "rgba(245,158,11,0.50)", true);
+      addOrUpdate("vwap-u2", upper2, "rgba(245,158,11,0.25)", true);
+      addOrUpdate("vwap-l2", lower2, "rgba(245,158,11,0.25)", true);
     } else {
-      removeKey("vwap");
+      ["vwap", "vwap-u1", "vwap-l1", "vwap-u2", "vwap-l2"].forEach(removeKey);
+    }
+
+    // CVD — per-bar delta histogram + cumulative CVD line, both on "cvd" sub-pane
+    if (indicatorCfg.cvd) {
+      const { delta, cvd } = calcCVD(highs, lows, closes, volumes);
+      const upColor   = "rgba(14,203,129,0.65)";
+      const downColor = "rgba(246,70,93,0.65)";
+      const cvdScaleOpts = { scaleMargins: { top: 0.78, bottom: 0 }, borderVisible: false };
+
+      // Histogram (per-bar delta)
+      if (!cvdHistRef.current && chart) {
+        try {
+          const h = chart.addSeries(HistogramSeries, {
+            priceScaleId: "cvd",
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          h.priceScale().applyOptions(cvdScaleOpts);
+          cvdHistRef.current = h;
+        } catch { /* safe */ }
+      }
+      if (cvdHistRef.current) {
+        const histData = delta
+          .map((v, i) => v !== null ? { time: toTime(i), value: v, color: v >= 0 ? upColor : downColor } : null)
+          .filter(Boolean)
+          .sort((a, b) => (a!.time as number) - (b!.time as number)) as { time: UTCTimestamp; value: number; color: string }[];
+        cvdHistRef.current.setData(histData);
+      }
+
+      // CVD cumulative line
+      addOrUpdate("cvd-line", cvd, "rgba(6,182,212,0.85)", false, "cvd");
+      // Sync scale margins for the line series
+      serMap.get("cvd-line")?.priceScale().applyOptions(cvdScaleOpts);
+
+    } else {
+      // Tear down CVD
+      if (cvdHistRef.current && chart) {
+        try { chart.removeSeries(cvdHistRef.current); } catch { /* safe */ }
+        cvdHistRef.current = null;
+      }
+      removeKey("cvd-line");
     }
 
   }, [indicatorCfg, data, interval]);

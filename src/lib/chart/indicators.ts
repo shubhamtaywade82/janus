@@ -142,20 +142,69 @@ export function calcRSI(closes: number[], period = 14): (number | null)[] {
   return result;
 }
 
-// ─── VWAP (session, resets at midnight UTC) ───
+// ─── CVD (Cumulative Volume Delta) ───
+// Delta per bar = estimated buy vol - sell vol using candle body position within wick.
+// Formula: delta = volume × (2 × (close - low) / (high - low) - 1)  [ranges -vol..+vol]
+// Edge case: high === low (doji) → delta = 0
+export interface CVDResult {
+  delta: (number | null)[];  // per-bar delta (histogram)
+  cvd:   (number | null)[];  // running cumulative delta (line)
+}
+export function calcCVD(
+  highs: number[], lows: number[], closes: number[], volumes: number[]
+): CVDResult {
+  const n = closes.length;
+  const delta: (number | null)[] = new Array(n).fill(null);
+  const cvd:   (number | null)[] = new Array(n).fill(null);
+  let running = 0;
+
+  for (let i = 0; i < n; i++) {
+    const range = highs[i] - lows[i];
+    const d = range === 0 ? 0 : volumes[i] * (2 * (closes[i] - lows[i]) / range - 1);
+    running += d;
+    delta[i] = d;
+    cvd[i]   = running;
+  }
+  return { delta, cvd };
+}
+
+// ─── VWAP + bands (session, resets at midnight UTC) ───
+export interface VWAPResult {
+  vwap:   (number | null)[];
+  upper1: (number | null)[];  // +1σ
+  lower1: (number | null)[];  // -1σ
+  upper2: (number | null)[];  // +2σ
+  lower2: (number | null)[];  // -2σ
+}
 export function calcVWAP(
   times: number[], highs: number[], lows: number[], closes: number[], volumes: number[]
-): (number | null)[] {
-  const result: (number | null)[] = new Array(closes.length).fill(null);
-  let tpvSum = 0, volSum = 0, lastDate = -1;
+): VWAPResult {
+  const n = closes.length;
+  const vwap:   (number | null)[] = new Array(n).fill(null);
+  const upper1: (number | null)[] = new Array(n).fill(null);
+  const lower1: (number | null)[] = new Array(n).fill(null);
+  const upper2: (number | null)[] = new Array(n).fill(null);
+  const lower2: (number | null)[] = new Array(n).fill(null);
 
-  for (let i = 0; i < closes.length; i++) {
-    const dayMs  = Math.floor(times[i] / 86_400_000);
-    if (dayMs !== lastDate) { tpvSum = 0; volSum = 0; lastDate = dayMs; }
+  let tpvSum = 0, tp2vSum = 0, volSum = 0, lastDate = -1;
+
+  for (let i = 0; i < n; i++) {
+    const dayMs = Math.floor(times[i] / 86_400_000);
+    if (dayMs !== lastDate) { tpvSum = 0; tp2vSum = 0; volSum = 0; lastDate = dayMs; }
     const tp = (highs[i] + lows[i] + closes[i]) / 3;
-    tpvSum += tp * volumes[i];
-    volSum += volumes[i];
-    result[i] = volSum > 0 ? tpvSum / volSum : null;
+    tpvSum  += tp * volumes[i];
+    tp2vSum += tp * tp * volumes[i];
+    volSum  += volumes[i];
+    if (volSum > 0) {
+      const v  = tpvSum / volSum;
+      const variance = Math.max(0, tp2vSum / volSum - v * v);
+      const std = Math.sqrt(variance);
+      vwap[i]   = v;
+      upper1[i] = v + std;
+      lower1[i] = v - std;
+      upper2[i] = v + 2 * std;
+      lower2[i] = v - 2 * std;
+    }
   }
-  return result;
+  return { vwap, upper1, lower1, upper2, lower2 };
 }
