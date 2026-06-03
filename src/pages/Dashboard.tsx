@@ -32,6 +32,7 @@ import type { IndicatorConfig } from "@/components/IndicatorPanel";
 import { EMA_COLORS, SMA_COLORS } from "@/components/IndicatorPanel";
 import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP } from "@/lib/chart/indicators";
 import type { PriceActionData } from "@/lib/chart/pa-types";
+import { AnimatedNumber } from "@/components/AnimatedNumber";
 
 // ─── Types ───
 interface KlineData {
@@ -1206,7 +1207,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
           <div>
             <div className="text-[9px] text-[#71717a]">Futures</div>
             <div className="text-sm font-bold tabular-nums" style={{ color: lastPriceColor }}>
-              {lastPrice > 0 ? lastPrice.toFixed(2) : "--"}
+              {lastPrice > 0 ? <AnimatedNumber value={lastPrice} decimals={2} duration={150} /> : "--"}
             </div>
           </div>
           {markPrice && (
@@ -1575,7 +1576,7 @@ const TickerStrip = () => {
         <div key={t.symbol} className="flex items-center gap-2 flex-shrink-0">
           <span className="text-[10px] text-[#71717a] font-medium">{t.symbol}</span>
           <span className="text-[10px] tabular-nums text-[#f4f4f5]">
-            {parseFloat(t.lastPrice).toFixed(2)}
+            <AnimatedNumber value={parseFloat(t.lastPrice)} decimals={2} duration={150} />
           </span>
           <span
             className={cn(
@@ -1925,7 +1926,7 @@ const Dashboard = () => {
                     priceChange >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"
                   )}
                 >
-                  {lastPrice.toFixed(2)}
+                  <AnimatedNumber value={lastPrice} decimals={2} duration={150} />
                 </span>
                 <span
                   className={cn(
