@@ -17,8 +17,21 @@ import {
   Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineStyle } from "lightweight-charts";
-import type { UTCTimestamp } from "lightweight-charts";
+import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineSeries, LineStyle, createSeriesMarkers } from "lightweight-charts";
+import type { UTCTimestamp, SeriesMarker, Time } from "lightweight-charts";
+import { OrderBlockPrimitive } from "@/lib/chart/primitives/OrderBlockPrimitive";
+import { FVGPrimitive } from "@/lib/chart/primitives/FVGPrimitive";
+import { StructurePrimitive } from "@/lib/chart/primitives/StructurePrimitive";
+import { ChartOverlayPanel } from "@/components/ChartOverlayPanel";
+import type { OverlayToggles } from "@/components/ChartOverlayPanel";
+import { IndicatorPanel } from "@/components/IndicatorPanel";
+import { AlertConfigPanel } from "@/components/AlertConfigPanel";
+import type { AlertConfig } from "@/lib/chart/alert-engine";
+import { checkIndicatorAlerts, checkSMCAlerts } from "@/lib/chart/alert-engine";
+import type { IndicatorConfig } from "@/components/IndicatorPanel";
+import { EMA_COLORS, SMA_COLORS } from "@/components/IndicatorPanel";
+import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP } from "@/lib/chart/indicators";
+import type { PriceActionData } from "@/lib/chart/pa-types";
 
 // ─── Types ───
 interface KlineData {
@@ -31,7 +44,13 @@ interface KlineData {
 }
 
 // ─── TradingView Lightweight Chart Component ───
-const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore }: { data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string; onLoadMore?: (beforeTime: number) => void }) => {
+const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg }: {
+  data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string;
+  onLoadMore?: (beforeTime: number) => void;
+  overlayData?: PriceActionData | null;
+  overlayToggles?: OverlayToggles;
+  indicatorCfg?: IndicatorConfig | null;
+}) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
   const [chartInitialized, setChartInitialized] = useState(false);
@@ -96,6 +115,15 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore }:
   const prevIntervalRef = useRef<string>(interval);
   const isLoadingMoreRef = useRef(false);
   const onLoadMoreRef = useRef(onLoadMore);
+  // SMC primitives
+  const obPrimRef   = useRef<OrderBlockPrimitive | null>(null);
+  const fvgPrimRef  = useRef<FVGPrimitive | null>(null);
+  const strPrimRef  = useRef<StructurePrimitive | null>(null);
+  const markersPluginRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
+  // OBV series
+  const obvSeriesRef = useRef<any>(null);
+  // Indicator line series — keyed by "ema-21", "sma-50", "bb-upper", "st", "rsi", "vwap" etc.
+  const indicatorSeriesRef = useRef<Map<string, any>>(new Map());
 
   // ─── Tick animation: persistent lerp loop chasing target ───
   const animFrameRef = useRef<number | null>(null);
@@ -284,9 +312,41 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore }:
       resizeObserver.disconnect();
       chart.remove();
       chartRef.current = null;
+      obPrimRef.current = null;
+      fvgPrimRef.current = null;
+      strPrimRef.current = null;
+      markersPluginRef.current = null;
+      obvSeriesRef.current = null;
+      indicatorSeriesRef.current.clear();
       setChartInitialized(false);
     };
   }, []);
+
+  // 1b. Attach SMC primitives AFTER chart is confirmed ready (separate effect to avoid crashing init)
+  useEffect(() => {
+    if (!chartInitialized || !candlestickSeriesRef.current) return;
+    try {
+      const obPrim  = new OrderBlockPrimitive();
+      const fvgPrim = new FVGPrimitive();
+      const strPrim = new StructurePrimitive();
+      candlestickSeriesRef.current.attachPrimitive(obPrim);
+      candlestickSeriesRef.current.attachPrimitive(fvgPrim);
+      candlestickSeriesRef.current.attachPrimitive(strPrim);
+      obPrimRef.current  = obPrim;
+      fvgPrimRef.current = fvgPrim;
+      strPrimRef.current = strPrim;
+      // createSeriesMarkers replaces the old .setMarkers() — create lazily only when needed
+      // to avoid interfering with auto-scroll and chart rendering pipeline
+    } catch (err) {
+      console.warn("[chart] SMC primitive attach failed:", err);
+    }
+    return () => {
+      obPrimRef.current  = null;
+      fvgPrimRef.current = null;
+      strPrimRef.current = null;
+      markersPluginRef.current = null;
+    };
+  }, [chartInitialized]);
 
   // 2. Update chart data — setData on full reload, update() on live tick
   useEffect(() => {
@@ -406,6 +466,206 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore }:
       isGreen: targetClose >= o,
     });
   }, [lastPrice, interval, data]);
+
+  // 4. SMC / ICT overlay updates — runs when overlayData or toggles change
+  useEffect(() => {
+    if (!candlestickSeriesRef.current || !obPrimRef.current || !fvgPrimRef.current || !strPrimRef.current) return;
+    const tog = overlayToggles;
+    const pa  = overlayData;
+
+    // Order Blocks
+    obPrimRef.current.setBlocks(tog?.orderBlocks && pa?.orderBlocks ? pa.orderBlocks : []);
+
+    // FVGs
+    fvgPrimRef.current.setFVGs(tog?.fvg && pa?.fvgs ? pa.fvgs : []);
+
+    // Structure + Liquidity
+    strPrimRef.current.setData(
+      tog?.structure  && pa?.structure  ? pa.structure  : [],
+      tog?.liquidity  && pa?.liquidity  ? pa.liquidity  : []
+    );
+
+    // Swing markers + displacement markers — create plugin lazily on first use
+    if (!markersPluginRef.current && candlestickSeriesRef.current) {
+      try {
+        markersPluginRef.current = createSeriesMarkers(candlestickSeriesRef.current, []);
+      } catch (err) {
+        console.warn("[chart] createSeriesMarkers failed:", err);
+      }
+    }
+    if (markersPluginRef.current) {
+      const markers: SeriesMarker<Time>[] = [];
+
+      if (tog?.swings && pa?.swings) {
+        for (const s of pa.swings) {
+          markers.push({
+            time:     (s.time / 1000) as Time,
+            position: s.type === "high" ? "aboveBar" : "belowBar",
+            shape:    s.type === "high" ? "arrowDown" : "arrowUp",
+            color:    s.type === "high" ? "#71717a" : "#71717a",
+            size:     0.6,
+            text:     "",
+          });
+        }
+      }
+
+      if (tog?.displacement && pa?.displacement) {
+        for (const d of pa.displacement) {
+          markers.push({
+            time:     (d.time / 1000) as Time,
+            position: d.direction === "bullish" ? "belowBar" : "aboveBar",
+            shape:    d.direction === "bullish" ? "arrowUp" : "arrowDown",
+            color:    d.direction === "bullish" ? "#22c55e" : "#ef4444",
+            size:     1.5,
+            text:     `${d.atrMultiple.toFixed(1)}×`,
+          });
+        }
+      }
+
+      // Sort markers by time (required by lightweight-charts)
+      markers.sort((a, b) => (a.time as number) - (b.time as number));
+      markersPluginRef.current.setMarkers(markers);
+    }
+
+    // ─── OBV line series ───
+    if (tog?.obv && pa?.obv && pa.obv.length > 0 && chartRef.current) {
+      if (!obvSeriesRef.current) {
+        try {
+          const obvSeries = chartRef.current.addSeries(LineSeries, {
+            color:       "rgba(6,182,212,0.80)",
+            lineWidth:   1,
+            priceScaleId: "obv",
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          obvSeries.priceScale().applyOptions({
+            scaleMargins: { top: 0.85, bottom: 0 },
+            borderVisible: false,
+          });
+          obvSeriesRef.current = obvSeries;
+        } catch { /* safe */ }
+      }
+      if (obvSeriesRef.current) {
+        obvSeriesRef.current.setData(
+          pa.obv.map((p) => ({ time: (p.time / 1000) as UTCTimestamp, value: p.value }))
+        );
+      }
+    } else if (!tog?.obv && obvSeriesRef.current && chartRef.current) {
+      try { chartRef.current.removeSeries(obvSeriesRef.current); } catch { /* safe */ }
+      obvSeriesRef.current = null;
+    }
+
+    // Primitives call requestUpdate() internally via their setters above
+  }, [overlayData, overlayToggles]);
+
+  // ─── Indicator series update ───
+  useEffect(() => {
+    if (!chartRef.current || !indicatorCfg || data.length === 0) return;
+
+    const chart   = chartRef.current;
+    const serMap  = indicatorSeriesRef.current;
+    const closes  = data.map((d) => parseFloat(d.close));
+    const highs   = data.map((d) => parseFloat(d.high));
+    const lows    = data.map((d) => parseFloat(d.low));
+    const volumes = data.map((d) => parseFloat(d.volume));
+    const times   = data.map((d) => d.openTime);
+
+    const toTime = (i: number) => (times[i] / 1000) as UTCTimestamp;
+
+    const addOrUpdate = (key: string, values: (number | null)[], color: string, dash = false, scaleId = "right") => {
+      // WhitespaceData (just {time}) forces a visual break — don't filter nulls, include them as whitespace
+      const lineData = values.map((v, i) =>
+        v !== null
+          ? { time: toTime(i), value: v }
+          : { time: toTime(i) }          // whitespace point = no line drawn = break
+      ) as { time: UTCTimestamp; value?: number }[];
+      if (lineData.length === 0) return;
+
+      if (!serMap.has(key)) {
+        try {
+          const s = chart.addSeries(LineSeries, {
+            color, lineWidth: 1,
+            lineStyle: dash ? 2 : 0,  // 2 = dashed in LC
+            priceScaleId: scaleId,
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          if (scaleId !== "right") {
+            s.priceScale().applyOptions({ scaleMargins: { top: 0.80, bottom: 0 }, borderVisible: false });
+          }
+          serMap.set(key, s);
+        } catch { return; }
+      }
+      serMap.get(key)?.setData(lineData);
+    };
+
+    const removeKey = (key: string) => {
+      if (serMap.has(key)) {
+        try { chart.removeSeries(serMap.get(key)); } catch { /* safe */ }
+        serMap.delete(key);
+      }
+    };
+
+    // EMA
+    const allEMAPeriods = [9, 21, 50, 200];
+    for (const p of allEMAPeriods) {
+      const key = `ema-${p}`;
+      if (indicatorCfg.ema.includes(p)) {
+        addOrUpdate(key, calcEMA(closes, p), EMA_COLORS[p] ?? "#71717a");
+      } else {
+        removeKey(key);
+      }
+    }
+
+    // SMA
+    const allSMAPeriods = [20, 50, 200];
+    for (const p of allSMAPeriods) {
+      const key = `sma-${p}`;
+      if (indicatorCfg.sma.includes(p)) {
+        addOrUpdate(key, calcSMA(closes, p), SMA_COLORS[p] ?? "#71717a", true);
+      } else {
+        removeKey(key);
+      }
+    }
+
+    // Bollinger Bands
+    if (indicatorCfg.bb) {
+      const { upper, middle, lower } = calcBB(closes, indicatorCfg.bbPeriod, indicatorCfg.bbMult);
+      addOrUpdate("bb-upper",  upper,  "rgba(6,182,212,0.70)");
+      addOrUpdate("bb-middle", middle, "rgba(6,182,212,0.40)", true);
+      addOrUpdate("bb-lower",  lower,  "rgba(6,182,212,0.70)");
+    } else {
+      ["bb-upper", "bb-middle", "bb-lower"].forEach(removeKey);
+    }
+
+    // SuperTrend — rendered as TWO series (bullish + bearish segments)
+    if (indicatorCfg.superTrend) {
+      const { values, direction } = calcSuperTrend(highs, lows, closes, indicatorCfg.superTrendPeriod, indicatorCfg.superTrendMult);
+      const bullValues: (number | null)[] = values.map((v, i) => direction[i] === "up"   ? v : null);
+      const bearValues: (number | null)[] = values.map((v, i) => direction[i] === "down" ? v : null);
+      addOrUpdate("st-bull", bullValues, "rgba(34,197,94,0.90)");
+      addOrUpdate("st-bear", bearValues, "rgba(239,68,68,0.90)");
+    } else {
+      ["st-bull", "st-bear"].forEach(removeKey);
+    }
+
+    // RSI sub-pane
+    if (indicatorCfg.rsi) {
+      const rsiValues = calcRSI(closes, indicatorCfg.rsiPeriod);
+      addOrUpdate("rsi", rsiValues, "rgba(168,85,247,0.85)", false, "rsi");
+    } else {
+      removeKey("rsi");
+    }
+
+    // VWAP
+    if (indicatorCfg.vwap) {
+      const vwapValues = calcVWAP(times, highs, lows, closes, volumes);
+      addOrUpdate("vwap", vwapValues, "rgba(245,158,11,0.90)");
+    } else {
+      removeKey("vwap");
+    }
+
+  }, [indicatorCfg, data, interval]);
 
   // Draw custom position lines (entry price and liquidation price) with empty titles
   // so the HTML overlay can render custom left/right aligned labels on top.
@@ -1357,6 +1617,12 @@ const Dashboard = () => {
     { staleTime: Infinity }
   );
 
+  // Reset alert tracking on symbol/interval change
+  useEffect(() => {
+    prevPaDataRef.current   = null;
+    prevKlinesLenRef.current = 0;
+  }, [selectedSymbol, interval]);
+
   // Step 1: Clear klines immediately when symbol or interval changes — prevents
   // stale data from the previous query key from briefly rendering on the chart.
   useEffect(() => {
@@ -1397,6 +1663,24 @@ const Dashboard = () => {
       console.warn("[chart] lazy load failed:", err);
     }
   }, [selectedSymbol, interval, utils]);
+
+  // ─── SMC / Price Action overlay ───
+  const [indicatorCfg, setIndicatorCfg] = useState<IndicatorConfig | null>(null);
+  const [alertCfg, setAlertCfg] = useState<AlertConfig | null>(null);
+  const prevPaDataRef = useRef<any>(null);
+  const prevKlinesLenRef = useRef(0);
+
+  const [overlayToggles, setOverlayToggles] = useState<OverlayToggles>(() => {
+    try {
+      const saved = localStorage.getItem("janus_chart_overlays");
+      return saved ? JSON.parse(saved) : { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false };
+    } catch { return { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false }; }
+  });
+
+  const { data: paData } = trpc.market.priceAction.useQuery(
+    { symbol: selectedSymbol, interval, limit: 200 },
+    { staleTime: 30_000, refetchInterval: 60_000, enabled: klines.length > 0 }
+  );
 
   useEffect(() => {
     if (initialTicker && !Array.isArray(initialTicker)) {
@@ -1507,6 +1791,40 @@ const Dashboard = () => {
   const lastPrice = tickerData ? parseFloat(tickerData.lastPrice) : 0;
   const priceChange = tickerData ? parseFloat(tickerData.priceChangePercent) : 0;
 
+  // ─── Alert engine — runs when new candle or new SMC data arrives ───
+  const sendTelegramAlert = trpc.telegram.sendAlert.useMutation().mutate;
+
+  useEffect(() => {
+    if (!alertCfg || !indicatorCfg || klines.length < 3) return;
+    const isNewCandle = klines.length !== prevKlinesLenRef.current;
+    const isNewPaData = paData !== prevPaDataRef.current;
+    if (!isNewCandle && !isNewPaData) return;
+
+    const currentPrice = lastPrice || parseFloat(klines[klines.length - 1]?.close ?? "0");
+    const allEvents: import("@/lib/chart/alert-engine").AlertEvent[] = [];
+
+    if (isNewCandle) {
+      allEvents.push(...checkIndicatorAlerts(klines as any[], alertCfg, indicatorCfg, selectedSymbol));
+    }
+    if (isNewPaData && paData && prevPaDataRef.current) {
+      allEvents.push(...checkSMCAlerts(paData as any, prevPaDataRef.current, currentPrice, selectedSymbol, alertCfg));
+    }
+
+    for (const evt of allEvents) {
+      toast(evt.message, {
+        description: `${selectedSymbol} @ ${evt.price.toFixed(2)} — ${interval}`,
+        duration: 8_000,
+        style: { borderLeft: `3px solid ${evt.direction === "bullish" ? "#22c55e" : evt.direction === "bearish" ? "#ef4444" : "#f59e0b"}` },
+      });
+      try {
+        sendTelegramAlert({ message: `${evt.emoji} <b>${selectedSymbol} ${interval}</b>\n${evt.message}\nPrice: <code>${evt.price.toFixed(4)}</code>` });
+      } catch { /* Telegram may not be configured */ }
+    }
+
+    prevKlinesLenRef.current = klines.length;
+    prevPaDataRef.current    = paData ?? prevPaDataRef.current;
+  }, [klines.length, paData, alertCfg, indicatorCfg, selectedSymbol, interval, lastPrice, sendTelegramAlert]);
+
   const maxLeverage = instrInfo?.maxLeverage ?? 10;
   const availableBalance = instrInfo?.availableUsdtEquivalent ?? 0;
   const marginCurrency = instrInfo?.marginCurrency ?? "USDT";
@@ -1607,6 +1925,9 @@ const Dashboard = () => {
             </div>
             <div className="flex items-center gap-2">
               <RegimeIndicator symbol={selectedSymbol} />
+              <ChartOverlayPanel onChange={setOverlayToggles} />
+              <IndicatorPanel onChange={setIndicatorCfg} />
+              <AlertConfigPanel onChange={setAlertCfg} />
               <div className="h-3 w-px bg-[#27272a]" />
               <span className="text-[10px] text-[#71717a]">
                 H: {tickerData ? parseFloat(tickerData.highPrice).toFixed(2) : "--"}
@@ -1623,7 +1944,17 @@ const Dashboard = () => {
           {/* Chart Area */}
           <div className="flex-1 bg-[#09090b] border-b border-[#27272a] overflow-hidden">
             {klines && klines.length > 0 ? (
-              <MiniChart data={klines as KlineData[]} positions={symbolPositions} lastPrice={lastPrice} symbol={selectedSymbol} interval={interval} onLoadMore={handleLoadMore} />
+              <MiniChart
+                data={klines as KlineData[]}
+                positions={symbolPositions}
+                lastPrice={lastPrice}
+                symbol={selectedSymbol}
+                interval={interval}
+                onLoadMore={handleLoadMore}
+                overlayData={paData ?? null}
+                overlayToggles={overlayToggles}
+                indicatorCfg={indicatorCfg}
+              />
             ) : initialKlines === null || initialKlines === undefined ? (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
                 <RefreshCw size={16} className="animate-spin mr-2" />
