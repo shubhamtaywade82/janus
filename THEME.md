@@ -14,7 +14,7 @@
 
 | File | Instances | Status |
 |---|---|---|
-| `src/pages/Dashboard.tsx` | ~150 | ⬜ pending |
+| `src/pages/Dashboard.tsx` | ~150 | ✅ direction colors done |
 | `src/pages/Portfolio.tsx` | ~130 | ⬜ pending |
 | `src/pages/Signals.tsx` | ~107 | ⬜ pending |
 | `src/pages/RiskMetrics.tsx` | ~100 | ⬜ pending |

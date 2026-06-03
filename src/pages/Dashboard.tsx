@@ -233,12 +233,12 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     chartRef.current = chart;
 
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "#0ecb81",
-      downColor: "#f6465d",
-      borderUpColor: "#0ecb81",
-      borderDownColor: "#f6465d",
-      wickUpColor: "#0ecb81",
-      wickDownColor: "#f6465d",
+      upColor: "hsl(var(--janus-up-bright))",
+      downColor: "hsl(var(--janus-down-bright))",
+      borderUpColor: "hsl(var(--janus-up-bright))",
+      borderDownColor: "hsl(var(--janus-down-bright))",
+      wickUpColor: "hsl(var(--janus-up-bright))",
+      wickDownColor: "hsl(var(--janus-down-bright))",
     });
     candlestickSeriesRef.current = candlestickSeries;
 
@@ -540,7 +540,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
             time:     (d.time / 1000) as Time,
             position: d.direction === "bullish" ? "belowBar" : "aboveBar",
             shape:    d.direction === "bullish" ? "arrowUp" : "arrowDown",
-            color:    d.direction === "bullish" ? "#22c55e" : "#ef4444",
+            color:    d.direction === "bullish" ? "hsl(var(--janus-up))" : "hsl(var(--janus-down))",
             size:     1.5,
             text:     `${d.atrMultiple.toFixed(1)}×`,
           });
@@ -749,7 +749,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         if (isNaN(entryPrice) || entryPrice <= 0) return null;
 
         const isLong = pos.side === "long";
-        const color = isLong ? "#0ecb81" : "#f6465d";
+        const color = isLong ? "hsl(var(--janus-up-bright))" : "hsl(var(--janus-down-bright))";
 
         try {
           const line = series.createPriceLine({
@@ -901,23 +901,23 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
           <span className="text-[#a1a1aa]">{hudData.time}</span>
           <span>
             <span className="text-[#71717a] mr-0.5">O</span>
-            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.open}</span>
+            <span className={hudData.isGreen ? "text-j-up-bright" : "text-j-down-bright"}>{hudData.open}</span>
           </span>
           <span>
             <span className="text-[#71717a] mr-0.5">H</span>
-            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.high}</span>
+            <span className={hudData.isGreen ? "text-j-up-bright" : "text-j-down-bright"}>{hudData.high}</span>
           </span>
           <span>
             <span className="text-[#71717a] mr-0.5">L</span>
-            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.low}</span>
+            <span className={hudData.isGreen ? "text-j-up-bright" : "text-j-down-bright"}>{hudData.low}</span>
           </span>
           <span>
             <span className="text-[#71717a] mr-0.5">C</span>
-            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.close}</span>
+            <span className={hudData.isGreen ? "text-j-up-bright" : "text-j-down-bright"}>{hudData.close}</span>
           </span>
           <span>
             <span className="text-[#71717a] mr-0.5">Chg</span>
-            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.pct}</span>
+            <span className={hudData.isGreen ? "text-j-up-bright" : "text-j-down-bright"}>{hudData.pct}</span>
           </span>
           <span className="hidden sm:inline">
             <span className="text-[#71717a] mr-0.5">Vol</span>
@@ -962,8 +962,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
                     className={cn(
                       "absolute px-2 py-0.5 rounded text-[10px] font-bold font-mono shadow-md border transition-all",
                       isProfit
-                        ? "bg-[#0ecb81]/90 border-[#0ecb81] text-black"
-                        : "bg-[#f6465d]/90 border-[#f6465d] text-white"
+                        ? "bg-j-up-bright/90 border-j-up-bright text-black"
+                        : "bg-j-down-bright/90 border-j-down-bright text-white"
                     )}
                     style={{
                       left: "25%",
@@ -1069,12 +1069,12 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
                 <span className="text-[#f59e0b] font-bold">
                   {rule.operator} ${rule.value.toFixed(2)}
                 </span>
-                <span className={cn("text-[7px] uppercase font-bold px-1 rounded-sm", rule.isActive ? "bg-[#0ecb81]/15 text-[#0ecb81]" : "bg-white/15 text-[#a1a1aa]")}>
+                <span className={cn("text-[7px] uppercase font-bold px-1 rounded-sm", rule.isActive ? "bg-j-up-bright/15 text-j-up-bright" : "bg-white/15 text-[#a1a1aa]")}>
                   {rule.isActive ? "ON" : "OFF"}
                 </span>
                 <button
                   onClick={() => handleDeleteRule(rule.id)}
-                  className="text-[#71717a] hover:text-[#ef4444] transition-colors pl-1 font-bold text-xs cursor-pointer"
+                  className="text-[#71717a] hover:text-j-down transition-colors pl-1 font-bold text-xs cursor-pointer"
                   title="Delete Alert"
                 >
                   ✕
@@ -1105,8 +1105,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
                   className={cn(
                     "px-2 py-0.5 rounded-full text-[9px] font-bold tracking-wide uppercase",
                     isLong
-                      ? "bg-[#0ecb81]/15 text-[#0ecb81]"
-                      : "bg-[#f6465d]/15 text-[#f6465d]"
+                      ? "bg-j-up-bright/15 text-j-up-bright"
+                      : "bg-j-down-bright/15 text-j-down-bright"
                   )}
                 >
                   {isLong ? "Long" : "Short"} {size.toFixed(3)}
@@ -1118,7 +1118,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
                 <span
                   className={cn(
                     "font-bold tabular-nums",
-                    isProfit ? "text-[#0ecb81]" : "text-[#f6465d]"
+                    isProfit ? "text-j-up-bright" : "text-j-down-bright"
                   )}
                 >
                   {isProfit ? "+" : ""}
@@ -1180,7 +1180,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
   const spreadPct = rawBids[0] ? (spread / parseFloat(rawBids[0][0])) * 100 : 0;
 
   const lastPrice = tickerData ? parseFloat(tickerData.lastPrice) : 0;
-  const lastPriceColor = tickerData && parseFloat(tickerData.priceChange) >= 0 ? "#0ecb81" : "#f6465d";
+  const lastPriceColor = tickerData && parseFloat(tickerData.priceChange) >= 0 ? "hsl(var(--janus-up-bright))" : "hsl(var(--janus-down-bright))";
 
   return (
     <div className="flex flex-col h-full text-[10px]">
@@ -1269,8 +1269,8 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 <div key={i} className="grid grid-cols-3 items-center py-0.5 px-2 hover:bg-[#27272a]/30">
                   {/* Bid qty + bar */}
                   <div className="relative flex items-center justify-start">
-                    <div className="absolute inset-y-0 right-0 bg-[#0ecb81]/15 rounded-l" style={{ width: `${bidW}%` }} />
-                    <span className="relative tabular-nums text-[#0ecb81]">
+                    <div className="absolute inset-y-0 right-0 bg-j-up-bright/15 rounded-l" style={{ width: `${bidW}%` }} />
+                    <span className="relative tabular-nums text-j-up-bright">
                       {bid ? bidSize.toFixed(3) : ""}
                     </span>
                   </div>
@@ -1278,16 +1278,16 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                   {/* Price */}
                   <div className="text-center tabular-nums">
                     {bid ? (
-                      <span className="text-[#0ecb81] font-medium">{parseFloat(bid[0]).toFixed(2)}</span>
+                      <span className="text-j-up-bright font-medium">{parseFloat(bid[0]).toFixed(2)}</span>
                     ) : ask ? (
-                      <span className="text-[#f6465d] font-medium">{parseFloat(ask[0]).toFixed(2)}</span>
+                      <span className="text-j-down-bright font-medium">{parseFloat(ask[0]).toFixed(2)}</span>
                     ) : ""}
                   </div>
 
                   {/* Ask qty + bar */}
                   <div className="relative flex items-center justify-end">
-                    <div className="absolute inset-y-0 left-0 bg-[#f6465d]/15 rounded-r" style={{ width: `${askW}%` }} />
-                    <span className="relative tabular-nums text-[#f6465d]">
+                    <div className="absolute inset-y-0 left-0 bg-j-down-bright/15 rounded-r" style={{ width: `${askW}%` }} />
+                    <span className="relative tabular-nums text-j-down-bright">
                       {ask ? askSize.toFixed(3) : ""}
                     </span>
                   </div>
@@ -1309,8 +1309,8 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
 
             // Volatility regime styling
             const regime = metrics.volatilityRegime || "NORMAL";
-            const regimeColor = regime === "HIGH" ? "text-[#ef4444] border-[#ef4444]" : regime === "LOW" ? "text-[#3b82f6] border-[#3b82f6]" : "text-[#a1a1aa] border-[#27272a]";
-            const regimeBg = regime === "HIGH" ? "bg-[#ef4444]/10 animate-pulse" : regime === "LOW" ? "bg-[#3b82f6]/10" : "bg-[#27272a]/20";
+            const regimeColor = regime === "HIGH" ? "text-j-down border-j-down" : regime === "LOW" ? "text-[#3b82f6] border-[#3b82f6]" : "text-[#a1a1aa] border-[#27272a]";
+            const regimeBg = regime === "HIGH" ? "bg-j-down/10 animate-pulse" : regime === "LOW" ? "bg-[#3b82f6]/10" : "bg-[#27272a]/20";
 
             // Imbalance calculations (cap at -1 to +1)
             const imb = Math.max(-1, Math.min(1, metrics.bidAskImbalance || 0));
@@ -1331,7 +1331,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                   </div>
                   <div className="flex flex-col gap-1 p-2 rounded border border-[#27272a] bg-[#27272a]/10 text-center">
                     <span className="text-[8px] uppercase tracking-wider text-[#71717a] font-medium">Net Liquidity Delta</span>
-                    <span className={cn("text-xs font-bold tabular-nums", netDelta >= 0 ? "text-[#0ecb81]" : "text-[#f6465d]")}>
+                    <span className={cn("text-xs font-bold tabular-nums", netDelta >= 0 ? "text-j-up-bright" : "text-j-down-bright")}>
                       {netDelta >= 0 ? "+" : ""}{netDelta.toFixed(1)}
                     </span>
                   </div>
@@ -1341,14 +1341,14 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40">
                   <div className="flex justify-between items-center mb-1 text-[8px] uppercase text-[#71717a] font-semibold">
                     <span>Seller Pressure</span>
-                    <span className={cn("font-bold text-[9px] tabular-nums", imb >= 0 ? "text-[#0ecb81]" : "text-[#f6465d]")}>
+                    <span className={cn("font-bold text-[9px] tabular-nums", imb >= 0 ? "text-j-up-bright" : "text-j-down-bright")}>
                       OFI: {imb >= 0 ? "+" : ""}{imb.toFixed(2)}
                     </span>
                     <span>Buyer Pressure</span>
                   </div>
                   <div className="relative h-2 rounded bg-[#27272a]/40 overflow-hidden mb-1 flex">
-                    <div className="h-full bg-[#f6465d]/40" style={{ width: "50%" }} />
-                    <div className="h-full bg-[#0ecb81]/40" style={{ width: "50%" }} />
+                    <div className="h-full bg-j-down-bright/40" style={{ width: "50%" }} />
+                    <div className="h-full bg-j-up-bright/40" style={{ width: "50%" }} />
                     {/* Imbalance Marker */}
                     <div className="absolute top-0 bottom-0 w-1 bg-[#ffffff] shadow-[0_0_4px_rgba(255,255,255,0.8)] transition-all duration-300" style={{ left: `${imbPct}%`, transform: 'translateX(-50%)' }} />
                   </div>
@@ -1363,10 +1363,10 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
                   <div className="flex justify-between items-center text-[8px] uppercase text-[#71717a] font-semibold">
                     <span className="flex items-center gap-1">
-                      <Zap size={9} className={cn(sweep > 50 ? "text-[#ef4444] animate-bounce" : "text-[#52525b]")} />
+                      <Zap size={9} className={cn(sweep > 50 ? "text-j-down animate-bounce" : "text-[#52525b]")} />
                       Tape Sweep Intensity
                     </span>
-                    <span className={cn("font-bold tabular-nums text-[9px]", sweep > 75 ? "text-[#ef4444]" : sweep > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
+                    <span className={cn("font-bold tabular-nums text-[9px]", sweep > 75 ? "text-j-down" : sweep > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
                       {sweep.toFixed(0)}/100
                     </span>
                   </div>
@@ -1374,14 +1374,14 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                     <div
                       className={cn(
                         "h-full rounded-full transition-all duration-500",
-                        sweep > 75 ? "bg-[#ef4444]" : sweep > 40 ? "bg-[#f59e0b]" : "bg-[#3b82f6]"
+                        sweep > 75 ? "bg-j-down" : sweep > 40 ? "bg-[#f59e0b]" : "bg-[#3b82f6]"
                       )}
                       style={{ width: `${sweep}%` }}
                     />
                   </div>
                   <div className="flex justify-between text-[7px] text-[#52525b]">
                     <span>STABLE</span>
-                    <span className={cn(sweep > 50 && "text-[#ef4444] font-bold")}>
+                    <span className={cn(sweep > 50 && "text-j-down font-bold")}>
                       {sweep > 75 ? "AGGRESSIVE BREAKOUT" : sweep > 40 ? "PRESSURE SWEEP" : "ORDER FLOW CALM"}
                     </span>
                   </div>
@@ -1391,10 +1391,10 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
                   <div className="flex justify-between items-center text-[8px] uppercase text-[#71717a] font-semibold">
                     <span className="flex items-center gap-1">
-                      <Sparkles size={9} className={cn(absorb > 50 ? "text-[#0ecb81]" : "text-[#52525b]")} />
+                      <Sparkles size={9} className={cn(absorb > 50 ? "text-j-up-bright" : "text-[#52525b]")} />
                       Micro Limit Absorption
                     </span>
-                    <span className={cn("font-bold tabular-nums text-[9px]", absorb > 75 ? "text-[#0ecb81]" : absorb > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
+                    <span className={cn("font-bold tabular-nums text-[9px]", absorb > 75 ? "text-j-up-bright" : absorb > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
                       {absorb.toFixed(0)}/100
                     </span>
                   </div>
@@ -1402,14 +1402,14 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                     <div
                       className={cn(
                         "h-full rounded-full transition-all duration-500",
-                        absorb > 75 ? "bg-[#0ecb81]" : absorb > 40 ? "bg-[#8b5cf6]" : "bg-[#71717a]"
+                        absorb > 75 ? "bg-j-up-bright" : absorb > 40 ? "bg-[#8b5cf6]" : "bg-[#71717a]"
                       )}
                       style={{ width: `${absorb}%` }}
                     />
                   </div>
                   <div className="flex justify-between text-[7px] text-[#52525b]">
                     <span>NO WALL</span>
-                    <span className={cn(absorb > 50 && "text-[#0ecb81] font-bold")}>
+                    <span className={cn(absorb > 50 && "text-j-up-bright font-bold")}>
                       {absorb > 75 ? "HEAVY BLOCK ABSORPTION" : absorb > 40 ? "WALL RESISTING" : "TAPING DIRECTLY"}
                     </span>
                   </div>
@@ -1419,13 +1419,13 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 <div className="grid grid-cols-2 gap-2 text-[8px] text-[#71717a] font-semibold mt-1">
                   <div className="p-2 rounded border border-[#27272a]/50 bg-[#27272a]/5">
                     <div className="mb-0.5 uppercase">Liquidity Added</div>
-                    <div className="text-[10px] text-[#0ecb81] font-bold tabular-nums">
+                    <div className="text-[10px] text-j-up-bright font-bold tabular-nums">
                       +{(metrics.liquidityAdded || 0).toFixed(1)}
                     </div>
                   </div>
                   <div className="p-2 rounded border border-[#27272a]/50 bg-[#27272a]/5">
                     <div className="mb-0.5 uppercase">Liquidity Removed</div>
-                    <div className="text-[10px] text-[#f6465d] font-bold tabular-nums">
+                    <div className="text-[10px] text-j-down-bright font-bold tabular-nums">
                       -{(metrics.liquidityRemoved || 0).toFixed(1)}
                     </div>
                   </div>
@@ -1485,7 +1485,7 @@ const RecentTrades = ({ symbol }: { symbol: string }) => {
             <span
               className={cn(
                 "tabular-nums",
-                trade.isBuyerMaker ? "text-[#ef4444]" : "text-[#22c55e]"
+                trade.isBuyerMaker ? "text-j-down" : "text-j-up"
               )}
             >
               {parseFloat(trade.price).toFixed(2)}
@@ -1570,7 +1570,7 @@ const TickerStrip = () => {
           <span
             className={cn(
               "text-[10px] tabular-nums",
-              parseFloat(t.priceChangePercent) >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"
+              parseFloat(t.priceChangePercent) >= 0 ? "text-j-up" : "text-j-down"
             )}
           >
             {parseFloat(t.priceChangePercent) >= 0 ? "+" : ""}
@@ -1847,7 +1847,7 @@ const Dashboard = () => {
       toast(evt.message, {
         description: `${selectedSymbol} @ ${evt.price.toFixed(2)} — ${interval}`,
         duration: 8_000,
-        style: { borderLeft: `3px solid ${evt.direction === "bullish" ? "#22c55e" : evt.direction === "bearish" ? "#ef4444" : "#f59e0b"}` },
+        style: { borderLeft: `3px solid ${evt.direction === "bullish" ? "hsl(var(--janus-up))" : evt.direction === "bearish" ? "hsl(var(--janus-down))" : "#f59e0b"}` },
       });
       try {
         sendTelegramAlert({ message: `${evt.emoji} <b>${selectedSymbol} ${interval}</b>\n${evt.message}\nPrice: <code>${evt.price.toFixed(4)}</code>` });
@@ -1923,7 +1923,7 @@ const Dashboard = () => {
                 <span
                   className={cn(
                     "text-xs tabular-nums",
-                    priceChange >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"
+                    priceChange >= 0 ? "text-j-up" : "text-j-down"
                   )}
                 >
                   <AnimatedNumber value={lastPrice} decimals={2} duration={150} />
@@ -1931,7 +1931,7 @@ const Dashboard = () => {
                 <span
                   className={cn(
                     "text-xs tabular-nums",
-                    priceChange >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"
+                    priceChange >= 0 ? "text-j-up" : "text-j-down"
                   )}
                 >
                   {priceChange >= 0 ? "+" : ""}
@@ -1947,7 +1947,7 @@ const Dashboard = () => {
                     className={cn(
                       "px-2 py-0.5 rounded text-[10px] transition-colors",
                       interval === int
-                        ? "bg-[#22c55e]/10 text-[#22c55e]"
+                        ? "bg-j-up/10 text-j-up"
                         : "text-[#71717a] hover:text-[#f4f4f5]"
                     )}
                   >
@@ -2011,7 +2011,7 @@ const Dashboard = () => {
             <select
               value={selectedSymbol}
               onChange={(e) => setSelectedSymbol(e.target.value)}
-              className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-xs text-[#f4f4f5] outline-none focus:border-[#22c55e]"
+              className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-xs text-[#f4f4f5] outline-none focus:border-j-up"
             >
               <option value="BTCUSDT">BTCUSDT</option>
               <option value="ETHUSDT">ETHUSDT</option>
@@ -2037,7 +2037,7 @@ const Dashboard = () => {
                   className={cn(
                     "flex-1 py-2 text-center border-b-2 transition-all uppercase tracking-wider",
                     isActive
-                      ? "text-[#22c55e] border-[#22c55e] bg-[#22c55e]/5"
+                      ? "text-j-up border-j-up bg-j-up/5"
                       : "text-[#71717a] border-transparent hover:text-[#f4f4f5] hover:bg-[#18181b]/50"
                   )}
                 >
@@ -2056,7 +2056,7 @@ const Dashboard = () => {
                 className={cn(
                   "flex-1 py-2 text-xs font-medium transition-colors",
                   side === "buy"
-                    ? "bg-[#22c55e]/10 text-[#22c55e] border-b-2 border-[#22c55e]"
+                    ? "bg-j-up/10 text-j-up border-b-2 border-j-up"
                     : "text-[#71717a] hover:text-[#f4f4f5]"
                 )}
               >
@@ -2068,7 +2068,7 @@ const Dashboard = () => {
                 className={cn(
                   "flex-1 py-2 text-xs font-medium transition-colors",
                   side === "sell"
-                    ? "bg-[#ef4444]/10 text-[#ef4444] border-b-2 border-[#ef4444]"
+                    ? "bg-j-down/10 text-j-down border-b-2 border-j-down"
                     : "text-[#71717a] hover:text-[#f4f4f5]"
                 )}
               >
@@ -2125,7 +2125,7 @@ const Dashboard = () => {
                   Leverage
                   <span className="text-[#52525b] ml-1">(max {maxLeverage}x)</span>
                 </span>
-                <span className="text-xs text-[#22c55e] font-medium">{leverage}x</span>
+                <span className="text-xs text-j-up font-medium">{leverage}x</span>
               </div>
               <div className="flex gap-1 flex-wrap">
                 {[1, 2, 3, 5, 10].filter((l) => l <= maxLeverage).concat(
@@ -2137,7 +2137,7 @@ const Dashboard = () => {
                     className={cn(
                       "flex-1 py-1 rounded text-[9px] transition-colors min-w-[28px]",
                       leverage === l
-                        ? "bg-[#22c55e]/10 text-[#22c55e] border border-[#22c55e]/30"
+                        ? "bg-j-up/10 text-j-up border border-j-up/30"
                         : "bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5]"
                     )}
                   >
@@ -2164,7 +2164,7 @@ const Dashboard = () => {
                 placeholder={`0.${"0".repeat(qtyPrecision)}`}
                 step={qtyStep}
                 min={minQty}
-                className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1.5 text-xs text-[#f4f4f5] outline-none focus:border-[#22c55e] tabular-nums"
+                className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1.5 text-xs text-[#f4f4f5] outline-none focus:border-j-up tabular-nums"
               />
               {/* % of available balance */}
               <div className="flex gap-1 mt-1">
@@ -2221,7 +2221,7 @@ const Dashboard = () => {
                       </span>
                     </div>
                     {belowMin && (
-                      <div className="text-[9px] text-[#ef4444] mt-1">
+                      <div className="text-[9px] text-j-down mt-1">
                         Min qty {minQty} · min notional ${minNotional}
                       </div>
                     )}
@@ -2244,8 +2244,8 @@ const Dashboard = () => {
                     className={cn(
                       "w-full py-2.5 rounded-lg text-xs font-semibold transition-all",
                       side === "buy"
-                        ? "bg-[#22c55e] hover:bg-[#16a34a] text-white"
-                        : "bg-[#ef4444] hover:bg-[#dc2626] text-white",
+                        ? "bg-j-up hover:bg-j-up text-white"
+                        : "bg-j-down hover:bg-j-down text-white",
                       (invalid || createPosition.isPending) && "opacity-50 cursor-not-allowed"
                     )}
                   >
