@@ -33,7 +33,7 @@ const DEFAULTS: IndicatorConfig = {
 
 const EMA_COLORS: Record<number, string> = {
   9:   "#f59e0b",   // amber
-  21:  "#22c55e",   // green
+  21:  "hsl(var(--janus-up))",   // green
   50:  "#3b82f6",   // blue
   200: "#a855f7",   // purple
 };
@@ -80,7 +80,7 @@ export function IndicatorPanel({ onChange }: Props) {
       >
         <TrendingUp size={11} />
         <span>Ind</span>
-        {activeCount > 0 && <span className="text-[#22c55e] tabular-nums">{activeCount}</span>}
+        {activeCount > 0 && <span className="text-j-up tabular-nums">{activeCount}</span>}
       </button>
 
       {expanded && (
@@ -139,7 +139,7 @@ export function IndicatorPanel({ onChange }: Props) {
             <div className="flex items-center gap-1.5">
               <button onClick={() => setCfg((c) => ({ ...c, superTrend: !c.superTrend }))}
                 className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
-                  cfg.superTrend ? "bg-[#22c55e]/20 border-[#22c55e]/50" : "border-[#27272a]")} />
+                  cfg.superTrend ? "bg-j-up/20 border-j-up/50" : "border-[#27272a]")} />
               <span className="text-[10px] text-[#a1a1aa]">SuperTrend</span>
             </div>
             {cfg.superTrend && (
