@@ -26,7 +26,7 @@
 | `src/components/SettingsModal.tsx` | ~26 | ✅ direction colors done |
 | `src/components/AlertConfigPanel.tsx` | ~15 | ✅ already clean |
 | `src/components/IndicatorPanel.tsx` | ~20 | ✅ direction colors done |
-| `src/components/RiskStatus.tsx` | ~18 | ⬜ pending |
+| `src/components/RiskStatus.tsx` | ~18 | ✅ direction colors done |
 | `src/components/ChartOverlayPanel.tsx` | ~9 | ⬜ pending |
 | `src/components/LlmActivityFeed.tsx` | ~14 | ⬜ pending |
 | `src/components/RegimeIndicator.tsx` | ~9 | ⬜ pending |

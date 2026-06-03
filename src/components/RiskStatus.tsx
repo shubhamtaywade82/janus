@@ -40,9 +40,9 @@ export function RiskStatus({ userId }: Props) {
   const limit = risk.drawdownLimit ?? 5;
   const barWidth = Math.min((drawdownPct / limit) * 100, 100);
   const barColor =
-    drawdownPct >= limit * 0.8 ? "bg-[#ef4444]" :
+    drawdownPct >= limit * 0.8 ? "bg-j-down" :
     drawdownPct >= limit * 0.5 ? "bg-[#f59e0b]" :
-    "bg-[#22c55e]";
+    "bg-j-up";
 
   const isInCooldown = risk.inCooldown && risk.cooldownUntil && Date.now() < risk.cooldownUntil;
   const minsLeft = isInCooldown
@@ -59,7 +59,7 @@ export function RiskStatus({ userId }: Props) {
               <Clock size={9} /> {minsLeft}m cooldown
             </span>
           ) : (
-            <span className="text-[#22c55e] flex items-center gap-0.5">
+            <span className="text-j-up flex items-center gap-0.5">
               <ShieldCheck size={9} /> active
             </span>
           )}
@@ -72,9 +72,9 @@ export function RiskStatus({ userId }: Props) {
           <span className="text-[#71717a]">Daily loss</span>
           <span className={cn(
             "tabular-nums font-medium",
-            drawdownPct >= limit * 0.8 ? "text-[#ef4444]" :
+            drawdownPct >= limit * 0.8 ? "text-j-down" :
             drawdownPct >= limit * 0.5 ? "text-[#f59e0b]" :
-            "text-[#22c55e]"
+            "text-j-up"
           )}>
             {drawdownPct.toFixed(2)}% / {limit}%
           </span>
