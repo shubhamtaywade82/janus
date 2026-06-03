@@ -142,6 +142,106 @@ export function calcRSI(closes: number[], period = 14): (number | null)[] {
   return result;
 }
 
+// ─── MACD ───
+export interface MACDResult {
+  macd:      (number | null)[];  // fast EMA - slow EMA
+  signal:    (number | null)[];  // EMA(macd, signalPeriod)
+  histogram: (number | null)[];  // macd - signal
+}
+export function calcMACD(
+  closes: number[],
+  fast = 12, slow = 26, signal = 9
+): MACDResult {
+  const fastEMA = calcEMA(closes, fast);
+  const slowEMA = calcEMA(closes, slow);
+  const n = closes.length;
+
+  const macd:      (number | null)[] = new Array(n).fill(null);
+  const signalArr: (number | null)[] = new Array(n).fill(null);
+  const histogram: (number | null)[] = new Array(n).fill(null);
+
+  // MACD line — valid only where both EMAs have values
+  for (let i = 0; i < n; i++) {
+    if (fastEMA[i] !== null && slowEMA[i] !== null) {
+      macd[i] = (fastEMA[i] as number) - (slowEMA[i] as number);
+    }
+  }
+
+  // Signal line = EMA of MACD values; compute using only non-null values in order
+  const macdNonNull = macd.map((v, i) => ({ v, i })).filter((x) => x.v !== null);
+  if (macdNonNull.length >= signal) {
+    const k = 2 / (signal + 1);
+    let ema = macdNonNull.slice(0, signal).reduce((s, x) => s + (x.v as number), 0) / signal;
+    signalArr[macdNonNull[signal - 1].i] = ema;
+    for (let j = signal; j < macdNonNull.length; j++) {
+      ema = (macdNonNull[j].v as number) * k + ema * (1 - k);
+      signalArr[macdNonNull[j].i] = ema;
+    }
+  }
+
+  // Histogram
+  for (let i = 0; i < n; i++) {
+    if (macd[i] !== null && signalArr[i] !== null) {
+      histogram[i] = (macd[i] as number) - (signalArr[i] as number);
+    }
+  }
+
+  return { macd, signal: signalArr, histogram };
+}
+
+// ─── Nadaraya-Watson Envelope ───
+// Non-parametric kernel regression using Gaussian weights.
+// h (bandwidth) controls smoothness; mult scales the MAE bands.
+// Lookback limits computation window — full O(n²) only over last `lookback` bars.
+export interface NWResult {
+  estimate: (number | null)[];
+  upper:    (number | null)[];
+  lower:    (number | null)[];
+}
+export function calcNW(
+  closes: number[],
+  h = 8,
+  mult = 3,
+  lookback = 300
+): NWResult {
+  const n = closes.length;
+  const estimate: (number | null)[] = new Array(n).fill(null);
+  const upper:    (number | null)[] = new Array(n).fill(null);
+  const lower:    (number | null)[] = new Array(n).fill(null);
+
+  const start = Math.max(0, n - lookback);
+
+  // Compute kernel estimate for each bar within lookback window
+  for (let i = start; i < n; i++) {
+    let wSum = 0, wySum = 0;
+    for (let j = start; j < n; j++) {
+      const w = Math.exp(-((i - j) ** 2) / (2 * h * h));
+      wSum  += w;
+      wySum += w * closes[j];
+    }
+    estimate[i] = wSum > 0 ? wySum / wSum : null;
+  }
+
+  // MAE over the lookback window
+  let absErrSum = 0, count = 0;
+  for (let i = start; i < n; i++) {
+    if (estimate[i] !== null) {
+      absErrSum += Math.abs(closes[i] - (estimate[i] as number));
+      count++;
+    }
+  }
+  const mae = count > 0 ? (absErrSum / count) * mult : 0;
+
+  for (let i = start; i < n; i++) {
+    if (estimate[i] !== null) {
+      upper[i] = (estimate[i] as number) + mae;
+      lower[i] = (estimate[i] as number) - mae;
+    }
+  }
+
+  return { estimate, upper, lower };
+}
+
 // ─── CVD (Cumulative Volume Delta) ───
 // Delta per bar = estimated buy vol - sell vol using candle body position within wick.
 // Formula: delta = volume × (2 × (close - low) / (high - low) - 1)  [ranges -vol..+vol]

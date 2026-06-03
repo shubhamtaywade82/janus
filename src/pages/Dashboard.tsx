@@ -29,7 +29,7 @@ import type { AlertConfig } from "@/lib/chart/alert-engine";
 import { checkIndicatorAlerts, checkSMCAlerts } from "@/lib/chart/alert-engine";
 import type { IndicatorConfig } from "@/components/IndicatorPanel";
 import { EMA_COLORS, SMA_COLORS } from "@/components/IndicatorPanel";
-import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD } from "@/lib/chart/indicators";
+import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, calcNW, calcMACD } from "@/lib/chart/indicators";
 import type { PriceActionData } from "@/lib/chart/pa-types";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 
@@ -163,7 +163,9 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   // RSI reference price lines (70/50/30)
   const rsiPriceLinesRef = useRef<any[]>([]);
   // CVD histogram series ref (per-bar delta; line goes through indicatorSeriesRef)
-  const cvdHistRef = useRef<any>(null);
+  const cvdHistRef  = useRef<any>(null);
+  // MACD histogram series ref
+  const macdHistRef = useRef<any>(null);
 
   // ─── Tick animation: persistent lerp loop chasing target ───
   const animFrameRef = useRef<number | null>(null);
@@ -844,6 +846,58 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         cvdHistRef.current = null;
       }
       removeKey("cvd-line");
+    }
+
+    // MACD — histogram (green/red) + MACD line (blue) + signal line (orange) on "macd" sub-pane
+    if (indicatorCfg.macd) {
+      const { macd, signal, histogram } = calcMACD(closes, indicatorCfg.macdFast, indicatorCfg.macdSlow, indicatorCfg.macdSignal);
+      const macdScaleOpts = { scaleMargins: { top: 0.76, bottom: 0 }, borderVisible: false };
+      const upColor   = "rgba(14,203,129,0.70)";
+      const downColor = "rgba(246,70,93,0.70)";
+
+      // Histogram (colored bars)
+      if (!macdHistRef.current && chart) {
+        try {
+          const h = chart.addSeries(HistogramSeries, {
+            priceScaleId: "macd",
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          h.priceScale().applyOptions(macdScaleOpts);
+          macdHistRef.current = h;
+        } catch { /* safe */ }
+      }
+      if (macdHistRef.current) {
+        const histData = histogram
+          .map((v, i) => v !== null ? { time: toTime(i), value: v, color: v >= 0 ? upColor : downColor } : null)
+          .filter(Boolean)
+          .sort((a, b) => (a!.time as number) - (b!.time as number)) as { time: UTCTimestamp; value: number; color: string }[];
+        macdHistRef.current.setData(histData);
+      }
+
+      // MACD line + signal line
+      addOrUpdate("macd-line",   macd,   "rgba(59,130,246,0.90)", false, "macd");
+      addOrUpdate("macd-signal", signal, "rgba(245,158,11,0.90)", false, "macd");
+      serMap.get("macd-line")?.priceScale().applyOptions(macdScaleOpts);
+      serMap.get("macd-signal")?.priceScale().applyOptions(macdScaleOpts);
+
+    } else {
+      if (macdHistRef.current && chart) {
+        try { chart.removeSeries(macdHistRef.current); } catch { /* safe */ }
+        macdHistRef.current = null;
+      }
+      removeKey("macd-line");
+      removeKey("macd-signal");
+    }
+
+    // Nadaraya-Watson Envelope — kernel regression + MAE bands on main price pane
+    if (indicatorCfg.nw) {
+      const { estimate, upper, lower } = calcNW(closes, indicatorCfg.nwBandwidth, indicatorCfg.nwMult);
+      addOrUpdate("nw-est",   estimate, "rgba(168,85,247,0.90)");
+      addOrUpdate("nw-upper", upper,    "rgba(168,85,247,0.50)", true);
+      addOrUpdate("nw-lower", lower,    "rgba(168,85,247,0.50)", true);
+    } else {
+      ["nw-est", "nw-upper", "nw-lower"].forEach(removeKey);
     }
 
   }, [indicatorCfg, data, interval]);

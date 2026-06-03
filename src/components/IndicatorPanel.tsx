@@ -24,6 +24,15 @@ export interface IndicatorConfig {
   vwap: boolean;
   // CVD (Cumulative Volume Delta)
   cvd: boolean;
+  // Nadaraya-Watson envelope
+  nw:          boolean;
+  nwBandwidth: number;
+  nwMult:      number;
+  // MACD
+  macd:         boolean;
+  macdFast:     number;
+  macdSlow:     number;
+  macdSignal:   number;
 }
 
 const DEFAULTS: IndicatorConfig = {
@@ -31,6 +40,8 @@ const DEFAULTS: IndicatorConfig = {
   superTrend: false, superTrendPeriod: 10, superTrendMult: 3,
   knnSuperTrend: false,
   rsi: false, rsiPeriod: 14, vwap: false, cvd: false,
+  nw: false, nwBandwidth: 8, nwMult: 3,
+  macd: false, macdFast: 12, macdSlow: 26, macdSignal: 9,
 };
 
 const EMA_COLORS: Record<number, string> = {
@@ -84,7 +95,7 @@ export function IndicatorPanel({ onChange }: Props) {
   const activeCount =
     cfg.ema.length + cfg.sma.length +
     (cfg.bb ? 1 : 0) + (cfg.superTrend ? 1 : 0) + (cfg.knnSuperTrend ? 1 : 0) +
-    (cfg.rsi ? 1 : 0) + (cfg.vwap ? 1 : 0) + (cfg.cvd ? 1 : 0);
+    (cfg.rsi ? 1 : 0) + (cfg.vwap ? 1 : 0) + (cfg.cvd ? 1 : 0) + (cfg.nw ? 1 : 0) + (cfg.macd ? 1 : 0);
 
   return (
     <div ref={panelRef} className="relative">
@@ -208,6 +219,32 @@ export function IndicatorPanel({ onChange }: Props) {
               <span className="text-[10px] text-[#a1a1aa]">CVD</span>
             </div>
             {cfg.cvd && <span className="text-[9px] text-[#52525b]">Δ + cumul</span>}
+          </div>
+
+          {/* Nadaraya-Watson */}
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setCfg((c) => ({ ...c, nw: !c.nw }))}
+                className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
+                  cfg.nw ? "bg-[#a855f7]/20 border-[#a855f7]/50" : "border-[#27272a]")} />
+              <span className="text-[10px] text-[#a1a1aa]">N-W Envelope</span>
+            </div>
+            {cfg.nw && <span className="text-[9px] text-[#52525b]">h={cfg.nwBandwidth} ×{cfg.nwMult}</span>}
+          </div>
+
+          {/* MACD */}
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setCfg((c) => ({ ...c, macd: !c.macd }))}
+                className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
+                  cfg.macd ? "bg-[#3b82f6]/20 border-[#3b82f6]/50" : "border-[#27272a]")} />
+              <span className="text-[10px] text-[#a1a1aa]">MACD</span>
+            </div>
+            {cfg.macd && (
+              <span className="text-[9px] text-[#52525b]">
+                {cfg.macdFast},{cfg.macdSlow},{cfg.macdSignal}
+              </span>
+            )}
           </div>
 
           <div className="border-t border-[#27272a] mt-2 pt-2">
