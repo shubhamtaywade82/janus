@@ -17,7 +17,7 @@
 | `src/pages/Dashboard.tsx` | ~150 | ✅ direction colors done |
 | `src/pages/Portfolio.tsx` | ~130 | ✅ direction colors done |
 | `src/pages/Signals.tsx` | ~107 | ✅ direction colors done |
-| `src/pages/RiskMetrics.tsx` | ~100 | ⬜ pending |
+| `src/pages/RiskMetrics.tsx` | ~100 | ✅ direction colors done |
 | `src/pages/Logs.tsx` | ~39 | ⬜ pending |
 | `src/components/Layout.tsx` | ~23 | ⬜ pending |
 | `src/components/AutoTraderPanel.tsx` | ~59 | ⬜ pending |
