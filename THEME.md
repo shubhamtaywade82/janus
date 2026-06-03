@@ -24,7 +24,7 @@
 | `src/components/AlertsModal.tsx` | ~45 | ✅ direction colors done |
 | `src/components/PerformanceDashboard.tsx` | ~40 | ✅ direction colors done |
 | `src/components/SettingsModal.tsx` | ~26 | ✅ direction colors done |
-| `src/components/AlertConfigPanel.tsx` | ~15 | ⬜ pending |
+| `src/components/AlertConfigPanel.tsx` | ~15 | ✅ already clean |
 | `src/components/IndicatorPanel.tsx` | ~20 | ⬜ pending |
 | `src/components/RiskStatus.tsx` | ~18 | ⬜ pending |
 | `src/components/ChartOverlayPanel.tsx` | ~9 | ⬜ pending |
