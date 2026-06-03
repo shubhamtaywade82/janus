@@ -638,15 +638,47 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       ["bb-upper", "bb-middle", "bb-lower"].forEach(removeKey);
     }
 
-    // SuperTrend — rendered as TWO series (bullish + bearish segments)
+    // SuperTrend — two series (bull/bear), whitespace for inactive bars, series removed when no data
+    const renderST = (prefix: string, stValues: (number | null)[], stDirection: ("up" | "down" | null)[],
+                      bullColor: string, bearColor: string) => {
+      const bullRaw = stValues.map((v, i) => stDirection[i] === "up"   ? v : null);
+      const bearRaw = stValues.map((v, i) => stDirection[i] === "down" ? v : null);
+      const hasBull = bullRaw.some((v) => v !== null);
+      const hasBear = bearRaw.some((v) => v !== null);
+
+      for (const [key, raw, color, hasData] of [
+        [`${prefix}-bull`, bullRaw, bullColor, hasBull],
+        [`${prefix}-bear`, bearRaw, bearColor, hasBear],
+      ] as [string, (number | null)[], string, boolean][]) {
+        if (!hasData) { removeKey(key); continue; }
+        const lineData = raw.map((v, i) =>
+          v !== null ? { time: toTime(i), value: v } : { time: toTime(i) }
+        ) as { time: UTCTimestamp; value?: number }[];
+        if (!serMap.has(key)) {
+          try {
+            const s = chart.addSeries(LineSeries, { color, lineWidth: 1, priceScaleId: "right", lastValueVisible: false, priceLineVisible: false });
+            serMap.set(key, s);
+          } catch { continue; }
+        }
+        serMap.get(key)?.setData(lineData);
+      }
+      // clean up legacy single-series key
+      removeKey(prefix);
+    };
+
     if (indicatorCfg.superTrend) {
       const { values, direction } = calcSuperTrend(highs, lows, closes, indicatorCfg.superTrendPeriod, indicatorCfg.superTrendMult);
-      const bullValues: (number | null)[] = values.map((v, i) => direction[i] === "up"   ? v : null);
-      const bearValues: (number | null)[] = values.map((v, i) => direction[i] === "down" ? v : null);
-      addOrUpdate("st-bull", bullValues, "rgba(34,197,94,0.90)");
-      addOrUpdate("st-bear", bearValues, "rgba(239,68,68,0.90)");
+      renderST("st", values, direction, "rgba(34,197,94,0.90)", "rgba(239,68,68,0.90)");
     } else {
-      ["st-bull", "st-bear"].forEach(removeKey);
+      ["st", "st-bull", "st-bear"].forEach(removeKey);
+    }
+
+    // KNN SuperTrend — fixed params (period=10, mult=3) matching backend knn-supertrend service
+    if (indicatorCfg.knnSuperTrend) {
+      const { values, direction } = calcSuperTrend(highs, lows, closes, 10, 3);
+      renderST("knn-st", values, direction, "rgba(6,182,212,0.90)", "rgba(251,146,60,0.90)");
+    } else {
+      ["knn-st", "knn-st-bull", "knn-st-bear"].forEach(removeKey);
     }
 
     // RSI sub-pane
