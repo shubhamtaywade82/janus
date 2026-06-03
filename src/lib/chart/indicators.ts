@@ -247,6 +247,162 @@ export function calcADX(
   return { adx, diPlus, diMinus };
 }
 
+// ─── Keltner Channels ───
+export interface KeltnerResult {
+  upper:  (number | null)[];
+  middle: (number | null)[];
+  lower:  (number | null)[];
+}
+export function calcKeltner(
+  highs: number[], lows: number[], closes: number[],
+  emaPeriod = 20, atrPeriod = 10, mult = 2
+): KeltnerResult {
+  const n = closes.length;
+  const middle = calcEMA(closes, emaPeriod);
+  const upper: (number | null)[] = new Array(n).fill(null);
+  const lower: (number | null)[] = new Array(n).fill(null);
+
+  // ATR (Wilder smoothing)
+  const tr: number[] = new Array(n).fill(0);
+  tr[0] = highs[0] - lows[0];
+  for (let i = 1; i < n; i++) {
+    tr[i] = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+  }
+  const atr: (number | null)[] = new Array(n).fill(null);
+  let atrSum = 0;
+  for (let i = 0; i < atrPeriod; i++) atrSum += tr[i];
+  let atrVal = atrSum / atrPeriod;
+  atr[atrPeriod - 1] = atrVal;
+  for (let i = atrPeriod; i < n; i++) {
+    atrVal = (atrVal * (atrPeriod - 1) + tr[i]) / atrPeriod;
+    atr[i] = atrVal;
+  }
+
+  for (let i = 0; i < n; i++) {
+    if (middle[i] !== null && atr[i] !== null) {
+      upper[i] = (middle[i] as number) + mult * (atr[i] as number);
+      lower[i] = (middle[i] as number) - mult * (atr[i] as number);
+    }
+  }
+  return { upper, middle, lower };
+}
+
+// ─── Donchian Channels ───
+export interface DonchianResult {
+  upper:  (number | null)[];
+  middle: (number | null)[];
+  lower:  (number | null)[];
+}
+export function calcDonchian(
+  highs: number[], lows: number[], period = 20
+): DonchianResult {
+  const n = highs.length;
+  const upper:  (number | null)[] = new Array(n).fill(null);
+  const middle: (number | null)[] = new Array(n).fill(null);
+  const lower:  (number | null)[] = new Array(n).fill(null);
+
+  for (let i = period - 1; i < n; i++) {
+    let hi = -Infinity, lo = Infinity;
+    for (let j = i - period + 1; j <= i; j++) {
+      if (highs[j] > hi) hi = highs[j];
+      if (lows[j]  < lo) lo = lows[j];
+    }
+    upper[i]  = hi;
+    lower[i]  = lo;
+    middle[i] = (hi + lo) / 2;
+  }
+  return { upper, middle, lower };
+}
+
+// ─── Z-Score ───
+// Measures standard deviations from rolling mean. ±2 = statistically extreme.
+export function calcZScore(closes: number[], period = 20): (number | null)[] {
+  const n = closes.length;
+  const result: (number | null)[] = new Array(n).fill(null);
+  for (let i = period - 1; i < n; i++) {
+    const slice = closes.slice(i - period + 1, i + 1);
+    const mean  = slice.reduce((a, b) => a + b, 0) / period;
+    const variance = slice.reduce((a, v) => a + (v - mean) ** 2, 0) / period;
+    const std = Math.sqrt(variance);
+    result[i] = std === 0 ? 0 : (closes[i] - mean) / std;
+  }
+  return result;
+}
+
+// ─── Volume Profile ───
+export interface VPBucket {
+  price:  number;  // midpoint price of bucket
+  vol:    number;  // total volume
+  buyVol: number;  // estimated buy volume
+}
+export interface VolumeProfileResult {
+  buckets:        VPBucket[];
+  maxVol:         number;
+  poc:            number;   // price of highest volume bucket
+  valueAreaHigh:  number;
+  valueAreaLow:   number;
+}
+export function calcVolumeProfile(
+  highs: number[], lows: number[], closes: number[], volumes: number[],
+  bucketCount = 48
+): VolumeProfileResult | null {
+  const n = closes.length;
+  if (n === 0) return null;
+
+  const priceMin = Math.min(...lows);
+  const priceMax = Math.max(...highs);
+  if (priceMax === priceMin) return null;
+
+  const bucketSize = (priceMax - priceMin) / bucketCount;
+  const vols    = new Float64Array(bucketCount).fill(0);
+  const buyVols = new Float64Array(bucketCount).fill(0);
+
+  for (let i = 0; i < n; i++) {
+    const range = highs[i] - lows[i];
+    const buyFrac = range === 0 ? 0.5 : (closes[i] - lows[i]) / range;
+    const bv = volumes[i] * buyFrac;
+    // Distribute volume across all buckets the candle overlaps, proportionally
+    const bLo = Math.max(0, Math.floor((lows[i] - priceMin) / bucketSize));
+    const bHi = Math.min(bucketCount - 1, Math.floor((highs[i] - priceMin) / bucketSize));
+    const span = bHi - bLo + 1;
+    for (let b = bLo; b <= bHi; b++) {
+      vols[b]    += volumes[i] / span;
+      buyVols[b] += bv / span;
+    }
+  }
+
+  let maxVol = 0, pocIdx = 0;
+  for (let b = 0; b < bucketCount; b++) {
+    if (vols[b] > maxVol) { maxVol = vols[b]; pocIdx = b; }
+  }
+
+  // Value area: expand from POC until 70% of total volume is enclosed
+  const totalVol = Array.from(vols).reduce((a, b) => a + b, 0);
+  const vaTarget = totalVol * 0.70;
+  let lo = pocIdx, hi = pocIdx, vaVol = vols[pocIdx];
+  while (vaVol < vaTarget && (lo > 0 || hi < bucketCount - 1)) {
+    const upGain   = hi < bucketCount - 1 ? vols[hi + 1] : 0;
+    const downGain = lo > 0               ? vols[lo - 1] : 0;
+    if (upGain >= downGain && hi < bucketCount - 1) { hi++; vaVol += vols[hi]; }
+    else if (lo > 0) { lo--; vaVol += vols[lo]; }
+    else { hi++; vaVol += vols[hi]; }
+  }
+
+  const buckets: VPBucket[] = Array.from({ length: bucketCount }, (_, b) => ({
+    price:  priceMin + (b + 0.5) * bucketSize,
+    vol:    vols[b],
+    buyVol: buyVols[b],
+  }));
+
+  return {
+    buckets,
+    maxVol,
+    poc:           priceMin + (pocIdx + 0.5) * bucketSize,
+    valueAreaHigh: priceMin + (hi + 1) * bucketSize,
+    valueAreaLow:  priceMin + lo * bucketSize,
+  };
+}
+
 // ─── Stochastic RSI ───
 export interface StochRSIResult {
   k: (number | null)[];  // smoothed %K

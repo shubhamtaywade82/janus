@@ -21,6 +21,7 @@ import type { UTCTimestamp, SeriesMarker, Time } from "lightweight-charts";
 import { OrderBlockPrimitive } from "@/lib/chart/primitives/OrderBlockPrimitive";
 import { FVGPrimitive } from "@/lib/chart/primitives/FVGPrimitive";
 import { StructurePrimitive } from "@/lib/chart/primitives/StructurePrimitive";
+import { VolumeProfilePrimitive } from "@/lib/chart/primitives/VolumeProfilePrimitive";
 import { ChartOverlayPanel } from "@/components/ChartOverlayPanel";
 import type { OverlayToggles } from "@/components/ChartOverlayPanel";
 import { IndicatorPanel } from "@/components/IndicatorPanel";
@@ -29,7 +30,7 @@ import type { AlertConfig } from "@/lib/chart/alert-engine";
 import { checkIndicatorAlerts, checkSMCAlerts } from "@/lib/chart/alert-engine";
 import type { IndicatorConfig } from "@/components/IndicatorPanel";
 import { EMA_COLORS, SMA_COLORS } from "@/components/IndicatorPanel";
-import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, calcNW, calcMACD, calcStochRSI, calcPSAR, calcIchimoku, calcADX } from "@/lib/chart/indicators";
+import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, calcNW, calcMACD, calcStochRSI, calcPSAR, calcIchimoku, calcADX, calcZScore, calcVolumeProfile, calcKeltner, calcDonchian } from "@/lib/chart/indicators";
 import type { PriceActionData } from "@/lib/chart/pa-types";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 
@@ -168,6 +169,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const cvdHistRef  = useRef<any>(null);
   // MACD histogram series ref
   const macdHistRef = useRef<any>(null);
+  // Z-Score reference price lines (±2/0)
+  const zScorePriceLinesRef = useRef<any[]>([]);
+  // Volume Profile primitive
+  const vpPrimRef = useRef<VolumeProfilePrimitive | null>(null);
 
   // ─── Tick animation: persistent lerp loop chasing target ───
   const animFrameRef = useRef<number | null>(null);
@@ -980,6 +985,65 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       serMap.get("adx-line")?.priceScale().applyOptions(adxScaleOpts);
     } else {
       ["adx-line", "adx-diplus", "adx-diminus"].forEach(removeKey);
+    }
+
+    // Z-Score — sub-pane with ±2/±1/0 reference lines
+    if (indicatorCfg.zScore) {
+      const zValues = calcZScore(closes, indicatorCfg.zScorePeriod);
+      addOrUpdate("zscore", zValues, "rgba(6,182,212,0.85)", false, "zscore");
+      const scaleOpts = { scaleMargins: { top: 0.76, bottom: 0 }, borderVisible: false };
+      serMap.get("zscore")?.priceScale().applyOptions(scaleOpts);
+      const zSeries = serMap.get("zscore");
+      if (zSeries && zScorePriceLinesRef.current.length === 0) {
+        zScorePriceLinesRef.current = [
+          zSeries.createPriceLine({ price:  2, color: "rgba(239,68,68,0.50)",   lineWidth: 1, lineStyle: 2, title: "+2σ" }),
+          zSeries.createPriceLine({ price:  1, color: "rgba(239,68,68,0.25)",   lineWidth: 1, lineStyle: 3, title: "+1σ" }),
+          zSeries.createPriceLine({ price:  0, color: "rgba(113,113,122,0.40)", lineWidth: 1, lineStyle: 0, title: "0" }),
+          zSeries.createPriceLine({ price: -1, color: "rgba(34,197,94,0.25)",   lineWidth: 1, lineStyle: 3, title: "-1σ" }),
+          zSeries.createPriceLine({ price: -2, color: "rgba(34,197,94,0.50)",   lineWidth: 1, lineStyle: 2, title: "-2σ" }),
+        ];
+      }
+    } else {
+      const zSeries = serMap.get("zscore");
+      if (zSeries) {
+        zScorePriceLinesRef.current.forEach((l) => { try { zSeries.removePriceLine(l); } catch { /* safe */ } });
+      }
+      zScorePriceLinesRef.current = [];
+      removeKey("zscore");
+    }
+
+    // Keltner Channels — EMA middle + ATR-based upper/lower bands (cyan)
+    if (indicatorCfg.keltner) {
+      const { upper, middle, lower } = calcKeltner(highs, lows, closes, indicatorCfg.keltnerEma, indicatorCfg.keltnerAtr, indicatorCfg.keltnerMult);
+      addOrUpdate("keltner-upper",  upper,  "rgba(6,182,212,0.70)", true);
+      addOrUpdate("keltner-middle", middle, "rgba(6,182,212,0.90)");
+      addOrUpdate("keltner-lower",  lower,  "rgba(6,182,212,0.70)", true);
+    } else {
+      ["keltner-upper", "keltner-middle", "keltner-lower"].forEach(removeKey);
+    }
+
+    // Donchian Channels — highest high / lowest low / midline (purple)
+    if (indicatorCfg.donchian) {
+      const { upper, middle, lower } = calcDonchian(highs, lows, indicatorCfg.donchianPeriod);
+      addOrUpdate("donchian-upper",  upper,  "rgba(168,85,247,0.70)", true);
+      addOrUpdate("donchian-middle", middle, "rgba(168,85,247,0.45)", true);
+      addOrUpdate("donchian-lower",  lower,  "rgba(168,85,247,0.70)", true);
+    } else {
+      ["donchian-upper", "donchian-middle", "donchian-lower"].forEach(removeKey);
+    }
+
+    // Volume Profile — canvas primitive attached to candlestick series
+    if (indicatorCfg.volumeProfile && candlestickSeriesRef.current) {
+      const vpData = calcVolumeProfile(highs, lows, closes, volumes, indicatorCfg.volumeProfileBuckets);
+      if (!vpPrimRef.current) {
+        vpPrimRef.current = new VolumeProfilePrimitive();
+        try { candlestickSeriesRef.current.attachPrimitive(vpPrimRef.current); } catch { /* safe */ }
+      }
+      vpPrimRef.current.setData(vpData);
+    } else if (!indicatorCfg.volumeProfile && vpPrimRef.current) {
+      vpPrimRef.current.setData(null);
+      try { candlestickSeriesRef.current?.detachPrimitive(vpPrimRef.current); } catch { /* safe */ }
+      vpPrimRef.current = null;
     }
 
   }, [indicatorCfg, data, interval]);

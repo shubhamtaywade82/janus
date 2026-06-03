@@ -47,6 +47,20 @@ export interface IndicatorConfig {
   // ADX + DI lines
   adx:       boolean;
   adxPeriod: number;
+  // Z-Score
+  zScore:       boolean;
+  zScorePeriod: number;
+  // Volume Profile
+  volumeProfile:        boolean;
+  volumeProfileBuckets: number;
+  // Keltner Channels
+  keltner:       boolean;
+  keltnerEma:    number;
+  keltnerAtr:    number;
+  keltnerMult:   number;
+  // Donchian Channels
+  donchian:       boolean;
+  donchianPeriod: number;
 }
 
 const DEFAULTS: IndicatorConfig = {
@@ -60,6 +74,10 @@ const DEFAULTS: IndicatorConfig = {
   psar: false, psarStep: 0.02, psarMax: 0.2,
   ichimoku: false,
   adx: false, adxPeriod: 14,
+  zScore: false, zScorePeriod: 20,
+  volumeProfile: false, volumeProfileBuckets: 48,
+  keltner: false, keltnerEma: 20, keltnerAtr: 10, keltnerMult: 2,
+  donchian: false, donchianPeriod: 20,
 };
 
 const EMA_COLORS: Record<number, string> = {
@@ -115,7 +133,9 @@ export function IndicatorPanel({ onChange }: Props) {
     (cfg.bb ? 1 : 0) + (cfg.superTrend ? 1 : 0) + (cfg.knnSuperTrend ? 1 : 0) +
     (cfg.rsi ? 1 : 0) + (cfg.vwap ? 1 : 0) + (cfg.cvd ? 1 : 0) + (cfg.nw ? 1 : 0) +
     (cfg.macd ? 1 : 0) + (cfg.stochRsi ? 1 : 0) + (cfg.psar ? 1 : 0) +
-    (cfg.ichimoku ? 1 : 0) + (cfg.adx ? 1 : 0);
+    (cfg.ichimoku ? 1 : 0) + (cfg.adx ? 1 : 0) +
+    (cfg.zScore ? 1 : 0) + (cfg.volumeProfile ? 1 : 0) +
+    (cfg.keltner ? 1 : 0) + (cfg.donchian ? 1 : 0);
 
   return (
     <div ref={panelRef} className="relative">
@@ -317,6 +337,54 @@ export function IndicatorPanel({ onChange }: Props) {
               <span className="text-[10px] text-[#a1a1aa]">ADX + DI</span>
             </div>
             {cfg.adx && <span className="text-[9px] text-[#52525b]">{cfg.adxPeriod}</span>}
+          </div>
+
+          {/* Z-Score */}
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setCfg((c) => ({ ...c, zScore: !c.zScore }))}
+                className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
+                  cfg.zScore ? "bg-[#06b6d4]/20 border-[#06b6d4]/50" : "border-[#27272a]")} />
+              <span className="text-[10px] text-[#a1a1aa]">Z-Score</span>
+            </div>
+            {cfg.zScore && <span className="text-[9px] text-[#52525b]">{cfg.zScorePeriod}</span>}
+          </div>
+
+          {/* Volume Profile */}
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setCfg((c) => ({ ...c, volumeProfile: !c.volumeProfile }))}
+                className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
+                  cfg.volumeProfile ? "bg-[#f59e0b]/20 border-[#f59e0b]/50" : "border-[#27272a]")} />
+              <span className="text-[10px] text-[#a1a1aa]">Volume Profile</span>
+            </div>
+            {cfg.volumeProfile && <span className="text-[9px] text-[#52525b]">{cfg.volumeProfileBuckets}B</span>}
+          </div>
+
+          {/* Keltner Channels */}
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setCfg((c) => ({ ...c, keltner: !c.keltner }))}
+                className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
+                  cfg.keltner ? "bg-[#06b6d4]/20 border-[#06b6d4]/50" : "border-[#27272a]")} />
+              <span className="text-[10px] text-[#a1a1aa]">Keltner Ch.</span>
+            </div>
+            {cfg.keltner && (
+              <span className="text-[9px] text-[#52525b]">
+                {cfg.keltnerEma}/{cfg.keltnerAtr}×{cfg.keltnerMult}
+              </span>
+            )}
+          </div>
+
+          {/* Donchian Channels */}
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setCfg((c) => ({ ...c, donchian: !c.donchian }))}
+                className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
+                  cfg.donchian ? "bg-[#a855f7]/20 border-[#a855f7]/50" : "border-[#27272a]")} />
+              <span className="text-[10px] text-[#a1a1aa]">Donchian Ch.</span>
+            </div>
+            {cfg.donchian && <span className="text-[9px] text-[#52525b]">{cfg.donchianPeriod}</span>}
           </div>
 
           <div className="border-t border-[#27272a] mt-2 pt-2">
