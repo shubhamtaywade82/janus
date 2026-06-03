@@ -574,11 +574,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
 
     const addOrUpdate = (key: string, values: (number | null)[], color: string, dash = false, scaleId = "right") => {
       // WhitespaceData (just {time}) forces a visual break — don't filter nulls, include them as whitespace
-      const lineData = values.map((v, i) =>
-        v !== null
-          ? { time: toTime(i), value: v }
-          : { time: toTime(i) }          // whitespace point = no line drawn = break
-      ) as { time: UTCTimestamp; value?: number }[];
+      // Sort by time: klines data can arrive with out-of-order timestamps (live ticks merged into history)
+      const lineData = values
+        .map((v, i) => v !== null ? { time: toTime(i), value: v } : { time: toTime(i) })
+        .sort((a, b) => (a.time as number) - (b.time as number)) as { time: UTCTimestamp; value?: number }[];
       if (lineData.length === 0) return;
 
       if (!serMap.has(key)) {
@@ -651,9 +650,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         [`${prefix}-bear`, bearRaw, bearColor, hasBear],
       ] as [string, (number | null)[], string, boolean][]) {
         if (!hasData) { removeKey(key); continue; }
-        const lineData = raw.map((v, i) =>
+        const lineData = (raw.map((v, i) =>
           v !== null ? { time: toTime(i), value: v } : { time: toTime(i) }
-        ) as { time: UTCTimestamp; value?: number }[];
+        ) as { time: UTCTimestamp; value?: number }[])
+          .sort((a, b) => (a.time as number) - (b.time as number));
         if (!serMap.has(key)) {
           try {
             const s = chart.addSeries(LineSeries, { color, lineWidth: 1, priceScaleId: "right", lastValueVisible: false, priceLineVisible: false });
