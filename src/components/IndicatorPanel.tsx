@@ -29,10 +29,19 @@ export interface IndicatorConfig {
   nwBandwidth: number;
   nwMult:      number;
   // MACD
-  macd:         boolean;
-  macdFast:     number;
-  macdSlow:     number;
-  macdSignal:   number;
+  macd:       boolean;
+  macdFast:   number;
+  macdSlow:   number;
+  macdSignal: number;
+  // Stochastic RSI
+  stochRsi:       boolean;
+  stochRsiPeriod: number;
+  stochSmoothK:   number;
+  stochSmoothD:   number;
+  // Parabolic SAR
+  psar:     boolean;
+  psarStep: number;
+  psarMax:  number;
 }
 
 const DEFAULTS: IndicatorConfig = {
@@ -42,6 +51,8 @@ const DEFAULTS: IndicatorConfig = {
   rsi: false, rsiPeriod: 14, vwap: false, cvd: false,
   nw: false, nwBandwidth: 8, nwMult: 3,
   macd: false, macdFast: 12, macdSlow: 26, macdSignal: 9,
+  stochRsi: false, stochRsiPeriod: 14, stochSmoothK: 3, stochSmoothD: 3,
+  psar: false, psarStep: 0.02, psarMax: 0.2,
 };
 
 const EMA_COLORS: Record<number, string> = {
@@ -95,7 +106,8 @@ export function IndicatorPanel({ onChange }: Props) {
   const activeCount =
     cfg.ema.length + cfg.sma.length +
     (cfg.bb ? 1 : 0) + (cfg.superTrend ? 1 : 0) + (cfg.knnSuperTrend ? 1 : 0) +
-    (cfg.rsi ? 1 : 0) + (cfg.vwap ? 1 : 0) + (cfg.cvd ? 1 : 0) + (cfg.nw ? 1 : 0) + (cfg.macd ? 1 : 0);
+    (cfg.rsi ? 1 : 0) + (cfg.vwap ? 1 : 0) + (cfg.cvd ? 1 : 0) + (cfg.nw ? 1 : 0) +
+    (cfg.macd ? 1 : 0) + (cfg.stochRsi ? 1 : 0) + (cfg.psar ? 1 : 0);
 
   return (
     <div ref={panelRef} className="relative">
@@ -243,6 +255,36 @@ export function IndicatorPanel({ onChange }: Props) {
             {cfg.macd && (
               <span className="text-[9px] text-[#52525b]">
                 {cfg.macdFast},{cfg.macdSlow},{cfg.macdSignal}
+              </span>
+            )}
+          </div>
+
+          {/* Stochastic RSI */}
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setCfg((c) => ({ ...c, stochRsi: !c.stochRsi }))}
+                className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
+                  cfg.stochRsi ? "bg-[#06b6d4]/20 border-[#06b6d4]/50" : "border-[#27272a]")} />
+              <span className="text-[10px] text-[#a1a1aa]">Stoch RSI</span>
+            </div>
+            {cfg.stochRsi && (
+              <span className="text-[9px] text-[#52525b]">
+                {cfg.stochRsiPeriod},{cfg.stochSmoothK},{cfg.stochSmoothD}
+              </span>
+            )}
+          </div>
+
+          {/* PSAR */}
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setCfg((c) => ({ ...c, psar: !c.psar }))}
+                className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
+                  cfg.psar ? "bg-[#f59e0b]/20 border-[#f59e0b]/50" : "border-[#27272a]")} />
+              <span className="text-[10px] text-[#a1a1aa]">Parabolic SAR</span>
+            </div>
+            {cfg.psar && (
+              <span className="text-[9px] text-[#52525b]">
+                {cfg.psarStep}/{cfg.psarMax}
               </span>
             )}
           </div>

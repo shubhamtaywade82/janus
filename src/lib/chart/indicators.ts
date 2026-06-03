@@ -142,6 +142,42 @@ export function calcRSI(closes: number[], period = 14): (number | null)[] {
   return result;
 }
 
+// ─── Stochastic RSI ───
+export interface StochRSIResult {
+  k: (number | null)[];  // smoothed %K
+  d: (number | null)[];  // signal %D = SMA(%K, smoothD)
+}
+export function calcStochRSI(
+  closes: number[],
+  rsiPeriod = 14,
+  stochPeriod = 14,
+  smoothK = 3,
+  smoothD = 3
+): StochRSIResult {
+  const n = closes.length;
+  const rsi = calcRSI(closes, rsiPeriod);
+
+  // Raw StochRSI
+  const rawStoch: (number | null)[] = new Array(n).fill(null);
+  for (let i = stochPeriod - 1; i < n; i++) {
+    const window = rsi.slice(i - stochPeriod + 1, i + 1).filter((v): v is number => v !== null);
+    if (window.length < stochPeriod) continue;
+    const lo = Math.min(...window);
+    const hi = Math.max(...window);
+    rawStoch[i] = hi === lo ? 0 : ((rsi[i] as number) - lo) / (hi - lo) * 100;
+  }
+
+  // %K = SMA(rawStoch, smoothK)
+  const kArr = calcSMA(rawStoch.map((v) => v ?? 0), smoothK);
+  const k: (number | null)[] = rawStoch.map((v, i) => v !== null && kArr[i] !== null ? kArr[i] : null);
+
+  // %D = SMA(%K, smoothD)
+  const dArr = calcSMA(k.map((v) => v ?? 0), smoothD);
+  const d: (number | null)[] = k.map((v, i) => v !== null && dArr[i] !== null ? dArr[i] : null);
+
+  return { k, d };
+}
+
 // ─── MACD ───
 export interface MACDResult {
   macd:      (number | null)[];  // fast EMA - slow EMA
@@ -187,6 +223,56 @@ export function calcMACD(
   }
 
   return { macd, signal: signalArr, histogram };
+}
+
+// ─── Parabolic SAR ───
+// Returns SAR values per bar (null during warmup). Direction: "up" = bullish (SAR below price).
+export interface PSARResult {
+  values:    (number | null)[];
+  direction: ("up" | "down" | null)[];
+}
+export function calcPSAR(
+  highs: number[], lows: number[], closes: number[],
+  step = 0.02, max = 0.2
+): PSARResult {
+  const n = closes.length;
+  const values:    (number | null)[] = new Array(n).fill(null);
+  const direction: ("up" | "down" | null)[] = new Array(n).fill(null);
+  if (n < 2) return { values, direction };
+
+  let bull = closes[1] > closes[0];
+  let sar  = bull ? lows[0]  : highs[0];
+  let ep   = bull ? highs[0] : lows[0];
+  let af   = step;
+
+  for (let i = 1; i < n; i++) {
+    // Advance SAR
+    let nextSar = sar + af * (ep - sar);
+
+    if (bull) {
+      nextSar = Math.min(nextSar, lows[i - 1], i >= 2 ? lows[i - 2] : lows[i - 1]);
+      if (lows[i] < nextSar) {
+        // Flip to bearish
+        bull = false; nextSar = ep; ep = lows[i]; af = step;
+      } else {
+        if (highs[i] > ep) { ep = highs[i]; af = Math.min(af + step, max); }
+      }
+    } else {
+      nextSar = Math.max(nextSar, highs[i - 1], i >= 2 ? highs[i - 2] : highs[i - 1]);
+      if (highs[i] > nextSar) {
+        // Flip to bullish
+        bull = true; nextSar = ep; ep = highs[i]; af = step;
+      } else {
+        if (lows[i] < ep) { ep = lows[i]; af = Math.min(af + step, max); }
+      }
+    }
+
+    sar = nextSar;
+    values[i]    = sar;
+    direction[i] = bull ? "up" : "down";
+  }
+
+  return { values, direction };
 }
 
 // ─── Nadaraya-Watson Envelope ───

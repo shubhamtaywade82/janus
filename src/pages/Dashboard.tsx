@@ -29,7 +29,7 @@ import type { AlertConfig } from "@/lib/chart/alert-engine";
 import { checkIndicatorAlerts, checkSMCAlerts } from "@/lib/chart/alert-engine";
 import type { IndicatorConfig } from "@/components/IndicatorPanel";
 import { EMA_COLORS, SMA_COLORS } from "@/components/IndicatorPanel";
-import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, calcNW, calcMACD } from "@/lib/chart/indicators";
+import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, calcNW, calcMACD, calcStochRSI, calcPSAR } from "@/lib/chart/indicators";
 import type { PriceActionData } from "@/lib/chart/pa-types";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 
@@ -161,7 +161,9 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   // Indicator line series — keyed by "ema-21", "sma-50", "bb-upper", "st", "rsi", "vwap" etc.
   const indicatorSeriesRef = useRef<Map<string, any>>(new Map());
   // RSI reference price lines (70/50/30)
-  const rsiPriceLinesRef = useRef<any[]>([]);
+  const rsiPriceLinesRef      = useRef<any[]>([]);
+  // StochRSI reference price lines (80/20)
+  const stochRsiPriceLinesRef = useRef<any[]>([]);
   // CVD histogram series ref (per-bar delta; line goes through indicatorSeriesRef)
   const cvdHistRef  = useRef<any>(null);
   // MACD histogram series ref
@@ -898,6 +900,49 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       addOrUpdate("nw-lower", lower,    "rgba(168,85,247,0.50)", true);
     } else {
       ["nw-est", "nw-upper", "nw-lower"].forEach(removeKey);
+    }
+
+    // Stochastic RSI — %K (cyan) + %D (amber) on "stochrsi" sub-pane with 80/20 lines
+    if (indicatorCfg.stochRsi) {
+      const { k, d } = calcStochRSI(closes, indicatorCfg.stochRsiPeriod, indicatorCfg.stochRsiPeriod, indicatorCfg.stochSmoothK, indicatorCfg.stochSmoothD);
+      addOrUpdate("stochrsi-k", k, "rgba(6,182,212,0.85)",  false, "stochrsi");
+      addOrUpdate("stochrsi-d", d, "rgba(245,158,11,0.85)", false, "stochrsi");
+      const scaleOpts = { scaleMargins: { top: 0.76, bottom: 0 }, borderVisible: false };
+      serMap.get("stochrsi-k")?.priceScale().applyOptions(scaleOpts);
+      serMap.get("stochrsi-d")?.priceScale().applyOptions(scaleOpts);
+      // 80/20 reference lines
+      const kSeries = serMap.get("stochrsi-k");
+      if (kSeries && stochRsiPriceLinesRef.current.length === 0) {
+        stochRsiPriceLinesRef.current = [
+          kSeries.createPriceLine({ price: 80, color: "rgba(239,68,68,0.45)",  lineWidth: 1, lineStyle: 2, title: "OB" }),
+          kSeries.createPriceLine({ price: 50, color: "rgba(113,113,122,0.30)", lineWidth: 1, lineStyle: 3, title: "" }),
+          kSeries.createPriceLine({ price: 20, color: "rgba(34,197,94,0.45)",  lineWidth: 1, lineStyle: 2, title: "OS" }),
+        ];
+      }
+    } else {
+      const kSeries = serMap.get("stochrsi-k");
+      if (kSeries) {
+        stochRsiPriceLinesRef.current.forEach((l) => { try { kSeries.removePriceLine(l); } catch { /* safe */ } });
+      }
+      stochRsiPriceLinesRef.current = [];
+      removeKey("stochrsi-k");
+      removeKey("stochrsi-d");
+    }
+
+    // Parabolic SAR — bull dots (green) above price, bear dots (red) below, on main pane
+    if (indicatorCfg.psar) {
+      const { values, direction } = calcPSAR(highs, lows, closes, indicatorCfg.psarStep, indicatorCfg.psarMax);
+      const bullSAR = values.map((v, i) => direction[i] === "up"   ? v : null);
+      const bearSAR = values.map((v, i) => direction[i] === "down" ? v : null);
+      addOrUpdate("psar-bull", bullSAR, "hsl(var(--janus-up))",   false, "right");
+      addOrUpdate("psar-bear", bearSAR, "hsl(var(--janus-down))", false, "right");
+      // Style as dotted (lineStyle 3) to visually approximate dots
+      const dotStyle = { lineWidth: 1, lineStyle: 3 } as const;
+      serMap.get("psar-bull")?.applyOptions({ ...dotStyle, lineWidth: 1 });
+      serMap.get("psar-bear")?.applyOptions({ ...dotStyle, lineWidth: 1 });
+    } else {
+      removeKey("psar-bull");
+      removeKey("psar-bear");
     }
 
   }, [indicatorCfg, data, interval]);
