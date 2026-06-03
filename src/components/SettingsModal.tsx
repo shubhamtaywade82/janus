@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
 import { trpc } from "@/providers/trpc";
-import { X, Shield, Key, Check, Loader2, Eye, EyeOff } from "lucide-react";
+import { X, Shield, Key, Check, Loader2, Eye, EyeOff, Palette } from "lucide-react";
+import { ThemeSwitcher } from "@/components/ThemeSwitcher";
 
 interface SettingsModalProps {
   isOpen: boolean;
@@ -98,6 +99,15 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
           >
             <X size={14} />
           </button>
+        </div>
+
+        {/* Appearance */}
+        <div className="px-4 py-3 border-b border-[#27272a]">
+          <div className="flex items-center gap-2 mb-3">
+            <Palette size={13} className="text-[#a855f7]" />
+            <span className="text-[10px] font-semibold text-[#f4f4f5]">Appearance</span>
+          </div>
+          <ThemeSwitcher />
         </div>
 
         {/* Form Body */}
