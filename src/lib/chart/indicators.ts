@@ -247,6 +247,81 @@ export function calcADX(
   return { adx, diPlus, diMinus };
 }
 
+// ─── Linear Regression (internal) ───
+// Returns the least-squares regression VALUE at the last point of each window.
+function linReg(values: number[], period: number): (number | null)[] {
+  const n = values.length;
+  const result: (number | null)[] = new Array(n).fill(null);
+  const sx  = (period * (period - 1)) / 2;
+  const sx2 = (period * (period - 1) * (2 * period - 1)) / 6;
+  const denom = period * sx2 - sx * sx;
+  if (denom === 0) return result;
+  for (let i = period - 1; i < n; i++) {
+    let sy = 0, sxy = 0;
+    for (let j = 0; j < period; j++) {
+      sy  += values[i - period + 1 + j];
+      sxy += j * values[i - period + 1 + j];
+    }
+    const b = (period * sxy - sx * sy) / denom;
+    const a = (sy - b * sx) / period;
+    result[i] = a + b * (period - 1);
+  }
+  return result;
+}
+
+// ─── TTM Squeeze ───
+// Squeeze = Bollinger Bands inside Keltner Channels (low-volatility coil).
+// Momentum = LinReg(close - midpoint(donchian_mid, SMA), period).
+// 4-color histogram mirrors standard TradingView TTM Squeeze coloring.
+export type SqueezeColor = "g_strong" | "g_weak" | "r_strong" | "r_weak";
+export interface TTMSqueezeResult {
+  squeeze:   (boolean | null)[];   // true = squeeze active (BB inside KC)
+  momentum:  (number | null)[];    // histogram value
+  histColor: (SqueezeColor | null)[];
+}
+export function calcTTMSqueeze(
+  closes: number[], highs: number[], lows: number[],
+  period = 20, bbMult = 2.0, kMult = 1.5
+): TTMSqueezeResult {
+  const n = closes.length;
+  const { upper: bbU, lower: bbL } = calcBB(closes, period, bbMult);
+  const { upper: kcU, lower: kcL } = calcKeltner(highs, lows, closes, period, period, kMult);
+
+  const squeeze: (boolean | null)[] = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    if (bbU[i] !== null && kcU[i] !== null) {
+      squeeze[i] = (bbU[i] as number) < (kcU[i] as number) &&
+                   (bbL[i] as number) > (kcL[i] as number);
+    }
+  }
+
+  // Momentum delta: close − ((donchian_mid + SMA) / 2)
+  const sma = calcSMA(closes, period);
+  const delta: number[] = new Array(n).fill(0);
+  for (let i = period - 1; i < n; i++) {
+    let hi = -Infinity, lo = Infinity;
+    for (let j = i - period + 1; j <= i; j++) {
+      if (highs[j] > hi) hi = highs[j];
+      if (lows[j]  < lo) lo = lows[j];
+    }
+    delta[i] = closes[i] - ((hi + lo) / 2 + (sma[i] as number)) / 2;
+  }
+
+  const momentum = linReg(delta, period);
+
+  // 4-color: g_strong (↑ bull), g_weak (↓ weakening bull), r_strong (↓ bear), r_weak (↑ weakening bear)
+  const histColor: (SqueezeColor | null)[] = new Array(n).fill(null);
+  for (let i = 1; i < n; i++) {
+    const cur = momentum[i], prev = momentum[i - 1];
+    if (cur === null || prev === null) continue;
+    histColor[i] = cur >= 0
+      ? (cur > prev ? "g_strong" : "g_weak")
+      : (cur < prev ? "r_strong" : "r_weak");
+  }
+
+  return { squeeze, momentum, histColor };
+}
+
 // ─── Keltner Channels ───
 export interface KeltnerResult {
   upper:  (number | null)[];
