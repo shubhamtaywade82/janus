@@ -274,7 +274,7 @@ export default function Portfolio() {
   // Query historical positions only when viewing non-open filters
   const { data: dbPositions } = trpc.trading.positions.useQuery(
     { userId: 1, status: statusFilter as any },
-    { enabled: statusFilter !== "open", refetchInterval: 10000 }
+    { enabled: statusFilter !== "open" && statusFilter !== "equity_curve", refetchInterval: 10000 }
   );
 
   // Always-on direct DB query for paper positions — independent of portfolioStream
@@ -489,7 +489,7 @@ export default function Portfolio() {
 
           {/* Status filter */}
           <div className="flex items-center gap-1">
-            {["open", "closed", "liquidated"].map((s) => (
+            {["open", "closed", "liquidated", "equity_curve"].map((s) => (
               <button
                 key={s}
                 onClick={() => setStatusFilter(s)}
@@ -500,7 +500,7 @@ export default function Portfolio() {
                     : "bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5]"
                 )}
               >
-                {s}
+                {s === "equity_curve" ? "Equity Curve" : s}
               </button>
             ))}
           </div>
@@ -521,7 +521,6 @@ export default function Portfolio() {
           const availFree = parseFloat((portfolio as any)?.availableInr || "0");
           const lockedMgn = parseFloat((portfolio as any)?.lockedInr || "0");
           const walletCcy = (portfolio as any)?.walletCurrency ?? "INR";
-          const rate = parseFloat((portfolio as any)?.usdtInrRate || String(usdtInrRate));
           return (
             <div className="grid grid-cols-3 gap-3">
               <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
@@ -680,130 +679,135 @@ export default function Portfolio() {
         </div>
       )}
 
-      {/* Positions Table */}
-      <div className="flex-1 bg-[#18181b] border border-[#27272a] rounded-lg overflow-hidden flex flex-col">
-        <div className="px-4 py-2 border-b border-[#27272a] flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-semibold text-[#f4f4f5]">
-              {statusFilter === "open" ? "Open Positions" : statusFilter === "closed" ? "Closed Positions" : "Liquidated Positions"}
-            </span>
-            {statusFilter === "open" && (
-              <div className="flex rounded overflow-hidden border border-[#27272a] text-[10px] font-semibold">
-                <button
-                  onClick={() => setPortfolioMode("live")}
-                  className={cn(
-                    "px-2.5 py-1 transition-colors",
-                    portfolioMode === "live"
-                      ? "bg-[#22c55e]/10 text-[#22c55e]"
-                      : "bg-[#18181b] text-[#52525b] hover:text-[#f4f4f5]"
-                  )}
-                >
-                  LIVE {openLivePositions.length > 0 && `(${openLivePositions.length})`}
-                </button>
-                <button
-                  onClick={() => setPortfolioMode("paper")}
-                  className={cn(
-                    "px-2.5 py-1 border-l border-[#27272a] transition-colors",
-                    portfolioMode === "paper"
-                      ? "bg-[#f59e0b]/10 text-[#f59e0b]"
-                      : "bg-[#18181b] text-[#52525b] hover:text-[#f4f4f5]"
-                  )}
-                >
-                  PAPER {paperPositions.length > 0 && `(${paperPositions.length})`}
-                </button>
+      {/* Main Content (Positions/Trades OR Equity Curve Dashboard) */}
+      {statusFilter === "equity_curve" ? (
+        <PerformanceDashboard userId={1} isFullPage={true} />
+      ) : (
+        <>
+          {/* Positions Table */}
+          <div className="flex-1 bg-[#18181b] border border-[#27272a] rounded-lg overflow-hidden flex flex-col">
+            <div className="px-4 py-2 border-b border-[#27272a] flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-semibold text-[#f4f4f5]">
+                  {statusFilter === "open" ? "Open Positions" : statusFilter === "closed" ? "Closed Positions" : "Liquidated Positions"}
+                </span>
+                {statusFilter === "open" && (
+                  <div className="flex rounded overflow-hidden border border-[#27272a] text-[10px] font-semibold">
+                    <button
+                      onClick={() => setPortfolioMode("live")}
+                      className={cn(
+                        "px-2.5 py-1 transition-colors",
+                        portfolioMode === "live"
+                          ? "bg-[#22c55e]/10 text-[#22c55e]"
+                          : "bg-[#18181b] text-[#52525b] hover:text-[#f4f4f5]"
+                      )}
+                    >
+                      LIVE {openLivePositions.length > 0 && `(${openLivePositions.length})`}
+                    </button>
+                    <button
+                      onClick={() => setPortfolioMode("paper")}
+                      className={cn(
+                        "px-2.5 py-1 border-l border-[#27272a] transition-colors",
+                        portfolioMode === "paper"
+                          ? "bg-[#f59e0b]/10 text-[#f59e0b]"
+                          : "bg-[#18181b] text-[#52525b] hover:text-[#f4f4f5]"
+                      )}
+                    >
+                      PAPER {paperPositions.length > 0 && `(${paperPositions.length})`}
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          <span className="text-[10px] text-[#71717a]">
-            {allPositions?.length || 0} positions
-          </span>
-        </div>
-        <div className="flex-1 overflow-auto scrollbar-thin">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-[#27272a]">
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Symbol</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Side</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Entry</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Current</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Size</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Lev</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Mode</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Margin</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Maint.</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">PnL</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Liq%</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {allPositions?.map((pos: any) => (
-                <PositionRow key={pos.id} position={pos} livePrice={livePrices[pos.symbol]} />
-              ))}
-              {(!allPositions || allPositions.length === 0) && (
-                <tr>
-                  <td colSpan={12} className="px-3 py-8 text-center text-xs text-[#71717a]">
-                    <Target size={20} className="mx-auto mb-2 opacity-30" />
-                    No {statusFilter} positions found
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Recent Trades */}
-      {portfolio && portfolio.recentTrades.length > 0 && (
-        <div className="bg-[#18181b] border border-[#27272a] rounded-lg overflow-hidden">
-          <div className="px-4 py-2 border-b border-[#27272a]">
-            <span className="text-xs font-semibold text-[#f4f4f5]">Recent Trades</span>
-          </div>
-          <div className="max-h-32 overflow-auto scrollbar-thin">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-[#27272a]">
-                  <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Time</th>
-                  <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Symbol</th>
-                  <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Side</th>
-                  <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Price</th>
-                  <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Size</th>
-                  <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {portfolio.recentTrades.map((trade: any) => (
-                  <tr key={trade.id} className="border-b border-[#27272a]/50 hover:bg-[#27272a]/30">
-                    <td className="px-3 py-1 text-[10px] text-[#52525b]">
-                      {new Date(trade.createdAt).toLocaleTimeString()}
-                    </td>
-                    <td className="px-3 py-1 text-[10px] text-[#f4f4f5]">{trade.symbol}</td>
-                    <td className="px-3 py-1">
-                      <span className={cn(
-                        "text-[10px] px-1 rounded",
-                        trade.side === "buy" ? "text-[#22c55e] bg-[#22c55e]/10" : "text-[#ef4444] bg-[#ef4444]/10"
-                      )}>
-                        {trade.side.toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="px-3 py-1 text-[10px] text-[#f4f4f5] tabular-nums">
-                      {parseFloat(trade.price).toFixed(2)}
-                    </td>
-                    <td className="px-3 py-1 text-[10px] text-[#71717a] tabular-nums">
-                      {parseFloat(trade.size).toFixed(4)}
-                    </td>
-                    <td className="px-3 py-1 text-[10px] text-[#71717a] tabular-nums">
-                      {parseFloat(trade.total).toFixed(2)}
-                    </td>
+              <span className="text-[10px] text-[#71717a]">
+                {allPositions?.length || 0} positions
+              </span>
+            </div>
+            <div className="flex-1 overflow-auto scrollbar-thin">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-[#27272a]">
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Symbol</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Side</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Entry</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Current</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Size</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Lev</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Mode</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Margin</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Maint.</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">PnL</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Liq%</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {allPositions?.map((pos: any) => (
+                    <PositionRow key={pos.id} position={pos} livePrice={livePrices[pos.symbol]} />
+                  ))}
+                  {(!allPositions || allPositions.length === 0) && (
+                    <tr>
+                      <td colSpan={12} className="px-3 py-8 text-center text-xs text-[#71717a]">
+                        <Target size={20} className="mx-auto mb-2 opacity-30" />
+                        No {statusFilter} positions found
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+
+          {/* Recent Trades */}
+          {portfolio && portfolio.recentTrades.length > 0 && (
+            <div className="bg-[#18181b] border border-[#27272a] rounded-lg overflow-hidden">
+              <div className="px-4 py-2 border-b border-[#27272a]">
+                <span className="text-xs font-semibold text-[#f4f4f5]">Recent Trades</span>
+              </div>
+              <div className="max-h-32 overflow-auto scrollbar-thin">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-[#27272a]">
+                      <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Time</th>
+                      <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Symbol</th>
+                      <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Side</th>
+                      <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Price</th>
+                      <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Size</th>
+                      <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {portfolio.recentTrades.map((trade: any) => (
+                      <tr key={trade.id} className="border-b border-[#27272a]/50 hover:bg-[#27272a]/30">
+                        <td className="px-3 py-1 text-[10px] text-[#52525b]">
+                          {new Date(trade.createdAt).toLocaleTimeString()}
+                        </td>
+                        <td className="px-3 py-1 text-[10px] text-[#f4f4f5]">{trade.symbol}</td>
+                        <td className="px-3 py-1">
+                          <span className={cn(
+                            "text-[10px] px-1 rounded",
+                            trade.side === "buy" ? "text-[#22c55e] bg-[#22c55e]/10" : "text-[#ef4444] bg-[#ef4444]/10"
+                          )}>
+                            {trade.side.toUpperCase()}
+                          </span>
+                        </td>
+                        <td className="px-3 py-1 text-[10px] text-[#f4f4f5] tabular-nums">
+                          {parseFloat(trade.price).toFixed(2)}
+                        </td>
+                        <td className="px-3 py-1 text-[10px] text-[#71717a] tabular-nums">
+                          {parseFloat(trade.size).toFixed(4)}
+                        </td>
+                        <td className="px-3 py-1 text-[10px] text-[#71717a] tabular-nums">
+                          {parseFloat(trade.total).toFixed(2)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
       )}
-      {/* Performance Dashboard */}
-      <PerformanceDashboard userId={1} />
 
       {/* Hidden ticker subscriptions — one component per open symbol */}
       {symbols.map((sym) => (
