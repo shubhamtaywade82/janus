@@ -21,7 +21,7 @@
 | `src/pages/Logs.tsx` | ~39 | ✅ direction colors done |
 | `src/components/Layout.tsx` | ~23 | ⬜ pending |
 | `src/components/AutoTraderPanel.tsx` | ~59 | ✅ direction colors done |
-| `src/components/AlertsModal.tsx` | ~45 | ⬜ pending |
+| `src/components/AlertsModal.tsx` | ~45 | ✅ direction colors done |
 | `src/components/PerformanceDashboard.tsx` | ~40 | ⬜ pending |
 | `src/components/SettingsModal.tsx` | ~26 | ⬜ pending |
 | `src/components/AlertConfigPanel.tsx` | ~15 | ⬜ pending |

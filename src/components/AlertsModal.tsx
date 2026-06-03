@@ -356,7 +356,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
               )}
 
               {type === "volatility" && (
-                <div className="p-2.5 rounded border border-[#ef4444]/20 bg-[#ef4444]/5 text-[#ef4444] text-[10px] leading-relaxed flex gap-2">
+                <div className="p-2.5 rounded border border-j-down/20 bg-j-down/5 text-j-down text-[10px] leading-relaxed flex gap-2">
                   <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
                   <span>Triggers instantly when the symbol's volatility standard deviation enters the <strong>HIGH</strong> regime state.</span>
                 </div>
@@ -402,7 +402,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                         className={cn(
                           "px-2 py-0.5 rounded text-[8px] font-bold border uppercase transition-all",
                           rule.isActive
-                            ? "bg-[#0ecb81]/15 text-[#0ecb81] border-[#0ecb81]/40"
+                            ? "bg-j-up-bright/15 text-j-up-bright border-j-up-bright/40"
                             : "bg-[#27272a]/30 text-[#52525b] border-[#27272a]"
                         )}
                       >
@@ -412,7 +412,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                       {/* Delete Button */}
                       <button
                         onClick={() => handleDeleteRule(rule.id)}
-                        className="text-[#71717a] hover:text-[#ef4444] p-1.5 hover:bg-[#27272a]/50 rounded transition-colors"
+                        className="text-[#71717a] hover:text-j-down p-1.5 hover:bg-[#27272a]/50 rounded transition-colors"
                       >
                         <Trash2 size={12} />
                       </button>
@@ -431,7 +431,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                 {logs.length > 0 && (
                   <button
                     onClick={handleClearLogs}
-                    className="text-[9px] text-[#ef4444] hover:underline flex items-center gap-1 font-semibold"
+                    className="text-[9px] text-j-down hover:underline flex items-center gap-1 font-semibold"
                   >
                     Clear History
                   </button>
@@ -448,7 +448,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                   {logs.map((log) => (
                     <div
                       key={log.id}
-                      className="p-2.5 rounded border border-[#27272a] bg-[#18181b]/20 flex flex-col gap-0.5 text-[10px] leading-relaxed border-l-2 border-l-[#ef4444]"
+                      className="p-2.5 rounded border border-[#27272a] bg-[#18181b]/20 flex flex-col gap-0.5 text-[10px] leading-relaxed border-l-2 border-l-j-down"
                     >
                       <div className="flex justify-between text-[8px] text-[#71717a] font-semibold">
                         <span className="text-white/60">{log.symbol}</span>
