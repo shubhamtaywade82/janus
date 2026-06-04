@@ -62,26 +62,26 @@ export function AlertConfigPanel({ onChange }: Props) {
 
   const activeCount = Object.values(cfg).filter(Boolean).length;
 
-  const Row = ({ key, label, desc }: { key: keyof AlertConfig; label: string; desc: string }) => (
-    <button key={key} onClick={() => flip(key)}
+  const Row = ({ itemKey, label, desc }: { itemKey: keyof AlertConfig; label: string; desc: string }) => (
+    <button onClick={() => flip(itemKey)}
       className={cn(
         "w-full flex items-center justify-between px-2 py-1 rounded text-left transition-colors mb-0.5",
-        cfg[key] ? "bg-[#18181b]" : "hover:bg-[#18181b]/50"
+        cfg[itemKey] ? "bg-[#18181b]" : "hover:bg-[#18181b]/50"
       )}
     >
       <div>
-        <div className={cn("text-[10px] font-medium", cfg[key] ? "text-[#f4f4f5]" : "text-[#52525b]")}>
+        <div className={cn("text-[10px] font-medium", cfg[itemKey] ? "text-[#f4f4f5]" : "text-[#52525b]")}>
           {label}
         </div>
         <div className="text-[8px] text-[#3f3f46]">{desc}</div>
       </div>
       <div className={cn(
         "text-[8px] font-bold px-1.5 py-0.5 rounded border flex-shrink-0 ml-2",
-        cfg[key]
+        cfg[itemKey]
           ? "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/30"
           : "bg-transparent text-[#3f3f46] border-[#27272a]"
       )}>
-        {cfg[key] ? "ON" : "OFF"}
+        {cfg[itemKey] ? "ON" : "OFF"}
       </div>
     </button>
   );
@@ -109,13 +109,13 @@ export function AlertConfigPanel({ onChange }: Props) {
           <div className="text-[9px] text-[#52525b] uppercase tracking-wide mb-2">Alert Conditions</div>
 
           <div className="text-[9px] text-[#3b82f6] mb-1 px-1">Indicators</div>
-          {INDICATOR_ALERTS.map((a) => <Row key={a.key} {...a} />)}
+          {INDICATOR_ALERTS.map((a) => <Row key={a.key} itemKey={a.key} label={a.label} desc={a.desc} />)}
 
           <div className="text-[9px] text-[#10b981] mt-2 mb-1 px-1">KNN SuperTrend</div>
-          {KNN_ALERTS.map((a) => <Row key={a.key} {...a} />)}
+          {KNN_ALERTS.map((a) => <Row key={a.key} itemKey={a.key} label={a.label} desc={a.desc} />)}
 
           <div className="text-[9px] text-[#a855f7] mt-2 mb-1 px-1">SMC / ICT</div>
-          {SMC_ALERTS.map((a) => <Row key={a.key} {...a} />)}
+          {SMC_ALERTS.map((a) => <Row key={a.key} itemKey={a.key} label={a.label} desc={a.desc} />)}
 
           <div className="border-t border-[#27272a] mt-2 pt-2 flex gap-2">
             <button onClick={() => setCfg(ALERT_DEFAULTS)}
