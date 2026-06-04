@@ -23,6 +23,7 @@ import { StructurePrimitive } from "@/lib/chart/primitives/StructurePrimitive";
 import { VolumeProfilePrimitive } from "@/lib/chart/primitives/VolumeProfilePrimitive";
 import { SessionShadingPrimitive } from "@/lib/chart/primitives/SessionShadingPrimitive";
 import { CrosshairTooltipPrimitive } from "@/lib/chart/primitives/CrosshairTooltipPrimitive";
+import { LiquiditySweepPrimitive, type SweepMarker } from "@/lib/chart/primitives/LiquiditySweepPrimitive";
 import { ChartOverlayPanel } from "@/components/ChartOverlayPanel";
 import type { OverlayToggles } from "@/components/ChartOverlayPanel";
 import { IndicatorPanel } from "@/components/IndicatorPanel";
@@ -59,7 +60,7 @@ const resolveCSSColor = (varName: string, fallback: string): string => {
 };
 
 // ─── TradingView Lightweight Chart Component ───
-const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice, cvdBars }: {
+const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice, cvdBars, liquidityEvents }: {
   data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string;
   onLoadMore?: (beforeTime: number) => void;
   overlayData?: PriceActionData | null;
@@ -68,6 +69,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   bidPrice?: number;
   askPrice?: number;
   cvdBars?: { ts: number; delta: number; cumulative: number }[];
+  liquidityEvents?: Array<{ id: string; type: string; priority: string; symbol: string; timestamp: number; message: string; data?: any }>;
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
@@ -166,6 +168,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const strPrimRef     = useRef<StructurePrimitive | null>(null);
   const sessionPrimRef = useRef<SessionShadingPrimitive | null>(null);
   const tooltipPrimRef = useRef<CrosshairTooltipPrimitive | null>(null);
+  const sweepPrimRef = useRef<LiquiditySweepPrimitive | null>(null);
   const markersPluginRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
   // OBV series
   const obvSeriesRef = useRef<any>(null);
@@ -548,11 +551,14 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       candlestickSeriesRef.current.attachPrimitive(strPrim);
       candlestickSeriesRef.current.attachPrimitive(sessionPrim);
       candlestickSeriesRef.current.attachPrimitive(tooltipPrim);
+      const sweepPrim = new LiquiditySweepPrimitive();
+      candlestickSeriesRef.current.attachPrimitive(sweepPrim);
       obPrimRef.current      = obPrim;
       fvgPrimRef.current     = fvgPrim;
       strPrimRef.current     = strPrim;
       sessionPrimRef.current = sessionPrim;
       tooltipPrimRef.current = tooltipPrim;
+      sweepPrimRef.current   = sweepPrim;
       // createSeriesMarkers replaces the old .setMarkers() — create lazily only when needed
       // to avoid interfering with auto-scroll and chart rendering pipeline
     } catch (err) {
@@ -564,6 +570,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       strPrimRef.current     = null;
       sessionPrimRef.current = null;
       tooltipPrimRef.current = null;
+      sweepPrimRef.current   = null;
       markersPluginRef.current = null;
     };
   }, [chartInitialized]);
@@ -887,6 +894,29 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
 
     // Primitives call requestUpdate() internally via their setters above
   }, [overlayData, overlayToggles]);
+
+  // ─── Sweep markers effect ───
+  useEffect(() => {
+    if (!sweepPrimRef.current) return;
+    const enabled = overlayToggles?.sweepMarkers ?? true;
+    sweepPrimRef.current.setEnabled(enabled);
+
+    if (!enabled || !liquidityEvents || liquidityEvents.length === 0) {
+      sweepPrimRef.current.setMarkers([]);
+      return;
+    }
+
+    const markers: SweepMarker[] = liquidityEvents
+      .filter((e) => ["SSS", "SS", "S"].includes(e.priority))
+      .map((e) => ({
+        time: e.timestamp,
+        type: e.type,
+        priority: e.priority as SweepMarker["priority"],
+        message: e.message,
+      }));
+
+    sweepPrimRef.current.setMarkers(markers);
+  }, [liquidityEvents, overlayToggles]);
 
   // ─── Indicator series update ───
   useEffect(() => {
@@ -2013,7 +2043,7 @@ function aggregateOrderBook(levels: [string, string][], step: number, isBid: boo
 }
 
 // ─── Order Book Component ───
-const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerData: any; markPrice?: number }) => {
+const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLiquidityEvent }: { symbol: string; tickerData: any; markPrice?: number; liquidityEvents: any[]; onLiquidityEvent: (event: any) => void }) => {
   const [activeTab, setActiveTab] = useState<"book" | "telemetry">("book");
   const [depth, setDepth] = useState<any>(null);
 
@@ -2049,12 +2079,11 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
     { refetchInterval: 1000, enabled: activeTab === "telemetry" }
   );
 
-  const [liquidityEvents, setLiquidityEvents] = useState<any[]>([]);
   trpc.market.liquidityEventStream.useSubscription(
     { symbol },
     {
       onData: (event: any) => {
-        setLiquidityEvents((prev) => [event, ...prev].slice(0, 50));
+        onLiquidityEvent(event);
       },
     }
   );
@@ -2728,6 +2757,7 @@ const Dashboard = () => {
     if (klineKeyRef.current !== newKey) {
       klineKeyRef.current = newKey;
       setKlines([]);
+      setLiquidityEvents([]);
     }
   }, [selectedSymbol, interval]);
 
@@ -2771,9 +2801,14 @@ const Dashboard = () => {
   const [overlayToggles, setOverlayToggles] = useState<OverlayToggles>(() => {
     try {
       const saved = localStorage.getItem("janus_chart_overlays");
-      return saved ? JSON.parse(saved) : { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false };
-    } catch { return { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false }; }
+      return saved ? JSON.parse(saved) : { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false, sweepMarkers: true };
+    } catch { return { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false, sweepMarkers: true }; }
   });
+
+  const [liquidityEvents, setLiquidityEvents] = useState<any[]>([]);
+  const handleLiquidityEvent = useCallback((event: any) => {
+    setLiquidityEvents((prev) => [event, ...prev].slice(0, 50));
+  }, []);
 
   const { data: paData } = trpc.market.priceAction.useQuery(
     { symbol: selectedSymbol, interval, limit: 200 },
@@ -3103,6 +3138,7 @@ const Dashboard = () => {
                 bidPrice={bestBid ?? undefined}
                 askPrice={bestAsk ?? undefined}
                 cvdBars={cvdBars}
+                liquidityEvents={liquidityEvents}
               />
             ) : initialKlines === null || initialKlines === undefined ? (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
@@ -3448,7 +3484,7 @@ const Dashboard = () => {
           <div className={cn("flex-1 flex flex-col overflow-hidden", sidebarTab !== "market" && "hidden")}>
             {/* Order Book */}
             <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-              <OrderBook symbol={selectedSymbol} tickerData={tickerData} />
+              <OrderBook symbol={selectedSymbol} tickerData={tickerData} liquidityEvents={liquidityEvents} onLiquidityEvent={handleLiquidityEvent} />
             </div>
             {/* Recent Trades */}
             <div className="h-64 border-t border-[#27272a] flex flex-col overflow-hidden bg-[#09090b]">
