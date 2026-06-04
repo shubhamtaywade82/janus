@@ -21,6 +21,7 @@ import { fetchKlines, fetchOpenInterest, SUPPORTED_PAIRS } from "../services/bin
 import { subscribeToSymbol } from "../services/streaming";
 import { marketStateManager } from "../services/market-state";
 import { STRATEGY_CONFIGS, type StrategyType } from "../services/strategy-config";
+import { globalLlmAdvisor } from "../services/llm-advisor";
 import {
   evaluateGridStrategy,
   evaluateMomentumReversal,
@@ -1596,7 +1597,19 @@ export const signalRouter = createRouter({
         signalsActive.accumulation.detected ? "ACCUMULATION" :
         volume.distribution ? "DISTRIBUTION" :
         signalsActive.continuation.detected ? "TRENDING" : "RANGING";
-      const verdict = `${binanceSymbol} bias is ${overallBias} (${confidence}% structure confidence). OI: ${openInterest.interpretation}, funding: ${funding.sentiment}, CVD: ${cvd.trend}. Action: ${recommendedAction}.`;
+
+      const verdict = await globalLlmAdvisor.generateMarketSummary(binanceSymbol, {
+        overallBias,
+        confidence,
+        mtf,
+        nearestOB,
+        nearestFVG,
+        openInterest,
+        funding,
+        cvd,
+        orderbook,
+        volumeProfile,
+      });
 
       return {
         symbol: binanceSymbol,

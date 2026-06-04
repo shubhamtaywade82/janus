@@ -326,6 +326,34 @@ sizeMult: 0.5 (reduce) | 1.0 (normal) | 1.5 (increase, only if very high convict
     }
   }
 
+  async generateMarketSummary(symbol: string, data: any): Promise<string> {
+    const key = this.pickHealthyKey();
+    if (!key) return "AI Summary unavailable (no healthy LLM key configured).";
+
+    const prompt = `You are an institutional crypto futures research analyst. Summarize this market data structure and provide a concise, high-conviction narrative and trade setup recommendation for ${symbol}.
+    
+    Data:
+    - Overall Bias: ${data.overallBias} (${data.confidence}% structure confidence)
+    - Multi-timeframe trend: ${JSON.stringify(data.mtf)}
+    - Nearest Order Block: ${JSON.stringify(data.nearestOB)}
+    - Nearest FVG: ${JSON.stringify(data.nearestFVG)}
+    - Open Interest: ${JSON.stringify(data.openInterest)}
+    - Funding Rate: ${JSON.stringify(data.funding)}
+    - CVD Trend: ${JSON.stringify(data.cvd)}
+    - Order Book Imbalance Ratio: ${data.orderbook.ratio} (Dominant side: ${data.orderbook.dominant_side})
+    - Volume Profile Position: ${data.volumeProfile.current_position} (POC: ${data.volumeProfile.poc})
+    
+    Provide a professional, concise 3-4 sentence narrative verdict summarizing the market phase and warning signals. Respond ONLY with the plain text summary, do not add JSON formatting or intro/outro text.`;
+
+    try {
+      const raw = await this.callLlm(key, prompt);
+      return raw.trim();
+    } catch (err: any) {
+      console.warn("[llm-advisor] Failed to generate market summary:", err.message);
+      return "AI Summary generation failed. (LLM request timed out or returned an error).";
+    }
+  }
+
   getKeyById(id: number): LlmKey | undefined {
     return this.keys.find((k) => k.id === id);
   }

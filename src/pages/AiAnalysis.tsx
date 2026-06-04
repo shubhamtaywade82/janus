@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { trpc } from "@/providers/trpc";
 import {
   Brain,
@@ -16,14 +16,47 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
-const SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"];
+const DEFAULT_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"];
 
 export default function AiAnalysis() {
-  const [selectedSymbol, setSelectedSymbol] = useState("BTCUSDT");
+  // Query open positions to auto-select if nothing is saved in localStorage
+  const { data: openPositions } = trpc.trading.positions.useQuery({ userId: 1, status: "open" });
+
+  const [selectedSymbol, setSelectedSymbol] = useState(() => {
+    return localStorage.getItem("janus_ai_analysis_symbol") || "";
+  });
+
+  // Dynamically merge open position symbols with the default list to ensure they can be selected
+  const openSyms = openPositions?.map(p => p.symbol.toUpperCase()) || [];
+  const selectableSymbols = Array.from(new Set([...DEFAULT_SYMBOLS, ...openSyms]));
+
+  // Auto-select logic on mount/data load
+  useEffect(() => {
+    const savedSymbol = localStorage.getItem("janus_ai_analysis_symbol");
+    
+    if (savedSymbol && savedSymbol !== "") {
+      setSelectedSymbol(savedSymbol);
+      return;
+    }
+
+    if (openPositions && openPositions.length > 0) {
+      const firstOpenSym = openPositions[0].symbol.toUpperCase();
+      setSelectedSymbol(firstOpenSym);
+      localStorage.setItem("janus_ai_analysis_symbol", firstOpenSym);
+    } else {
+      setSelectedSymbol("BTCUSDT");
+      localStorage.setItem("janus_ai_analysis_symbol", "BTCUSDT");
+    }
+  }, [openPositions]);
+
+  const handleSelectSymbol = (symbol: string) => {
+    setSelectedSymbol(symbol);
+    localStorage.setItem("janus_ai_analysis_symbol", symbol);
+  };
 
   const { data: analysis, isLoading, isRefetching, refetch } = trpc.signal.comprehensiveAnalysis.useQuery(
-    { symbol: selectedSymbol },
-    { staleTime: 10000 }
+    { symbol: selectedSymbol || "BTCUSDT" },
+    { enabled: selectedSymbol !== "", staleTime: 10000 }
   );
 
   const handleRefresh = () => {
@@ -50,10 +83,10 @@ export default function AiAnalysis() {
         <div className="flex items-center gap-2">
           <select
             value={selectedSymbol}
-            onChange={(e) => setSelectedSymbol(e.target.value)}
+            onChange={(e) => handleSelectSymbol(e.target.value)}
             className="bg-[#18181b] border border-[#27272a] rounded px-3 py-1.5 text-xs text-[#f4f4f5] font-semibold focus:outline-none focus:border-j-up-bright/50 cursor-pointer"
           >
-            {SYMBOLS.map((s) => (
+            {selectableSymbols.map((s) => (
               <option key={s} value={s}>
                 {s}
               </option>
@@ -62,7 +95,7 @@ export default function AiAnalysis() {
 
           <button
             onClick={handleRefresh}
-            disabled={isLoading || isRefetching}
+            disabled={isLoading || isRefetching || !selectedSymbol}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#18181b] hover:bg-[#27272a] text-[#f4f4f5] text-xs transition-colors disabled:opacity-50 border border-[#27272a] font-semibold"
           >
             <RefreshCw size={11} className={cn((isLoading || isRefetching) && "animate-spin")} />
@@ -71,7 +104,7 @@ export default function AiAnalysis() {
         </div>
       </div>
 
-      {isLoading ? (
+      {isLoading || !selectedSymbol ? (
         <div className="flex-1 flex flex-col items-center justify-center gap-2.5 py-32 text-zinc-400">
           <RefreshCw size={24} className="animate-spin text-j-up-bright" />
           <div className="text-xs font-semibold">Running deep analysis algorithms...</div>
