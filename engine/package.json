@@ -1,0 +1,30 @@
+{
+  "name": "@janus/engine",
+  "version": "0.1.0",
+  "type": "module",
+  "main": "dist/app/bootstrap.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/app/bootstrap.ts",
+    "start": "node dist/app/bootstrap.js",
+    "test": "vitest run",
+    "lint": "eslint src --ext .ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "eventemitter3": "^5.0.1",
+    "nanoid": "^5.1.6",
+    "pino": "^9.7.0",
+    "socket.io-client": "^2.5.0",
+    "ws": "^8.21.0",
+    "zod": "^3.25.0"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/socket.io-client": "^1.4.36",
+    "@types/ws": "^8.18.1",
+    "tsx": "^4.19.2",
+    "typescript": "~5.9.3",
+    "vitest": "^4.0.16"
+  }
+}
