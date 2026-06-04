@@ -142,20 +142,591 @@ export function calcRSI(closes: number[], period = 14): (number | null)[] {
   return result;
 }
 
-// ─── VWAP (session, resets at midnight UTC) ───
-export function calcVWAP(
-  times: number[], highs: number[], lows: number[], closes: number[], volumes: number[]
-): (number | null)[] {
-  const result: (number | null)[] = new Array(closes.length).fill(null);
-  let tpvSum = 0, volSum = 0, lastDate = -1;
+// ─── Ichimoku Cloud ───
+export interface IchimokuResult {
+  tenkan:  (number | null)[];  // conversion line (9)
+  kijun:   (number | null)[];  // base line (26)
+  spanA:   (number | null)[];  // leading span A, shifted +26 (index = future bar)
+  spanB:   (number | null)[];  // leading span B (52), shifted +26
+  chikou:  (number | null)[];  // lagging span: close shifted -26
+}
 
-  for (let i = 0; i < closes.length; i++) {
-    const dayMs  = Math.floor(times[i] / 86_400_000);
-    if (dayMs !== lastDate) { tpvSum = 0; volSum = 0; lastDate = dayMs; }
-    const tp = (highs[i] + lows[i] + closes[i]) / 3;
-    tpvSum += tp * volumes[i];
-    volSum += volumes[i];
-    result[i] = volSum > 0 ? tpvSum / volSum : null;
+function donchianMid(highs: number[], lows: number[], i: number, period: number): number | null {
+  if (i < period - 1) return null;
+  let hi = -Infinity, lo = Infinity;
+  for (let j = i - period + 1; j <= i; j++) { hi = Math.max(hi, highs[j]); lo = Math.min(lo, lows[j]); }
+  return (hi + lo) / 2;
+}
+
+export function calcIchimoku(
+  highs: number[], lows: number[], closes: number[],
+  tenkanPeriod = 9, kijunPeriod = 26, senkouBPeriod = 52, displacement = 26
+): IchimokuResult {
+  const n = closes.length;
+  const total = n + displacement;  // extend arrays to hold future Span A/B values
+  const tenkan: (number | null)[] = new Array(total).fill(null);
+  const kijun:  (number | null)[] = new Array(total).fill(null);
+  const spanA:  (number | null)[] = new Array(total).fill(null);
+  const spanB:  (number | null)[] = new Array(total).fill(null);
+  const chikou: (number | null)[] = new Array(total).fill(null);
+
+  for (let i = 0; i < n; i++) {
+    tenkan[i] = donchianMid(highs, lows, i, tenkanPeriod);
+    kijun[i]  = donchianMid(highs, lows, i, kijunPeriod);
+    // Span A/B plotted displacement bars into the future
+    if (tenkan[i] !== null && kijun[i] !== null) {
+      spanA[i + displacement] = ((tenkan[i] as number) + (kijun[i] as number)) / 2;
+    }
+    const sB = donchianMid(highs, lows, i, senkouBPeriod);
+    if (sB !== null) spanB[i + displacement] = sB;
+    // Chikou = close plotted displacement bars in the past
+    if (i >= displacement) chikou[i - displacement] = closes[i];
+  }
+
+  return { tenkan, kijun, spanA, spanB, chikou };
+}
+
+// ─── ADX + DI lines ───
+export interface ADXResult {
+  adx:    (number | null)[];
+  diPlus: (number | null)[];
+  diMinus:(number | null)[];
+}
+export function calcADX(
+  highs: number[], lows: number[], closes: number[], period = 14
+): ADXResult {
+  const n = closes.length;
+  const adx:    (number | null)[] = new Array(n).fill(null);
+  const diPlus: (number | null)[] = new Array(n).fill(null);
+  const diMinus:(number | null)[] = new Array(n).fill(null);
+  if (n < period * 2) return { adx, diPlus, diMinus };
+
+  const trArr: number[]  = new Array(n).fill(0);
+  const dmPArr: number[] = new Array(n).fill(0);
+  const dmMArr: number[] = new Array(n).fill(0);
+
+  for (let i = 1; i < n; i++) {
+    trArr[i]  = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+    const upMove   = highs[i] - highs[i - 1];
+    const downMove = lows[i - 1] - lows[i];
+    dmPArr[i] = upMove > downMove && upMove > 0 ? upMove : 0;
+    dmMArr[i] = downMove > upMove && downMove > 0 ? downMove : 0;
+  }
+
+  // Wilder smoothing
+  let smoothTR = trArr.slice(1, period + 1).reduce((a, b) => a + b, 0);
+  let smoothDP = dmPArr.slice(1, period + 1).reduce((a, b) => a + b, 0);
+  let smoothDM = dmMArr.slice(1, period + 1).reduce((a, b) => a + b, 0);
+
+  const getDI = (dp: number, tr: number) => tr === 0 ? 0 : (dp / tr) * 100;
+  let adxSmooth = 0;
+  const dxArr: number[] = [];
+
+  for (let i = period; i < n; i++) {
+    if (i > period) {
+      smoothTR = smoothTR - smoothTR / period + trArr[i];
+      smoothDP = smoothDP - smoothDP / period + dmPArr[i];
+      smoothDM = smoothDM - smoothDM / period + dmMArr[i];
+    }
+    const dp = getDI(smoothDP, smoothTR);
+    const dm = getDI(smoothDM, smoothTR);
+    diPlus[i]  = dp;
+    diMinus[i] = dm;
+    const dx = dp + dm === 0 ? 0 : Math.abs(dp - dm) / (dp + dm) * 100;
+    dxArr.push(dx);
+
+    if (dxArr.length === period) {
+      adxSmooth = dxArr.reduce((a, b) => a + b, 0) / period;
+      adx[i] = adxSmooth;
+    } else if (dxArr.length > period) {
+      adxSmooth = (adxSmooth * (period - 1) + dx) / period;
+      adx[i] = adxSmooth;
+    }
+  }
+
+  return { adx, diPlus, diMinus };
+}
+
+// ─── Linear Regression (internal) ───
+// Returns the least-squares regression VALUE at the last point of each window.
+function linReg(values: number[], period: number): (number | null)[] {
+  const n = values.length;
+  const result: (number | null)[] = new Array(n).fill(null);
+  const sx  = (period * (period - 1)) / 2;
+  const sx2 = (period * (period - 1) * (2 * period - 1)) / 6;
+  const denom = period * sx2 - sx * sx;
+  if (denom === 0) return result;
+  for (let i = period - 1; i < n; i++) {
+    let sy = 0, sxy = 0;
+    for (let j = 0; j < period; j++) {
+      sy  += values[i - period + 1 + j];
+      sxy += j * values[i - period + 1 + j];
+    }
+    const b = (period * sxy - sx * sy) / denom;
+    const a = (sy - b * sx) / period;
+    result[i] = a + b * (period - 1);
   }
   return result;
+}
+
+// ─── TTM Squeeze ───
+// Squeeze = Bollinger Bands inside Keltner Channels (low-volatility coil).
+// Momentum = LinReg(close - midpoint(donchian_mid, SMA), period).
+// 4-color histogram mirrors standard TradingView TTM Squeeze coloring.
+export type SqueezeColor = "g_strong" | "g_weak" | "r_strong" | "r_weak";
+export interface TTMSqueezeResult {
+  squeeze:   (boolean | null)[];   // true = squeeze active (BB inside KC)
+  momentum:  (number | null)[];    // histogram value
+  histColor: (SqueezeColor | null)[];
+}
+export function calcTTMSqueeze(
+  closes: number[], highs: number[], lows: number[],
+  period = 20, bbMult = 2.0, kMult = 1.5
+): TTMSqueezeResult {
+  const n = closes.length;
+  const { upper: bbU, lower: bbL } = calcBB(closes, period, bbMult);
+  const { upper: kcU, lower: kcL } = calcKeltner(highs, lows, closes, period, period, kMult);
+
+  const squeeze: (boolean | null)[] = new Array(n).fill(null);
+  for (let i = 0; i < n; i++) {
+    if (bbU[i] !== null && kcU[i] !== null) {
+      squeeze[i] = (bbU[i] as number) < (kcU[i] as number) &&
+                   (bbL[i] as number) > (kcL[i] as number);
+    }
+  }
+
+  // Momentum delta: close − ((donchian_mid + SMA) / 2)
+  const sma = calcSMA(closes, period);
+  const delta: number[] = new Array(n).fill(0);
+  for (let i = period - 1; i < n; i++) {
+    let hi = -Infinity, lo = Infinity;
+    for (let j = i - period + 1; j <= i; j++) {
+      if (highs[j] > hi) hi = highs[j];
+      if (lows[j]  < lo) lo = lows[j];
+    }
+    delta[i] = closes[i] - ((hi + lo) / 2 + (sma[i] as number)) / 2;
+  }
+
+  const momentum = linReg(delta, period);
+
+  // 4-color: g_strong (↑ bull), g_weak (↓ weakening bull), r_strong (↓ bear), r_weak (↑ weakening bear)
+  const histColor: (SqueezeColor | null)[] = new Array(n).fill(null);
+  for (let i = 1; i < n; i++) {
+    const cur = momentum[i], prev = momentum[i - 1];
+    if (cur === null || prev === null) continue;
+    histColor[i] = cur >= 0
+      ? (cur > prev ? "g_strong" : "g_weak")
+      : (cur < prev ? "r_strong" : "r_weak");
+  }
+
+  return { squeeze, momentum, histColor };
+}
+
+// ─── Keltner Channels ───
+export interface KeltnerResult {
+  upper:  (number | null)[];
+  middle: (number | null)[];
+  lower:  (number | null)[];
+}
+export function calcKeltner(
+  highs: number[], lows: number[], closes: number[],
+  emaPeriod = 20, atrPeriod = 10, mult = 2
+): KeltnerResult {
+  const n = closes.length;
+  const middle = calcEMA(closes, emaPeriod);
+  const upper: (number | null)[] = new Array(n).fill(null);
+  const lower: (number | null)[] = new Array(n).fill(null);
+
+  // ATR (Wilder smoothing)
+  const tr: number[] = new Array(n).fill(0);
+  tr[0] = highs[0] - lows[0];
+  for (let i = 1; i < n; i++) {
+    tr[i] = Math.max(highs[i] - lows[i], Math.abs(highs[i] - closes[i - 1]), Math.abs(lows[i] - closes[i - 1]));
+  }
+  const atr: (number | null)[] = new Array(n).fill(null);
+  let atrSum = 0;
+  for (let i = 0; i < atrPeriod; i++) atrSum += tr[i];
+  let atrVal = atrSum / atrPeriod;
+  atr[atrPeriod - 1] = atrVal;
+  for (let i = atrPeriod; i < n; i++) {
+    atrVal = (atrVal * (atrPeriod - 1) + tr[i]) / atrPeriod;
+    atr[i] = atrVal;
+  }
+
+  for (let i = 0; i < n; i++) {
+    if (middle[i] !== null && atr[i] !== null) {
+      upper[i] = (middle[i] as number) + mult * (atr[i] as number);
+      lower[i] = (middle[i] as number) - mult * (atr[i] as number);
+    }
+  }
+  return { upper, middle, lower };
+}
+
+// ─── Donchian Channels ───
+export interface DonchianResult {
+  upper:  (number | null)[];
+  middle: (number | null)[];
+  lower:  (number | null)[];
+}
+export function calcDonchian(
+  highs: number[], lows: number[], period = 20
+): DonchianResult {
+  const n = highs.length;
+  const upper:  (number | null)[] = new Array(n).fill(null);
+  const middle: (number | null)[] = new Array(n).fill(null);
+  const lower:  (number | null)[] = new Array(n).fill(null);
+
+  for (let i = period - 1; i < n; i++) {
+    let hi = -Infinity, lo = Infinity;
+    for (let j = i - period + 1; j <= i; j++) {
+      if (highs[j] > hi) hi = highs[j];
+      if (lows[j]  < lo) lo = lows[j];
+    }
+    upper[i]  = hi;
+    lower[i]  = lo;
+    middle[i] = (hi + lo) / 2;
+  }
+  return { upper, middle, lower };
+}
+
+// ─── Z-Score ───
+// Measures standard deviations from rolling mean. ±2 = statistically extreme.
+export function calcZScore(closes: number[], period = 20): (number | null)[] {
+  const n = closes.length;
+  const result: (number | null)[] = new Array(n).fill(null);
+  for (let i = period - 1; i < n; i++) {
+    const slice = closes.slice(i - period + 1, i + 1);
+    const mean  = slice.reduce((a, b) => a + b, 0) / period;
+    const variance = slice.reduce((a, v) => a + (v - mean) ** 2, 0) / period;
+    const std = Math.sqrt(variance);
+    result[i] = std === 0 ? 0 : (closes[i] - mean) / std;
+  }
+  return result;
+}
+
+// ─── Volume Profile ───
+export interface VPBucket {
+  price:  number;  // midpoint price of bucket
+  vol:    number;  // total volume
+  buyVol: number;  // estimated buy volume
+}
+export interface VolumeProfileResult {
+  buckets:        VPBucket[];
+  maxVol:         number;
+  poc:            number;   // price of highest volume bucket
+  valueAreaHigh:  number;
+  valueAreaLow:   number;
+}
+export function calcVolumeProfile(
+  highs: number[], lows: number[], closes: number[], volumes: number[],
+  bucketCount = 48
+): VolumeProfileResult | null {
+  const n = closes.length;
+  if (n === 0) return null;
+
+  const priceMin = Math.min(...lows);
+  const priceMax = Math.max(...highs);
+  if (priceMax === priceMin) return null;
+
+  const bucketSize = (priceMax - priceMin) / bucketCount;
+  const vols    = new Float64Array(bucketCount).fill(0);
+  const buyVols = new Float64Array(bucketCount).fill(0);
+
+  for (let i = 0; i < n; i++) {
+    const range = highs[i] - lows[i];
+    const buyFrac = range === 0 ? 0.5 : (closes[i] - lows[i]) / range;
+    const bv = volumes[i] * buyFrac;
+    // Distribute volume across all buckets the candle overlaps, proportionally
+    const bLo = Math.max(0, Math.floor((lows[i] - priceMin) / bucketSize));
+    const bHi = Math.min(bucketCount - 1, Math.floor((highs[i] - priceMin) / bucketSize));
+    const span = bHi - bLo + 1;
+    for (let b = bLo; b <= bHi; b++) {
+      vols[b]    += volumes[i] / span;
+      buyVols[b] += bv / span;
+    }
+  }
+
+  let maxVol = 0, pocIdx = 0;
+  for (let b = 0; b < bucketCount; b++) {
+    if (vols[b] > maxVol) { maxVol = vols[b]; pocIdx = b; }
+  }
+
+  // Value area: expand from POC until 70% of total volume is enclosed
+  const totalVol = Array.from(vols).reduce((a, b) => a + b, 0);
+  const vaTarget = totalVol * 0.70;
+  let lo = pocIdx, hi = pocIdx, vaVol = vols[pocIdx];
+  while (vaVol < vaTarget && (lo > 0 || hi < bucketCount - 1)) {
+    const upGain   = hi < bucketCount - 1 ? vols[hi + 1] : 0;
+    const downGain = lo > 0               ? vols[lo - 1] : 0;
+    if (upGain >= downGain && hi < bucketCount - 1) { hi++; vaVol += vols[hi]; }
+    else if (lo > 0) { lo--; vaVol += vols[lo]; }
+    else { hi++; vaVol += vols[hi]; }
+  }
+
+  const buckets: VPBucket[] = Array.from({ length: bucketCount }, (_, b) => ({
+    price:  priceMin + (b + 0.5) * bucketSize,
+    vol:    vols[b],
+    buyVol: buyVols[b],
+  }));
+
+  return {
+    buckets,
+    maxVol,
+    poc:           priceMin + (pocIdx + 0.5) * bucketSize,
+    valueAreaHigh: priceMin + (hi + 1) * bucketSize,
+    valueAreaLow:  priceMin + lo * bucketSize,
+  };
+}
+
+// ─── Stochastic RSI ───
+export interface StochRSIResult {
+  k: (number | null)[];  // smoothed %K
+  d: (number | null)[];  // signal %D = SMA(%K, smoothD)
+}
+export function calcStochRSI(
+  closes: number[],
+  rsiPeriod = 14,
+  stochPeriod = 14,
+  smoothK = 3,
+  smoothD = 3
+): StochRSIResult {
+  const n = closes.length;
+  const rsi = calcRSI(closes, rsiPeriod);
+
+  // Raw StochRSI
+  const rawStoch: (number | null)[] = new Array(n).fill(null);
+  for (let i = stochPeriod - 1; i < n; i++) {
+    const window = rsi.slice(i - stochPeriod + 1, i + 1).filter((v): v is number => v !== null);
+    if (window.length < stochPeriod) continue;
+    const lo = Math.min(...window);
+    const hi = Math.max(...window);
+    rawStoch[i] = hi === lo ? 0 : ((rsi[i] as number) - lo) / (hi - lo) * 100;
+  }
+
+  // %K = SMA(rawStoch, smoothK)
+  const kArr = calcSMA(rawStoch.map((v) => v ?? 0), smoothK);
+  const k: (number | null)[] = rawStoch.map((v, i) => v !== null && kArr[i] !== null ? kArr[i] : null);
+
+  // %D = SMA(%K, smoothD)
+  const dArr = calcSMA(k.map((v) => v ?? 0), smoothD);
+  const d: (number | null)[] = k.map((v, i) => v !== null && dArr[i] !== null ? dArr[i] : null);
+
+  return { k, d };
+}
+
+// ─── MACD ───
+export interface MACDResult {
+  macd:      (number | null)[];  // fast EMA - slow EMA
+  signal:    (number | null)[];  // EMA(macd, signalPeriod)
+  histogram: (number | null)[];  // macd - signal
+}
+export function calcMACD(
+  closes: number[],
+  fast = 12, slow = 26, signal = 9
+): MACDResult {
+  const fastEMA = calcEMA(closes, fast);
+  const slowEMA = calcEMA(closes, slow);
+  const n = closes.length;
+
+  const macd:      (number | null)[] = new Array(n).fill(null);
+  const signalArr: (number | null)[] = new Array(n).fill(null);
+  const histogram: (number | null)[] = new Array(n).fill(null);
+
+  // MACD line — valid only where both EMAs have values
+  for (let i = 0; i < n; i++) {
+    if (fastEMA[i] !== null && slowEMA[i] !== null) {
+      macd[i] = (fastEMA[i] as number) - (slowEMA[i] as number);
+    }
+  }
+
+  // Signal line = EMA of MACD values; compute using only non-null values in order
+  const macdNonNull = macd.map((v, i) => ({ v, i })).filter((x) => x.v !== null);
+  if (macdNonNull.length >= signal) {
+    const k = 2 / (signal + 1);
+    let ema = macdNonNull.slice(0, signal).reduce((s, x) => s + (x.v as number), 0) / signal;
+    signalArr[macdNonNull[signal - 1].i] = ema;
+    for (let j = signal; j < macdNonNull.length; j++) {
+      ema = (macdNonNull[j].v as number) * k + ema * (1 - k);
+      signalArr[macdNonNull[j].i] = ema;
+    }
+  }
+
+  // Histogram
+  for (let i = 0; i < n; i++) {
+    if (macd[i] !== null && signalArr[i] !== null) {
+      histogram[i] = (macd[i] as number) - (signalArr[i] as number);
+    }
+  }
+
+  return { macd, signal: signalArr, histogram };
+}
+
+// ─── Parabolic SAR ───
+// Returns SAR values per bar (null during warmup). Direction: "up" = bullish (SAR below price).
+export interface PSARResult {
+  values:    (number | null)[];
+  direction: ("up" | "down" | null)[];
+}
+export function calcPSAR(
+  highs: number[], lows: number[], closes: number[],
+  step = 0.02, max = 0.2
+): PSARResult {
+  const n = closes.length;
+  const values:    (number | null)[] = new Array(n).fill(null);
+  const direction: ("up" | "down" | null)[] = new Array(n).fill(null);
+  if (n < 2) return { values, direction };
+
+  let bull = closes[1] > closes[0];
+  let sar  = bull ? lows[0]  : highs[0];
+  let ep   = bull ? highs[0] : lows[0];
+  let af   = step;
+
+  for (let i = 1; i < n; i++) {
+    // Advance SAR
+    let nextSar = sar + af * (ep - sar);
+
+    if (bull) {
+      nextSar = Math.min(nextSar, lows[i - 1], i >= 2 ? lows[i - 2] : lows[i - 1]);
+      if (lows[i] < nextSar) {
+        // Flip to bearish
+        bull = false; nextSar = ep; ep = lows[i]; af = step;
+      } else {
+        if (highs[i] > ep) { ep = highs[i]; af = Math.min(af + step, max); }
+      }
+    } else {
+      nextSar = Math.max(nextSar, highs[i - 1], i >= 2 ? highs[i - 2] : highs[i - 1]);
+      if (highs[i] > nextSar) {
+        // Flip to bullish
+        bull = true; nextSar = ep; ep = highs[i]; af = step;
+      } else {
+        if (lows[i] < ep) { ep = lows[i]; af = Math.min(af + step, max); }
+      }
+    }
+
+    sar = nextSar;
+    values[i]    = sar;
+    direction[i] = bull ? "up" : "down";
+  }
+
+  return { values, direction };
+}
+
+// ─── Nadaraya-Watson Envelope ───
+// Non-parametric kernel regression using Gaussian weights.
+// h (bandwidth) controls smoothness; mult scales the MAE bands.
+// Lookback limits computation window — full O(n²) only over last `lookback` bars.
+export interface NWResult {
+  estimate: (number | null)[];
+  upper:    (number | null)[];
+  lower:    (number | null)[];
+}
+export function calcNW(
+  closes: number[],
+  h = 8,
+  mult = 3,
+  lookback = 300
+): NWResult {
+  const n = closes.length;
+  const estimate: (number | null)[] = new Array(n).fill(null);
+  const upper:    (number | null)[] = new Array(n).fill(null);
+  const lower:    (number | null)[] = new Array(n).fill(null);
+
+  const start = Math.max(0, n - lookback);
+
+  // Compute kernel estimate for each bar within lookback window
+  for (let i = start; i < n; i++) {
+    let wSum = 0, wySum = 0;
+    for (let j = start; j < n; j++) {
+      const w = Math.exp(-((i - j) ** 2) / (2 * h * h));
+      wSum  += w;
+      wySum += w * closes[j];
+    }
+    estimate[i] = wSum > 0 ? wySum / wSum : null;
+  }
+
+  // MAE over the lookback window
+  let absErrSum = 0, count = 0;
+  for (let i = start; i < n; i++) {
+    if (estimate[i] !== null) {
+      absErrSum += Math.abs(closes[i] - (estimate[i] as number));
+      count++;
+    }
+  }
+  const mae = count > 0 ? (absErrSum / count) * mult : 0;
+
+  for (let i = start; i < n; i++) {
+    if (estimate[i] !== null) {
+      upper[i] = (estimate[i] as number) + mae;
+      lower[i] = (estimate[i] as number) - mae;
+    }
+  }
+
+  return { estimate, upper, lower };
+}
+
+// ─── CVD (Cumulative Volume Delta) ───
+// Delta per bar = estimated buy vol - sell vol using candle body position within wick.
+// Formula: delta = volume × (2 × (close - low) / (high - low) - 1)  [ranges -vol..+vol]
+// Edge case: high === low (doji) → delta = 0
+export interface CVDResult {
+  delta: (number | null)[];  // per-bar delta (histogram)
+  cvd:   (number | null)[];  // running cumulative delta (line)
+}
+export function calcCVD(
+  highs: number[], lows: number[], closes: number[], volumes: number[]
+): CVDResult {
+  const n = closes.length;
+  const delta: (number | null)[] = new Array(n).fill(null);
+  const cvd:   (number | null)[] = new Array(n).fill(null);
+  let running = 0;
+
+  for (let i = 0; i < n; i++) {
+    const range = highs[i] - lows[i];
+    const d = range === 0 ? 0 : volumes[i] * (2 * (closes[i] - lows[i]) / range - 1);
+    running += d;
+    delta[i] = d;
+    cvd[i]   = running;
+  }
+  return { delta, cvd };
+}
+
+// ─── VWAP + bands (session, resets at midnight UTC) ───
+export interface VWAPResult {
+  vwap:   (number | null)[];
+  upper1: (number | null)[];  // +1σ
+  lower1: (number | null)[];  // -1σ
+  upper2: (number | null)[];  // +2σ
+  lower2: (number | null)[];  // -2σ
+}
+export function calcVWAP(
+  times: number[], highs: number[], lows: number[], closes: number[], volumes: number[]
+): VWAPResult {
+  const n = closes.length;
+  const vwap:   (number | null)[] = new Array(n).fill(null);
+  const upper1: (number | null)[] = new Array(n).fill(null);
+  const lower1: (number | null)[] = new Array(n).fill(null);
+  const upper2: (number | null)[] = new Array(n).fill(null);
+  const lower2: (number | null)[] = new Array(n).fill(null);
+
+  let tpvSum = 0, tp2vSum = 0, volSum = 0, lastDate = -1;
+
+  for (let i = 0; i < n; i++) {
+    const dayMs = Math.floor(times[i] / 86_400_000);
+    if (dayMs !== lastDate) { tpvSum = 0; tp2vSum = 0; volSum = 0; lastDate = dayMs; }
+    const tp = (highs[i] + lows[i] + closes[i]) / 3;
+    tpvSum  += tp * volumes[i];
+    tp2vSum += tp * tp * volumes[i];
+    volSum  += volumes[i];
+    if (volSum > 0) {
+      const v  = tpvSum / volSum;
+      const variance = Math.max(0, tp2vSum / volSum - v * v);
+      const std = Math.sqrt(variance);
+      vwap[i]   = v;
+      upper1[i] = v + std;
+      lower1[i] = v - std;
+      upper2[i] = v + 2 * std;
+      lower2[i] = v - 2 * std;
+    }
+  }
+  return { vwap, upper1, lower1, upper2, lower2 };
 }

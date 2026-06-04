@@ -11,7 +11,7 @@ const queryClient = new QueryClient();
 
 const getWsUrl = () => {
   if (import.meta.env.DEV) {
-    return "ws://localhost:3011";
+    return `ws://${window.location.hostname}:3011`;
   }
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   return `${protocol}//${window.location.host}`;

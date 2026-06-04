@@ -59,21 +59,21 @@ const RiskMetrics = () => {
 
   const marginRatioColor =
     marginRatioPct >= 100
-      ? "text-[#ef4444]"
+      ? "text-j-down"
       : marginRatioPct > 80
-      ? "text-[#ef4444]"
+      ? "text-j-down"
       : marginRatioPct > 50
       ? "text-[#f59e0b]"
-      : "text-[#22c55e]";
+      : "text-j-up";
 
   const marginRatioBg =
     marginRatioPct >= 100
-      ? "bg-[#ef4444]/10 border-[#ef4444]/30"
+      ? "bg-j-down/10 border-j-down/30"
       : marginRatioPct > 80
-      ? "bg-[#ef4444]/10 border-[#ef4444]/30"
+      ? "bg-j-down/10 border-j-down/30"
       : marginRatioPct > 50
       ? "bg-[#f59e0b]/10 border-[#f59e0b]/30"
-      : "bg-[#22c55e]/10 border-[#22c55e]/30";
+      : "bg-j-up/10 border-j-up/30";
 
   const hasInrPositions = useMemo(() => {
     return positions.some((p: any) => p.marginCurrency === "INR");
@@ -110,9 +110,9 @@ const RiskMetrics = () => {
 
   const liqDistanceColor = (dist: number | null) => {
     if (dist === null) return "text-[#71717a]";
-    if (dist < 5) return "text-[#ef4444]";
+    if (dist < 5) return "text-j-down";
     if (dist < 15) return "text-[#f59e0b]";
-    return "text-[#22c55e]";
+    return "text-j-up";
   };
 
   return (
@@ -127,8 +127,8 @@ const RiskMetrics = () => {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          <Activity size={14} className="text-[#22c55e]" />
-          <span className="text-[10px] text-[#22c55e]">Live</span>
+          <Activity size={14} className="text-j-up" />
+          <span className="text-[10px] text-j-up">Live</span>
         </div>
       </div>
 
@@ -137,9 +137,9 @@ const RiskMetrics = () => {
         {/* USDT Wallet */}
         <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
           <div className="flex items-center gap-2 mb-3">
-            <DollarSign size={14} className="text-[#22c55e]" />
+            <DollarSign size={14} className="text-j-up" />
             <span className="text-[10px] text-[#71717a]">USDT Wallet</span>
-            <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded bg-[#22c55e]/10 text-[#22c55e] font-medium">
+            <span className="ml-auto text-[9px] px-1.5 py-0.5 rounded bg-j-up/10 text-j-up font-medium">
               USDT
             </span>
           </div>
@@ -226,7 +226,7 @@ const RiskMetrics = () => {
             <Gauge size={14} className={marginRatioColor} />
             <span className="text-[10px] text-[#71717a]">Cross Margin Health</span>
             {marginRatioPct >= 100 && (
-              <AlertTriangle size={12} className="text-[#ef4444] ml-auto" />
+              <AlertTriangle size={12} className="text-j-down ml-auto" />
             )}
           </div>
           <div className={cn("text-2xl font-bold tabular-nums", marginRatioColor)}>
@@ -334,7 +334,7 @@ const RiskMetrics = () => {
                             {diff !== null ? (
                               <span
                                 className={cn(
-                                  diff >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"
+                                  diff >= 0 ? "text-j-up" : "text-j-down"
                                 )}
                               >
                                 {diff >= 0 ? (
@@ -416,7 +416,7 @@ const RiskMetrics = () => {
                         <span
                           className={cn(
                             "w-1.5 h-1.5 rounded-full",
-                            pos.side === "long" ? "bg-[#22c55e]" : "bg-[#ef4444]"
+                            pos.side === "long" ? "bg-j-up" : "bg-j-down"
                           )}
                         />
                         <span className="text-xs font-medium text-[#f4f4f5]">
@@ -429,8 +429,8 @@ const RiskMetrics = () => {
                         className={cn(
                           "text-xs px-1.5 py-0.5 rounded",
                           pos.side === "long"
-                            ? "bg-[#22c55e]/10 text-[#22c55e]"
-                            : "bg-[#ef4444]/10 text-[#ef4444]"
+                            ? "bg-j-up/10 text-j-up"
+                            : "bg-j-down/10 text-j-down"
                         )}
                       >
                         {pos.side === "long" ? (
@@ -459,7 +459,7 @@ const RiskMetrics = () => {
                           "text-[10px] px-1.5 py-0.5 rounded font-medium",
                           pos.marginCurrency === "INR"
                             ? "bg-[#f97316]/10 text-[#f97316]"
-                            : "bg-[#22c55e]/10 text-[#22c55e]"
+                            : "bg-j-up/10 text-j-up"
                         )}
                       >
                         {pos.marginCurrency || "USDT"}
@@ -497,10 +497,10 @@ const RiskMetrics = () => {
                         className={cn(
                           "text-[10px] px-1.5 py-0.5 rounded",
                           pos.status === "open"
-                            ? "bg-[#22c55e]/10 text-[#22c55e]"
+                            ? "bg-j-up/10 text-j-up"
                             : pos.status === "closed"
                             ? "bg-[#27272a] text-[#71717a]"
-                            : "bg-[#ef4444]/10 text-[#ef4444]"
+                            : "bg-j-down/10 text-j-down"
                         )}
                       >
                         {pos.status?.toUpperCase()}

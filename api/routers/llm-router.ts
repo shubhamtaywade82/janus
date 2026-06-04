@@ -82,30 +82,34 @@ export const llmRouter = createRouter({
   testKey: publicQuery
     .input(z.object({ id: z.number() }))
     .mutation(async ({ input }) => {
-      const db = getDb();
-      const rows = await db
-        .select()
-        .from(llmApiKeys)
-        .where(eq(llmApiKeys.id, input.id))
-        .limit(1);
+      let key = globalLlmAdvisor.getKeyById(input.id);
 
-      if (!rows[0]) return { success: false, error: "Key not found" };
+      if (!key) {
+        const db = getDb();
+        const rows = await db
+          .select()
+          .from(llmApiKeys)
+          .where(eq(llmApiKeys.id, input.id))
+          .limit(1);
+
+        if (rows[0]) {
+          key = {
+            id: rows[0].id,
+            label: rows[0].label,
+            provider: rows[0].provider,
+            endpoint: rows[0].endpoint,
+            apiKey: rows[0].apiKey ?? "",
+            model: rows[0].model,
+            priority: rows[0].priority,
+          };
+        }
+      }
+
+      if (!key) return { success: false, error: "Key not found" };
 
       const t0 = Date.now();
       try {
-        const testCtx = {
-          symbol: "BTCUSDT",
-          direction: "long",
-          compositeScore: 80,
-          threshold: 75,
-          regime: "intraday_trend",
-          strategy: "intraday",
-          currentPrice: 100000,
-          drawdownPct: 0,
-          tradeCount: 0,
-          openPositions: 0,
-        };
-        const result = await globalLlmAdvisor.analyzeSignal(testCtx);
+        const result = await globalLlmAdvisor.testSpecificKey(key);
         return {
           success: true,
           latencyMs: Date.now() - t0,

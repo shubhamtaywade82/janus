@@ -667,42 +667,87 @@ export const tradingRouter = createRouter({
         console.warn(`[coindcx-execution] BLOCKED — PLACE_ORDERS=false. Set PLACE_ORDERS=true in .env to enable live trading.`);
       }
 
-      const result = await db.insert(positions).values({
-        userId: input.userId,
-        symbol: input.symbol,
-        side: input.side,
-        entryPrice: input.entryPrice,
-        currentPrice: input.currentPrice,
-        size: input.size,
-        leverage: input.leverage,
-        margin: input.margin,
-        liquidationPrice: input.liquidationPrice,
-        stopLoss: input.stopLoss,
-        takeProfit: input.takeProfit,
-        signalId: input.signalId,
-        strategyType: input.strategyType,
-        unrealizedPnl: "0",
-        realizedPnl: "0",
-        status: "open",
-        exchangeOrderId,
-      }).returning({ id: positions.id });
+      // Check for existing open paper position for same instrument and side
+      const existingPaperPos = await db.select().from(positions).where(
+        and(
+          eq(positions.userId, input.userId),
+          eq(positions.symbol, input.symbol),
+          eq(positions.side, input.side),
+          eq(positions.isPaper, true),
+          eq(positions.status, "open")
+        )
+      ).limit(1);
 
-      tradingEvents.emit(`portfolio-update:${input.userId}`);
-
-      // Register for server-side trailing stop if stopLoss provided
-      if (input.stopLoss) {
-        registerPositionForTrailing({
-          id: result[0].id,
+      let resultId: number;
+      if (existingPaperPos.length > 0) {
+        // Aggregate the new signal into the existing position
+        const existing = existingPaperPos[0];
+        const newSize = (parseFloat(existing.size) || 0) + parseFloat(input.size);
+        const newMargin = (parseFloat(existing.margin) || 0) + parseFloat(input.margin);
+        // Weighted average entry price based on size
+        const weightedEntry = ((parseFloat(existing.entryPrice) || 0) * (parseFloat(existing.size) || 0) +
+          parseFloat(input.entryPrice) * parseFloat(input.size)) / newSize;
+        await db.update(positions).set({
+          size: String(newSize),
+          margin: String(newMargin),
+          entryPrice: String(weightedEntry),
+          // Keep other fields from original position; update stopLoss/takeProfit if provided
+          ...(input.stopLoss && { stopLoss: input.stopLoss }),
+          ...(input.takeProfit && { takeProfit: input.takeProfit }),
+          updatedAt: new Date(),
+        }).where(eq(positions.id, existing.id));
+        resultId = existing.id;
+        // Emit update event for aggregated position
+        tradingEvents.emit(`portfolio-update:${input.userId}`);
+        // Update trailing stop if applicable
+        if (input.stopLoss) {
+          registerPositionForTrailing({
+            id: resultId,
+            symbol: input.symbol,
+            side: input.side,
+            entryPrice: weightedEntry,
+            stopLoss: parseFloat(input.stopLoss),
+            strategyType: input.strategyType as import("../services/strategy-config").StrategyType,
+            userId: input.userId,
+          });
+        }
+      } else {
+        const result = await db.insert(positions).values({
+          userId: input.userId,
           symbol: input.symbol,
           side: input.side,
-          entryPrice: parseFloat(input.entryPrice),
-          stopLoss: parseFloat(input.stopLoss),
-          strategyType: input.strategyType as import("../services/strategy-config").StrategyType,
-          userId: input.userId,
-        });
+          entryPrice: input.entryPrice,
+          currentPrice: input.currentPrice,
+          size: input.size,
+          leverage: input.leverage,
+          margin: input.margin,
+          liquidationPrice: input.liquidationPrice,
+          stopLoss: input.stopLoss,
+          takeProfit: input.takeProfit,
+          signalId: input.signalId,
+          strategyType: input.strategyType,
+          unrealizedPnl: "0",
+          realizedPnl: "0",
+          status: "open",
+          exchangeOrderId,
+          isPaper: !exchangeOrderId,
+        }).returning({ id: positions.id });
+        resultId = result[0].id;
+        tradingEvents.emit(`portfolio-update:${input.userId}`);
+        if (input.stopLoss) {
+          registerPositionForTrailing({
+            id: resultId,
+            symbol: input.symbol,
+            side: input.side,
+            entryPrice: parseFloat(input.entryPrice),
+            stopLoss: parseFloat(input.stopLoss),
+            strategyType: input.strategyType as import("../services/strategy-config").StrategyType,
+            userId: input.userId,
+          });
+        }
       }
 
-      return { id: result[0].id, ...input, exchangeOrderId };
+      return { id: resultId, ...input, exchangeOrderId };
     }),
 
   // ─── Close a position ───

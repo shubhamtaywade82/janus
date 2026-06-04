@@ -15,6 +15,7 @@ import {
   Percent,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { AnimatedNumber } from "@/components/AnimatedNumber";
 
 // ─── Position Row ───
 const PositionRow = ({ position, livePrice }: { position: any; livePrice?: number }) => {
@@ -49,7 +50,7 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
           <span
             className={cn(
               "w-1.5 h-1.5 rounded-full",
-              position.side === "long" ? "bg-[#22c55e]" : "bg-[#ef4444]"
+              position.side === "long" ? "bg-j-up" : "bg-j-down"
             )}
           />
           <span className="text-xs font-medium text-[#f4f4f5]">{position.symbol}</span>
@@ -65,8 +66,8 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
           className={cn(
             "text-xs px-1.5 py-0.5 rounded",
             position.side === "long"
-              ? "bg-[#22c55e]/10 text-[#22c55e]"
-              : "bg-[#ef4444]/10 text-[#ef4444]"
+              ? "bg-j-up/10 text-j-up"
+              : "bg-j-down/10 text-j-down"
           )}
         >
           {position.side.toUpperCase()}
@@ -76,7 +77,7 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
         {parseFloat(position.entryPrice).toFixed(2)}
       </td>
       <td className={cn("px-3 py-2 text-xs text-[#f4f4f5] tabular-nums rounded", priceFlash)}>
-        {currentPrice.toFixed(2)}
+        <AnimatedNumber value={currentPrice} decimals={2} duration={200} />
       </td>
       <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
         {parseFloat(position.size).toFixed(4)}
@@ -98,7 +99,7 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
             "text-[9px] px-1 py-0.5 rounded",
             marginCurrency === "INR"
               ? "bg-[#f59e0b]/10 text-[#f59e0b]"
-              : "bg-[#22c55e]/10 text-[#22c55e]"
+              : "bg-j-up/10 text-j-up"
           )}>
             {marginCurrency}
           </span>
@@ -113,14 +114,14 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
           : "--"}
       </td>
       <td className="px-3 py-2">
-        <div className={cn("flex flex-col gap-0.5", isProfit ? "text-[#22c55e]" : "text-[#ef4444]", pnlFlashRow)}>
+        <div className={cn("flex flex-col gap-0.5", isProfit ? "text-j-up" : "text-j-down", pnlFlashRow)}>
           <div className="flex items-center gap-1 text-xs tabular-nums rounded px-1 -mx-1">
             {isProfit ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
-            {isProfit ? "+" : ""}{pnl.toFixed(4)}
+            <AnimatedNumber value={pnl} decimals={4} duration={300} signed />
           </div>
           {roe !== 0 && (
             <span className="text-[9px] tabular-nums opacity-70 px-1 -mx-1">
-              ROE {roe >= 0 ? "+" : ""}{roe.toFixed(2)}%
+              ROE <AnimatedNumber value={roe} decimals={2} duration={300} signed suffix="%" />
             </span>
           )}
         </div>
@@ -130,10 +131,10 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
           className={cn(
             "text-xs px-1.5 py-0.5 rounded",
             liqPercent < 5
-              ? "bg-[#ef4444]/10 text-[#ef4444]"
+              ? "bg-j-down/10 text-j-down"
               : liqPercent < 15
               ? "bg-[#f59e0b]/10 text-[#f59e0b]"
-              : "bg-[#22c55e]/10 text-[#22c55e]"
+              : "bg-j-up/10 text-j-up"
           )}
           title={`Liq: ${position.liquidationPrice || "--"}`}
         >
@@ -146,10 +147,10 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
           className={cn(
             "text-xs px-1.5 py-0.5 rounded",
             position.status === "open"
-              ? "bg-[#22c55e]/10 text-[#22c55e]"
+              ? "bg-j-up/10 text-j-up"
               : position.status === "closed"
               ? "bg-[#27272a] text-[#71717a]"
-              : "bg-[#ef4444]/10 text-[#ef4444]"
+              : "bg-j-down/10 text-j-down"
           )}
         >
           {position.status.toUpperCase()}
@@ -273,7 +274,7 @@ export default function Portfolio() {
   // Query historical positions only when viewing non-open filters
   const { data: dbPositions } = trpc.trading.positions.useQuery(
     { userId: 1, status: statusFilter as any },
-    { enabled: statusFilter !== "open", refetchInterval: 10000 }
+    { enabled: statusFilter !== "open" && statusFilter !== "equity_curve", refetchInterval: 10000 }
   );
 
   // Always-on direct DB query for paper positions — independent of portfolioStream
@@ -440,7 +441,7 @@ export default function Portfolio() {
               className={cn(
                 "px-3 py-1.5 transition-colors",
                 portfolioMode === "live"
-                  ? "bg-[#22c55e]/10 text-[#22c55e]"
+                  ? "bg-j-up/10 text-j-up"
                   : "bg-[#09090b] text-[#52525b] hover:text-[#f4f4f5]"
               )}
             >
@@ -465,7 +466,7 @@ export default function Portfolio() {
               className={cn(
                 "px-2 py-1 transition-colors",
                 rateMode === "live"
-                  ? "bg-[#22c55e]/10 text-[#22c55e]"
+                  ? "bg-j-up/10 text-j-up"
                   : "bg-[#09090b] text-[#52525b] hover:text-[#f4f4f5]"
               )}
               title="CoinDCX live USDT/INR rate"
@@ -488,7 +489,7 @@ export default function Portfolio() {
 
           {/* Status filter */}
           <div className="flex items-center gap-1">
-            {["open", "closed", "liquidated"].map((s) => (
+            {["open", "closed", "liquidated", "equity_curve"].map((s) => (
               <button
                 key={s}
                 onClick={() => setStatusFilter(s)}
@@ -499,7 +500,7 @@ export default function Portfolio() {
                     : "bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5]"
                 )}
               >
-                {s}
+                {s === "equity_curve" ? "Equity Curve" : s}
               </button>
             ))}
           </div>
@@ -520,7 +521,6 @@ export default function Portfolio() {
           const availFree = parseFloat((portfolio as any)?.availableInr || "0");
           const lockedMgn = parseFloat((portfolio as any)?.lockedInr || "0");
           const walletCcy = (portfolio as any)?.walletCurrency ?? "INR";
-          const rate = parseFloat((portfolio as any)?.usdtInrRate || String(usdtInrRate));
           return (
             <div className="grid grid-cols-3 gap-3">
               <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
@@ -536,7 +536,7 @@ export default function Portfolio() {
                   {rateMode === "static" && <span className="ml-1 text-[#f59e0b]">(static)</span>}
                 </div>
                 <div className="mt-2 flex items-center justify-between text-[9px]">
-                  <span className="text-[#22c55e]">Available {walletCcy === "INR" ? `₹${availFree.toFixed(2)}` : `$${availFree.toFixed(2)}`}</span>
+                  <span className="text-j-up">Available {walletCcy === "INR" ? `₹${availFree.toFixed(2)}` : `$${availFree.toFixed(2)}`}</span>
                   <span className="text-[#f59e0b]">Locked {walletCcy === "INR" ? `₹${lockedMgn.toFixed(2)}` : `$${lockedMgn.toFixed(2)}`}</span>
                 </div>
               </div>
@@ -546,24 +546,26 @@ export default function Portfolio() {
                   <span className="text-[10px] text-[#71717a]">Current Value</span>
                 </div>
                 <div className={cn("text-xl font-bold text-[#f4f4f5] tabular-nums rounded px-1 -mx-1", equityFlash)}>
-                  {currentValueUsdt.toFixed(4)} USDT
+                  <AnimatedNumber value={currentValueUsdt} decimals={4} duration={400} suffix=" USDT" />
                 </div>
-                <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">₹{currentValueInr.toFixed(2)}</div>
+                <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
+                  ₹<AnimatedNumber value={currentValueInr} decimals={2} duration={400} />
+                </div>
                 <div className="mt-2 text-[9px] text-[#71717a]">{portfolio?.livePositionsCount || 0} live positions open</div>
               </div>
               <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
                 <div className="flex items-center gap-2 mb-2">
-                  {isProfit ? <TrendingUp size={14} className="text-[#22c55e]" /> : <TrendingDown size={14} className="text-[#ef4444]" />}
+                  {isProfit ? <TrendingUp size={14} className="text-j-up" /> : <TrendingDown size={14} className="text-j-down" />}
                   <span className="text-[10px] text-[#71717a]">Unrealized PnL</span>
                 </div>
-                <div className={cn("text-xl font-bold tabular-nums rounded px-1 -mx-1", isProfit ? "text-[#22c55e]" : "text-[#ef4444]", pnlFlash)}>
-                  {pnlUsdt >= 0 ? "+" : ""}{pnlUsdt.toFixed(4)} USDT
+                <div className={cn("text-xl font-bold tabular-nums rounded px-1 -mx-1", isProfit ? "text-j-up" : "text-j-down", pnlFlash)}>
+                  <AnimatedNumber value={pnlUsdt} decimals={4} duration={400} signed suffix=" USDT" />
                 </div>
-                <div className={cn("text-[10px] mt-1 tabular-nums", isProfit ? "text-[#22c55e]/70" : "text-[#ef4444]/70")}>
-                  {pnlInr >= 0 ? "+" : ""}₹{pnlInr.toFixed(2)}
+                <div className={cn("text-[10px] mt-1 tabular-nums", isProfit ? "text-j-up/70" : "text-j-down/70")}>
+                  ₹<AnimatedNumber value={pnlInr} decimals={2} duration={400} signed />
                 </div>
-                <div className={cn("mt-1.5 text-sm font-bold tabular-nums", isProfit ? "text-[#22c55e]" : "text-[#ef4444]")}>
-                  {pnlPct >= 0 ? "+" : ""}{pnlPct.toFixed(2)}%
+                <div className={cn("mt-1.5 text-sm font-bold tabular-nums", isProfit ? "text-j-up" : "text-j-down")}>
+                  <AnimatedNumber value={pnlPct} decimals={2} duration={400} signed suffix="%" />
                 </div>
               </div>
             </div>
@@ -578,11 +580,11 @@ export default function Portfolio() {
               <span className="text-[10px] text-[#71717a]">Paper Wallet</span>
               <span className="text-[8px] font-bold px-1 rounded bg-[#f59e0b]/10 text-[#f59e0b] border border-[#f59e0b]/20">VIRTUAL</span>
             </div>
-            <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">${paperFreeBalance.toFixed(2)}</div>
+            <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">$<AnimatedNumber value={paperFreeBalance} decimals={2} duration={400} /></div>
             <div className="text-[10px] text-[#52525b] mt-1">Started with ${paperStartingBalance.toFixed(2)}</div>
             <div className="mt-2 flex items-center justify-between text-[9px]">
-              <span className="text-[#22c55e]">Free ${paperFreeBalance.toFixed(2)}</span>
-              <span className="text-[#f59e0b]">Locked ${paperLockedMargin.toFixed(2)}</span>
+              <span className="text-j-up">Free $<AnimatedNumber value={paperFreeBalance} decimals={2} duration={400} /></span>
+              <span className="text-[#f59e0b]">Locked $<AnimatedNumber value={paperLockedMargin} decimals={2} duration={400} /></span>
             </div>
           </div>
           <div className="bg-[#18181b] border border-[#f59e0b]/30 rounded-lg p-4">
@@ -590,29 +592,29 @@ export default function Portfolio() {
               <PieChart size={14} className="text-[#f59e0b]" />
               <span className="text-[10px] text-[#71717a]">Paper Equity</span>
             </div>
-            <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">${paperEquity.toFixed(2)}</div>
+            <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">$<AnimatedNumber value={paperEquity} decimals={2} duration={400} /></div>
             <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
               {paperEquity >= paperStartingBalance
-                ? <span className="text-[#22c55e]">+${(paperEquity - paperStartingBalance).toFixed(2)} vs start</span>
-                : <span className="text-[#ef4444]">-${(paperStartingBalance - paperEquity).toFixed(2)} vs start</span>}
+                ? <span className="text-j-up">+${(paperEquity - paperStartingBalance).toFixed(2)} vs start</span>
+                : <span className="text-j-down">-${(paperStartingBalance - paperEquity).toFixed(2)} vs start</span>}
             </div>
             <div className="mt-2 text-[9px] text-[#71717a]">{paperPositions.length} paper positions open</div>
           </div>
           <div className="bg-[#18181b] border border-[#f59e0b]/30 rounded-lg p-4">
             <div className="flex items-center gap-2 mb-2">
-              {paperUnrealizedPnl >= 0 ? <TrendingUp size={14} className="text-[#22c55e]" /> : <TrendingDown size={14} className="text-[#ef4444]" />}
+              {paperUnrealizedPnl >= 0 ? <TrendingUp size={14} className="text-j-up" /> : <TrendingDown size={14} className="text-j-down" />}
               <span className="text-[10px] text-[#71717a]">Paper PnL</span>
             </div>
-            <div className={cn("text-xl font-bold tabular-nums", paperUnrealizedPnl >= 0 ? "text-[#22c55e]" : "text-[#ef4444]")}>
-              {paperUnrealizedPnl >= 0 ? "+" : ""}{paperUnrealizedPnl.toFixed(4)} USDT
+            <div className={cn("text-xl font-bold tabular-nums", paperUnrealizedPnl >= 0 ? "text-j-up" : "text-j-down")}>
+              <AnimatedNumber value={paperUnrealizedPnl} decimals={4} duration={400} signed suffix=" USDT" />
             </div>
             <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
-              Realized: <span className={paperRealizedPnl >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"}>
+              Realized: <span className={paperRealizedPnl >= 0 ? "text-j-up" : "text-j-down"}>
                 {paperRealizedPnl >= 0 ? "+" : ""}{paperRealizedPnl.toFixed(4)}
               </span>
             </div>
             <div className="mt-1.5 text-[10px] text-[#52525b]">
-              Total: <span className={cn("font-medium", (paperUnrealizedPnl + paperRealizedPnl) >= 0 ? "text-[#22c55e]" : "text-[#ef4444]")}>
+              Total: <span className={cn("font-medium", (paperUnrealizedPnl + paperRealizedPnl) >= 0 ? "text-j-up" : "text-j-down")}>
                 {(paperUnrealizedPnl + paperRealizedPnl) >= 0 ? "+" : ""}{(paperUnrealizedPnl + paperRealizedPnl).toFixed(4)}
               </span>
             </div>
@@ -623,15 +625,15 @@ export default function Portfolio() {
       {/* Indian VDA Tax Estimator Row — live mode only */}
       {portfolioMode === "live" && <div className="grid grid-cols-2 gap-3 mt-3">
         {/* VDA Gains & Estimated Tax Card */}
-        <div className="bg-[#ef4444]/5 border border-[#ef4444]/20 rounded-lg p-4">
+        <div className="bg-j-down/5 border border-j-down/20 rounded-lg p-4">
           <div className="flex items-center gap-2 mb-2">
-            <AlertTriangle size={14} className="text-[#ef4444]" />
-            <span className="text-[10px] text-[#ef4444] font-semibold uppercase tracking-wide">
+            <AlertTriangle size={14} className="text-j-down" />
+            <span className="text-[10px] text-j-down font-semibold uppercase tracking-wide">
               Section 115BBH VDA Tax (India)
             </span>
           </div>
           <div className="flex items-baseline gap-2">
-            <div className="text-xl font-bold text-[#ef4444] tabular-nums">
+            <div className="text-xl font-bold text-j-down tabular-nums">
               ₹{(taxMetrics.estTaxUsdt * usdtInrRate).toFixed(2)}
             </div>
             <div className="text-xs text-[#71717a] tabular-nums">
@@ -641,7 +643,7 @@ export default function Portfolio() {
           <div className="text-[10px] text-[#71717a] mt-2 leading-relaxed">
             Estimated <span className="font-semibold text-[#f4f4f5]">31.2% Tax</span> (including 4% cess) on gross profit. 
             <br />
-            Gross FY Profits: <span className="text-[#22c55e] font-semibold">₹{(taxMetrics.totalGainsUsdt * usdtInrRate).toFixed(2)}</span> (losses are not offset).
+            Gross FY Profits: <span className="text-j-up font-semibold">₹{(taxMetrics.totalGainsUsdt * usdtInrRate).toFixed(2)}</span> (losses are not offset).
           </div>
         </div>
 
@@ -669,138 +671,143 @@ export default function Portfolio() {
 
       {/* Risk Warning — trigger when PnL < -50% of total margin */}
       {portfolio && parseFloat(portfolio.totalMargin || "0") > 0 && liveTotalUnrealizedPnl < -(parseFloat(portfolio.totalMargin || "0") * 0.5) && (
-        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-[#ef4444]/10 border border-[#ef4444]/30">
-          <AlertTriangle size={14} className="text-[#ef4444]" />
-          <span className="text-xs text-[#ef4444]">
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-j-down/10 border border-j-down/30">
+          <AlertTriangle size={14} className="text-j-down" />
+          <span className="text-xs text-j-down">
             Warning: Unrealized losses exceed 50% of total margin. Consider reducing positions.
           </span>
         </div>
       )}
 
-      {/* Positions Table */}
-      <div className="flex-1 bg-[#18181b] border border-[#27272a] rounded-lg overflow-hidden flex flex-col">
-        <div className="px-4 py-2 border-b border-[#27272a] flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <span className="text-xs font-semibold text-[#f4f4f5]">
-              {statusFilter === "open" ? "Open Positions" : statusFilter === "closed" ? "Closed Positions" : "Liquidated Positions"}
-            </span>
-            {statusFilter === "open" && (
-              <div className="flex rounded overflow-hidden border border-[#27272a] text-[10px] font-semibold">
-                <button
-                  onClick={() => setPortfolioMode("live")}
-                  className={cn(
-                    "px-2.5 py-1 transition-colors",
-                    portfolioMode === "live"
-                      ? "bg-[#22c55e]/10 text-[#22c55e]"
-                      : "bg-[#18181b] text-[#52525b] hover:text-[#f4f4f5]"
-                  )}
-                >
-                  LIVE {openLivePositions.length > 0 && `(${openLivePositions.length})`}
-                </button>
-                <button
-                  onClick={() => setPortfolioMode("paper")}
-                  className={cn(
-                    "px-2.5 py-1 border-l border-[#27272a] transition-colors",
-                    portfolioMode === "paper"
-                      ? "bg-[#f59e0b]/10 text-[#f59e0b]"
-                      : "bg-[#18181b] text-[#52525b] hover:text-[#f4f4f5]"
-                  )}
-                >
-                  PAPER {paperPositions.length > 0 && `(${paperPositions.length})`}
-                </button>
+      {/* Main Content (Positions/Trades OR Equity Curve Dashboard) */}
+      {statusFilter === "equity_curve" ? (
+        <PerformanceDashboard userId={1} isFullPage={true} />
+      ) : (
+        <>
+          {/* Positions Table */}
+          <div className="flex-1 bg-[#18181b] border border-[#27272a] rounded-lg overflow-hidden flex flex-col">
+            <div className="px-4 py-2 border-b border-[#27272a] flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <span className="text-xs font-semibold text-[#f4f4f5]">
+                  {statusFilter === "open" ? "Open Positions" : statusFilter === "closed" ? "Closed Positions" : "Liquidated Positions"}
+                </span>
+                {statusFilter === "open" && (
+                  <div className="flex rounded overflow-hidden border border-[#27272a] text-[10px] font-semibold">
+                    <button
+                      onClick={() => setPortfolioMode("live")}
+                      className={cn(
+                        "px-2.5 py-1 transition-colors",
+                        portfolioMode === "live"
+                          ? "bg-j-up/10 text-j-up"
+                          : "bg-[#18181b] text-[#52525b] hover:text-[#f4f4f5]"
+                      )}
+                    >
+                      LIVE {openLivePositions.length > 0 && `(${openLivePositions.length})`}
+                    </button>
+                    <button
+                      onClick={() => setPortfolioMode("paper")}
+                      className={cn(
+                        "px-2.5 py-1 border-l border-[#27272a] transition-colors",
+                        portfolioMode === "paper"
+                          ? "bg-[#f59e0b]/10 text-[#f59e0b]"
+                          : "bg-[#18181b] text-[#52525b] hover:text-[#f4f4f5]"
+                      )}
+                    >
+                      PAPER {paperPositions.length > 0 && `(${paperPositions.length})`}
+                    </button>
+                  </div>
+                )}
               </div>
-            )}
-          </div>
-          <span className="text-[10px] text-[#71717a]">
-            {allPositions?.length || 0} positions
-          </span>
-        </div>
-        <div className="flex-1 overflow-auto scrollbar-thin">
-          <table className="w-full">
-            <thead>
-              <tr className="border-b border-[#27272a]">
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Symbol</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Side</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Entry</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Current</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Size</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Lev</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Mode</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Margin</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Maint.</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">PnL</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Liq%</th>
-                <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Status</th>
-              </tr>
-            </thead>
-            <tbody>
-              {allPositions?.map((pos: any) => (
-                <PositionRow key={pos.id} position={pos} livePrice={livePrices[pos.symbol]} />
-              ))}
-              {(!allPositions || allPositions.length === 0) && (
-                <tr>
-                  <td colSpan={12} className="px-3 py-8 text-center text-xs text-[#71717a]">
-                    <Target size={20} className="mx-auto mb-2 opacity-30" />
-                    No {statusFilter} positions found
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </div>
-
-      {/* Recent Trades */}
-      {portfolio && portfolio.recentTrades.length > 0 && (
-        <div className="bg-[#18181b] border border-[#27272a] rounded-lg overflow-hidden">
-          <div className="px-4 py-2 border-b border-[#27272a]">
-            <span className="text-xs font-semibold text-[#f4f4f5]">Recent Trades</span>
-          </div>
-          <div className="max-h-32 overflow-auto scrollbar-thin">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b border-[#27272a]">
-                  <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Time</th>
-                  <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Symbol</th>
-                  <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Side</th>
-                  <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Price</th>
-                  <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Size</th>
-                  <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Total</th>
-                </tr>
-              </thead>
-              <tbody>
-                {portfolio.recentTrades.map((trade: any) => (
-                  <tr key={trade.id} className="border-b border-[#27272a]/50 hover:bg-[#27272a]/30">
-                    <td className="px-3 py-1 text-[10px] text-[#52525b]">
-                      {new Date(trade.createdAt).toLocaleTimeString()}
-                    </td>
-                    <td className="px-3 py-1 text-[10px] text-[#f4f4f5]">{trade.symbol}</td>
-                    <td className="px-3 py-1">
-                      <span className={cn(
-                        "text-[10px] px-1 rounded",
-                        trade.side === "buy" ? "text-[#22c55e] bg-[#22c55e]/10" : "text-[#ef4444] bg-[#ef4444]/10"
-                      )}>
-                        {trade.side.toUpperCase()}
-                      </span>
-                    </td>
-                    <td className="px-3 py-1 text-[10px] text-[#f4f4f5] tabular-nums">
-                      {parseFloat(trade.price).toFixed(2)}
-                    </td>
-                    <td className="px-3 py-1 text-[10px] text-[#71717a] tabular-nums">
-                      {parseFloat(trade.size).toFixed(4)}
-                    </td>
-                    <td className="px-3 py-1 text-[10px] text-[#71717a] tabular-nums">
-                      {parseFloat(trade.total).toFixed(2)}
-                    </td>
+              <span className="text-[10px] text-[#71717a]">
+                {allPositions?.length || 0} positions
+              </span>
+            </div>
+            <div className="flex-1 overflow-auto scrollbar-thin">
+              <table className="w-full">
+                <thead>
+                  <tr className="border-b border-[#27272a]">
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Symbol</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Side</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Entry</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Current</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Size</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Lev</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Mode</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Margin</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Maint.</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">PnL</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Liq%</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Status</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody>
+                  {allPositions?.map((pos: any) => (
+                    <PositionRow key={pos.id} position={pos} livePrice={livePrices[pos.symbol]} />
+                  ))}
+                  {(!allPositions || allPositions.length === 0) && (
+                    <tr>
+                      <td colSpan={12} className="px-3 py-8 text-center text-xs text-[#71717a]">
+                        <Target size={20} className="mx-auto mb-2 opacity-30" />
+                        No {statusFilter} positions found
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
           </div>
-        </div>
+
+          {/* Recent Trades */}
+          {portfolio && portfolio.recentTrades.length > 0 && (
+            <div className="bg-[#18181b] border border-[#27272a] rounded-lg overflow-hidden">
+              <div className="px-4 py-2 border-b border-[#27272a]">
+                <span className="text-xs font-semibold text-[#f4f4f5]">Recent Trades</span>
+              </div>
+              <div className="max-h-32 overflow-auto scrollbar-thin">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b border-[#27272a]">
+                      <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Time</th>
+                      <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Symbol</th>
+                      <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Side</th>
+                      <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Price</th>
+                      <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Size</th>
+                      <th className="px-3 py-1 text-left text-[10px] text-[#71717a] font-medium">Total</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {portfolio.recentTrades.map((trade: any) => (
+                      <tr key={trade.id} className="border-b border-[#27272a]/50 hover:bg-[#27272a]/30">
+                        <td className="px-3 py-1 text-[10px] text-[#52525b]">
+                          {new Date(trade.createdAt).toLocaleTimeString()}
+                        </td>
+                        <td className="px-3 py-1 text-[10px] text-[#f4f4f5]">{trade.symbol}</td>
+                        <td className="px-3 py-1">
+                          <span className={cn(
+                            "text-[10px] px-1 rounded",
+                            trade.side === "buy" ? "text-j-up bg-j-up/10" : "text-j-down bg-j-down/10"
+                          )}>
+                            {trade.side.toUpperCase()}
+                          </span>
+                        </td>
+                        <td className="px-3 py-1 text-[10px] text-[#f4f4f5] tabular-nums">
+                          {parseFloat(trade.price).toFixed(2)}
+                        </td>
+                        <td className="px-3 py-1 text-[10px] text-[#71717a] tabular-nums">
+                          {parseFloat(trade.size).toFixed(4)}
+                        </td>
+                        <td className="px-3 py-1 text-[10px] text-[#71717a] tabular-nums">
+                          {parseFloat(trade.total).toFixed(2)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+        </>
       )}
-      {/* Performance Dashboard */}
-      <PerformanceDashboard userId={1} />
 
       {/* Hidden ticker subscriptions — one component per open symbol */}
       {symbols.map((sym) => (

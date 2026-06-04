@@ -10,9 +10,9 @@ const REGIME_CFG: Record<RegimeType, { label: string; color: string; icon: React
   ranging_tight:   { label: "RANGING",   color: "text-[#a855f7] border-[#a855f7]/30 bg-[#a855f7]/10", icon: <Zap size={9} /> },
   ranging:         { label: "RANGING",   color: "text-[#a855f7] border-[#a855f7]/30 bg-[#a855f7]/10", icon: <Zap size={9} /> },
   reversal:        { label: "REVERSAL",  color: "text-[#f59e0b] border-[#f59e0b]/30 bg-[#f59e0b]/10", icon: <RefreshCw size={9} /> },
-  intraday_trend:  { label: "TREND 1H",  color: "text-[#22c55e] border-[#22c55e]/30 bg-[#22c55e]/10", icon: <Activity size={9} /> },
+  intraday_trend:  { label: "TREND 1H",  color: "text-j-up border-j-up/30 bg-j-up/10", icon: <Activity size={9} /> },
   swing_trend:     { label: "TREND 4H",  color: "text-[#3b82f6] border-[#3b82f6]/30 bg-[#3b82f6]/10", icon: <TrendingUp size={9} /> },
-  high_volatility: { label: "HIGH VOL",  color: "text-[#ef4444] border-[#ef4444]/30 bg-[#ef4444]/10", icon: <AlertTriangle size={9} /> },
+  high_volatility: { label: "HIGH VOL",  color: "text-j-down border-j-down/30 bg-j-down/10", icon: <AlertTriangle size={9} /> },
 };
 
 const STRATEGY_LABEL: Record<StrategyType, string> = {

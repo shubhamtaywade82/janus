@@ -13,6 +13,10 @@ export interface AlertConfig {
   superTrendFlip:  boolean;  // ST direction changes
   rsiExtreme:      boolean;  // RSI crosses 70/30
   vwapCross:       boolean;  // Price crosses VWAP
+  // KNN SuperTrend alerts
+  knnFlip:         boolean;  // KNN bias direction change
+  knnRejection:    boolean;  // Rejection orb at SuperTrend level
+  knnRegimeChange: boolean;  // Market regime transition (trend↔range)
   // SMC alerts
   bosSignal:       boolean;  // New BOS detected
   chochSignal:     boolean;  // New CHoCH detected
@@ -24,6 +28,7 @@ export interface AlertConfig {
 export const ALERT_DEFAULTS: AlertConfig = {
   emaCross: true, bbBreakout: true, superTrendFlip: true,
   rsiExtreme: true, vwapCross: false,
+  knnFlip: true, knnRejection: true, knnRegimeChange: true,
   bosSignal: true, chochSignal: true, obTouch: false, fvgFill: false, liqSweep: true,
 };
 
@@ -218,6 +223,80 @@ export function checkSMCAlerts(
           emoji: "💧",
           message: `Liquidity SWEPT — ${liq.type === "buy-side" ? "EQH" : "EQL"} at ${liq.price.toFixed(2)}` });
     }
+  }
+
+  return events;
+}
+
+// ─── KNN SuperTrend alert detection ──────────────────────────────────────────
+// Called when a new KNN snapshot arrives (from signal.knnStream subscription).
+// `prev` is the last snapshot for this symbol; null on first call.
+
+export interface KnnSnapshotLike {
+  knn: { bias: string; confidence: number };
+  supertrend: { direction: string; flip: boolean; level: number };
+  rejection: { signal: boolean; type: string | null; wickToBody: number; volumeScore: number };
+  regime: string;
+  price: number;
+  setupQuality: string;
+  note: string;
+  entryAllowed: boolean;
+}
+
+export function checkKnnAlerts(
+  snap: KnnSnapshotLike,
+  prev: KnnSnapshotLike | null,
+  cfg: AlertConfig,
+  symbol: string
+): AlertEvent[] {
+  const events: AlertEvent[] = [];
+  const now = Date.now();
+  const price = snap.price;
+
+  // ─── KNN bias flip ───
+  if (cfg.knnFlip && prev && snap.knn.bias !== "neutral" && prev.knn.bias !== "neutral" && snap.knn.bias !== prev.knn.bias) {
+    const isBull = snap.knn.bias === "bullish";
+    events.push({
+      id: uid(), type: "knn_flip", symbol, price,
+      direction: isBull ? "bullish" : "bearish", timestamp: now,
+      emoji: isBull ? "🤖📈" : "🤖📉",
+      message: `KNN bias flipped ${snap.knn.bias.toUpperCase()} (conf: ${snap.knn.confidence}%, ST: ${snap.supertrend.direction})`,
+    });
+  }
+
+  // ─── SuperTrend flip with KNN confirmation ───
+  if (cfg.knnFlip && snap.supertrend.flip && snap.knn.bias !== "neutral") {
+    const isBull = snap.supertrend.direction === "bullish";
+    const confirmed = snap.supertrend.direction === snap.knn.bias;
+    events.push({
+      id: uid(), type: "knn_st_flip", symbol, price,
+      direction: isBull ? "bullish" : "bearish", timestamp: now,
+      emoji: isBull ? "🟢" : "🔴",
+      message: `ST flipped ${snap.supertrend.direction.toUpperCase()} — KNN ${confirmed ? "CONFIRMS" : "conflicts"} (${snap.knn.confidence}%)`,
+    });
+  }
+
+  // ─── Rejection orb ───
+  if (cfg.knnRejection && snap.rejection.signal) {
+    const isBull = snap.rejection.type === "bullish_rejection";
+    events.push({
+      id: uid(), type: "knn_rejection", symbol, price,
+      direction: isBull ? "bullish" : "bearish", timestamp: now,
+      emoji: isBull ? "⚡🟢" : "⚡🔴",
+      message: `KNN rejection orb — ${snap.rejection.type?.replace("_", " ").toUpperCase()} at ST level ${snap.supertrend.level.toFixed(4)} (vol×${snap.rejection.volumeScore.toFixed(1)})`,
+    });
+  }
+
+  // ─── Regime change ───
+  if (cfg.knnRegimeChange && prev && snap.regime !== prev.regime) {
+    const toRange = snap.regime === "range";
+    events.push({
+      id: uid(), type: "knn_regime", symbol, price,
+      direction: toRange ? "neutral" : snap.knn.bias === "bearish" ? "bearish" : "bullish",
+      timestamp: now,
+      emoji: toRange ? "⏸️" : snap.regime === "trend" ? "⚡" : "📊",
+      message: `Regime: ${prev.regime.toUpperCase()} → ${snap.regime.toUpperCase()} (${snap.note})`,
+    });
   }
 
   return events;

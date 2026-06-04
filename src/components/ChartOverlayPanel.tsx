@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Layers } from "lucide-react";
 
@@ -26,10 +26,10 @@ const DEFAULTS: OverlayToggles = {
 
 const LAYERS: { key: keyof OverlayToggles; label: string; color: string; shortLabel: string }[] = [
   { key: "swings",          label: "Swing H/L",       shortLabel: "SwG",  color: "#71717a" },
-  { key: "orderBlocks",     label: "Order Blocks",     shortLabel: "OB",   color: "#22c55e" },
+  { key: "orderBlocks",     label: "Order Blocks",     shortLabel: "OB",   color: "hsl(var(--janus-up))" },
   { key: "fvg",             label: "Fair Value Gap",   shortLabel: "FVG",  color: "#a855f7" },
   { key: "structure",       label: "BOS / CHoCH",      shortLabel: "STR",  color: "#3b82f6" },
-  { key: "liquidity",       label: "EQH / EQL",        shortLabel: "LIQ",  color: "#ef4444" },
+  { key: "liquidity",       label: "EQH / EQL",        shortLabel: "LIQ",  color: "hsl(var(--janus-down))" },
   { key: "displacement",    label: "Displacement",     shortLabel: "DIS",  color: "#f59e0b" },
   { key: "premiumDiscount", label: "Prem / Disc",      shortLabel: "P/D",  color: "#52525b" },
   { key: "obv",             label: "OBV",              shortLabel: "OBV",  color: "#06b6d4" },
@@ -41,6 +41,21 @@ interface Props {
 
 export function ChartOverlayPanel({ onChange }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
+        setExpanded(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [expanded]);
+
   const [toggles, setToggles] = useState<OverlayToggles>(() => {
     try {
       const saved = localStorage.getItem("janus_chart_overlays");
@@ -60,7 +75,7 @@ export function ChartOverlayPanel({ onChange }: Props) {
   const activeCount = Object.values(toggles).filter(Boolean).length;
 
   return (
-    <div className="relative">
+    <div ref={panelRef} className="relative">
       {/* Trigger button */}
       <button
         onClick={() => setExpanded((v) => !v)}

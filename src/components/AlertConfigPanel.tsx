@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { cn } from "@/lib/utils";
 import { Bell, BellOff } from "lucide-react";
 import type { AlertConfig } from "@/lib/chart/alert-engine";
@@ -10,6 +10,12 @@ const INDICATOR_ALERTS: { key: keyof AlertConfig; label: string; desc: string }[
   { key: "superTrendFlip", label: "SuperTrend Flip",   desc: "ST direction change" },
   { key: "rsiExtreme",     label: "RSI 70/30",         desc: "RSI enters/exits overbought/oversold" },
   { key: "vwapCross",      label: "VWAP Cross",        desc: "Price crosses VWAP" },
+];
+
+const KNN_ALERTS: { key: keyof AlertConfig; label: string; desc: string }[] = [
+  { key: "knnFlip",         label: "KNN Bias Flip",     desc: "KNN bias direction change + ST flip" },
+  { key: "knnRejection",    label: "KNN Rejection Orb", desc: "Wick rejection at ST level with volume" },
+  { key: "knnRegimeChange", label: "Regime Change",     desc: "Market switches trend ↔ range" },
 ];
 
 const SMC_ALERTS: { key: keyof AlertConfig; label: string; desc: string }[] = [
@@ -24,6 +30,21 @@ interface Props { onChange: (cfg: AlertConfig) => void; }
 
 export function AlertConfigPanel({ onChange }: Props) {
   const [expanded, setExpanded] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!expanded) return;
+    const handleClickOutside = (event: MouseEvent) => {
+      if (panelRef.current && !panelRef.current.contains(event.target as Node)) {
+        setExpanded(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [expanded]);
+
   const [cfg, setCfg] = useState<AlertConfig>(() => {
     try {
       const s = localStorage.getItem("janus_alert_cfg");
@@ -66,7 +87,7 @@ export function AlertConfigPanel({ onChange }: Props) {
   );
 
   return (
-    <div className="relative">
+    <div ref={panelRef} className="relative">
       <button
         onClick={() => setExpanded((v) => !v)}
         className={cn(
@@ -89,6 +110,9 @@ export function AlertConfigPanel({ onChange }: Props) {
 
           <div className="text-[9px] text-[#3b82f6] mb-1 px-1">Indicators</div>
           {INDICATOR_ALERTS.map((a) => <Row key={a.key} {...a} />)}
+
+          <div className="text-[9px] text-[#10b981] mt-2 mb-1 px-1">KNN SuperTrend</div>
+          {KNN_ALERTS.map((a) => <Row key={a.key} {...a} />)}
 
           <div className="text-[9px] text-[#a855f7] mt-2 mb-1 px-1">SMC / ICT</div>
           {SMC_ALERTS.map((a) => <Row key={a.key} {...a} />)}

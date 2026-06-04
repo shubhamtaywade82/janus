@@ -18,8 +18,8 @@ import { cn } from "@/lib/utils";
 const levelConfig = {
   info: { icon: Info, color: "#3b82f6", bg: "bg-[#3b82f6]/10" },
   warn: { icon: AlertTriangle, color: "#f59e0b", bg: "bg-[#f59e0b]/10" },
-  error: { icon: AlertCircle, color: "#ef4444", bg: "bg-[#ef4444]/10" },
-  critical: { icon: Skull, color: "#dc2626", bg: "bg-[#dc2626]/10" },
+  error: { icon: AlertCircle, color: "hsl(var(--janus-down))", bg: "bg-j-down/10" },
+  critical: { icon: Skull, color: "hsl(var(--janus-down))", bg: "bg-j-down/10" },
   debug: { icon: Bug, color: "#71717a", bg: "bg-[#71717a]/10" },
 };
 
@@ -151,10 +151,10 @@ const Logs = () => {
 
       {/* Recent Errors */}
       {stats && stats.recentErrors.length > 0 && (
-        <div className="bg-[#ef4444]/5 border border-[#ef4444]/20 rounded-lg p-3">
+        <div className="bg-j-down/5 border border-j-down/20 rounded-lg p-3">
           <div className="flex items-center gap-2 mb-2">
-            <AlertCircle size={14} className="text-[#ef4444]" />
-            <span className="text-xs font-semibold text-[#ef4444]">Recent Errors</span>
+            <AlertCircle size={14} className="text-j-down" />
+            <span className="text-xs font-semibold text-j-down">Recent Errors</span>
           </div>
           <div className="space-y-1">
             {stats.recentErrors.map((err: any) => (

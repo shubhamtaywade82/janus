@@ -29,8 +29,8 @@ function ensureHeartbeat() {
 
 function getBinanceWsUrl(symbol: string): string {
   const s = symbol.toLowerCase();
-  // Using Binance USD-M Futures streams for correct pricing alignment with CoinDCX Futures
-  return `wss://fstream.binance.com/market/stream?streams=${s}@depth20@100ms/${s}@trade/${s}@ticker/${s}@kline_1m`;
+  // Using globally accessible Binance Spot streams to avoid futures geo-blocking restrictions
+  return `wss://stream.binance.com:9443/stream?streams=${s}@depth20@100ms/${s}@trade/${s}@ticker/${s}@kline_1m`;
 }
 
 export function subscribeToSymbol(symbol: string) {

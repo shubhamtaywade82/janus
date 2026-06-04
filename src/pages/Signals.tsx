@@ -10,6 +10,7 @@ import {
   Activity,
   ChevronRight,
 } from "lucide-react";
+import { checkKnnAlerts, ALERT_DEFAULTS, type KnnSnapshotLike } from "@/lib/chart/alert-engine";
 import { cn } from "@/lib/utils";
 
 // ─── Market Regime Classifier ───
@@ -27,14 +28,14 @@ function getRegime(signal: any): { label: Regime; color: string; bg: string; bor
   const imbalance: number = indicators.imbalance ?? 0;
 
   if (signal.isGated && signal.direction === "long") {
-    return { label: "BULLISH",      color: "#0ecb81", bg: "rgba(14,203,129,0.08)",  border: "rgba(14,203,129,0.3)"  };
+    return { label: "BULLISH",      color: "hsl(var(--janus-up-bright))", bg: "hsl(var(--janus-up-bright)/0.08)",  border: "hsl(var(--janus-up-bright)/0.3)"  };
   }
   if (signal.isGated && signal.direction === "short") {
-    return { label: "BEARISH",      color: "#f6465d", bg: "rgba(246,70,93,0.08)",   border: "rgba(246,70,93,0.3)"   };
+    return { label: "BEARISH",      color: "hsl(var(--janus-down-bright))", bg: "hsl(var(--janus-down-bright)/0.08)",   border: "hsl(var(--janus-down-bright)/0.3)"   };
   }
   // Non-gated regimes
   if (composite < 40) {
-    return { label: "AVOID",        color: "#ef4444", bg: "rgba(239,68,68,0.06)",   border: "rgba(239,68,68,0.2)"   };
+    return { label: "AVOID",        color: "hsl(var(--janus-down))", bg: "hsl(var(--janus-down)/0.06)",   border: "hsl(var(--janus-down)/0.2)"   };
   }
   if (adx < 18 && Math.abs(imbalance) < 0.15) {
     return { label: "RANGE",        color: "#71717a", bg: "rgba(113,113,122,0.06)", border: "rgba(113,113,122,0.2)" };
@@ -140,7 +141,7 @@ const SignalCard = ({ signal }: { signal: any }) => {
           </div>
           <div className="flex justify-between">
             <span>RSI(14)</span>
-            <span className={cn("font-mono font-bold", rsi > 70 ? "text-[#f6465d]" : rsi < 30 ? "text-[#0ecb81]" : "text-[#f4f4f5]")}>
+            <span className={cn("font-mono font-bold", rsi > 70 ? "text-j-down-bright" : rsi < 30 ? "text-j-up-bright" : "text-[#f4f4f5]")}>
               {rsi.toFixed(1)}
             </span>
           </div>
@@ -153,7 +154,7 @@ const SignalCard = ({ signal }: { signal: any }) => {
         <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 border-t border-[#27272a]/50 pt-2 text-[10px] text-zinc-400">
           <div className="flex justify-between">
             <span>RMI</span>
-            <span className={cn("font-mono font-bold", indicators.rmi > 70 ? "text-[#f6465d]" : indicators.rmi < 30 ? "text-[#0ecb81]" : "text-[#f4f4f5]")}>
+            <span className={cn("font-mono font-bold", indicators.rmi > 70 ? "text-j-down-bright" : indicators.rmi < 30 ? "text-j-up-bright" : "text-[#f4f4f5]")}>
               {indicators.rmi.toFixed(1)}
             </span>
           </div>
@@ -163,7 +164,7 @@ const SignalCard = ({ signal }: { signal: any }) => {
           </div>
           <div className="flex justify-between col-span-2">
             <span>Regime</span>
-            <span className={cn("font-bold uppercase", indicators.isUpTrend ? "text-[#0ecb81]" : "text-[#f6465d]")}>
+            <span className={cn("font-bold uppercase", indicators.isUpTrend ? "text-j-up-bright" : "text-j-down-bright")}>
               {indicators.isUpTrend ? "Uptrend" : "Downtrend"}
             </span>
           </div>
@@ -191,11 +192,11 @@ const SignalCard = ({ signal }: { signal: any }) => {
         <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 border-t border-[#27272a]/50 pt-2 text-[10px] text-zinc-400">
           <div className="flex justify-between">
             <span>ML Pred High</span>
-            <span className="text-[#0ecb81] font-mono font-bold">{indicators.predictedHigh.toFixed(2)}</span>
+            <span className="text-j-up-bright font-mono font-bold">{indicators.predictedHigh.toFixed(2)}</span>
           </div>
           <div className="flex justify-between">
             <span>ML Pred Low</span>
-            <span className="text-[#f6465d] font-mono font-bold">{indicators.predictedLow.toFixed(2)}</span>
+            <span className="text-j-down-bright font-mono font-bold">{indicators.predictedLow.toFixed(2)}</span>
           </div>
           <div className="flex justify-between col-span-2">
             <span>Predicted Range</span>
@@ -206,11 +207,11 @@ const SignalCard = ({ signal }: { signal: any }) => {
         <div className="grid grid-cols-2 gap-x-3 gap-y-1.5 border-t border-[#27272a]/50 pt-2 text-[10px] text-zinc-400">
           <div className="flex justify-between">
             <span>Bid Depth</span>
-            <span className="text-[#0ecb81] font-mono">{indicators.bidDepth.toFixed(2)}</span>
+            <span className="text-j-up-bright font-mono">{indicators.bidDepth.toFixed(2)}</span>
           </div>
           <div className="flex justify-between">
             <span>Ask Depth</span>
-            <span className="text-[#f6465d] font-mono">{indicators.askDepth.toFixed(2)}</span>
+            <span className="text-j-down-bright font-mono">{indicators.askDepth.toFixed(2)}</span>
           </div>
           <div className="flex justify-between">
             <span>Spread</span>
@@ -218,7 +219,7 @@ const SignalCard = ({ signal }: { signal: any }) => {
           </div>
           <div className="flex justify-between">
             <span>Imbalance</span>
-            <span className={cn("font-mono font-bold", indicators.imbalance >= 0 ? "text-[#0ecb81]" : "text-[#f6465d]")}>
+            <span className={cn("font-mono font-bold", indicators.imbalance >= 0 ? "text-j-up-bright" : "text-j-down-bright")}>
               {indicators.imbalance >= 0 ? "+" : ""}{indicators.imbalance.toFixed(2)}
             </span>
           </div>
@@ -232,13 +233,13 @@ const SignalCard = ({ signal }: { signal: any }) => {
             </div>
             <div>
               <div className="text-[9px] text-[#71717a]">Imbalance</div>
-              <div className={cn("text-xs tabular-nums", imbalance >= 0 ? "text-[#22c55e]" : "text-[#ef4444]")}>
+              <div className={cn("text-xs tabular-nums", imbalance >= 0 ? "text-j-up" : "text-j-down")}>
                 {imbalance >= 0 ? "+" : ""}{imbalance.toFixed(2)}
               </div>
             </div>
             <div>
               <div className="text-[9px] text-[#71717a]">RSI</div>
-              <div className={cn("text-xs tabular-nums", rsi > 70 ? "text-[#ef4444]" : rsi < 30 ? "text-[#22c55e]" : "text-[#f4f4f5]")}>
+              <div className={cn("text-xs tabular-nums", rsi > 70 ? "text-j-down" : rsi < 30 ? "text-j-up" : "text-[#f4f4f5]")}>
                 {rsi.toFixed(1)}
               </div>
             </div>
@@ -248,20 +249,20 @@ const SignalCard = ({ signal }: { signal: any }) => {
             <div className="grid grid-cols-3 gap-x-2 border-t border-[#27272a]/30 pt-1.5 mt-1.5">
               <div>
                 <div className="text-[8px] text-[#71717a] uppercase font-semibold">Sweep</div>
-                <div className={cn("text-xs tabular-nums font-semibold", parseFloat(indicators.sweepScore) > 50 ? "text-[#ef4444]" : "text-[#e4e4e7]")}>
+                <div className={cn("text-xs tabular-nums font-semibold", parseFloat(indicators.sweepScore) > 50 ? "text-j-down" : "text-[#e4e4e7]")}>
                   {parseFloat(indicators.sweepScore).toFixed(0)}
                 </div>
               </div>
               <div>
                 <div className="text-[8px] text-[#71717a] uppercase font-semibold">Absorb</div>
-                <div className={cn("text-xs tabular-nums font-semibold", parseFloat(indicators.absorptionScore) > 50 ? "text-[#22c55e]" : "text-[#e4e4e7]")}>
+                <div className={cn("text-xs tabular-nums font-semibold", parseFloat(indicators.absorptionScore) > 50 ? "text-j-up" : "text-[#e4e4e7]")}>
                   {parseFloat(indicators.absorptionScore).toFixed(0)}
                 </div>
               </div>
               <div>
                 <div className="text-[8px] text-[#71717a] uppercase font-semibold">Regime</div>
                 <div className={cn("text-[10px] font-bold tracking-tight uppercase", 
-                  indicators.volatilityRegime === "HIGH" ? "text-[#ef4444]" : 
+                  indicators.volatilityRegime === "HIGH" ? "text-j-down" : 
                   indicators.volatilityRegime === "LOW" ? "text-[#3b82f6]" : "text-[#a1a1aa]"
                 )}>
                   {indicators.volatilityRegime || "NORMAL"}
@@ -272,9 +273,66 @@ const SignalCard = ({ signal }: { signal: any }) => {
         </>
       )}
 
+      {/* KNN SuperTrend badge */}
+      {indicators.knn && (
+        <div className="mt-2 border-t border-[#27272a]/40 pt-2">
+          <div className="flex items-center gap-1 flex-wrap">
+            {/* KNN bias chip */}
+            <span className={cn(
+              "inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wide",
+              indicators.knn.bias === "bullish" ? "bg-j-up-bright/15 text-j-up-bright" :
+              indicators.knn.bias === "bearish" ? "bg-j-down-bright/15 text-j-down-bright" :
+              "bg-[#71717a]/15 text-[#71717a]"
+            )}>
+              KNN {indicators.knn.bias}
+            </span>
+            {/* Confidence pill */}
+            <span className={cn(
+              "text-[9px] px-1.5 py-0.5 rounded font-bold tabular-nums",
+              indicators.knn.confidence >= 75 ? "bg-j-up-bright/10 text-j-up-bright" :
+              indicators.knn.confidence >= 55 ? "bg-[#f59e0b]/10 text-[#f59e0b]" :
+              "bg-[#52525b]/10 text-[#52525b]"
+            )}>
+              {indicators.knn.confidence}%
+            </span>
+            {/* ST direction */}
+            <span className={cn(
+              "text-[9px] px-1.5 py-0.5 rounded font-semibold uppercase",
+              indicators.knn.stDirection === "bullish" ? "bg-j-up/10 text-j-up" : "bg-j-down/10 text-j-down"
+            )}>
+              ST {indicators.knn.stDirection}
+              {indicators.knn.stFlip && " ↺"}
+            </span>
+            {/* Regime badge */}
+            <span className={cn(
+              "text-[9px] px-1.5 py-0.5 rounded uppercase font-semibold ml-auto",
+              indicators.knn.regime === "trend" ? "bg-[#3b82f6]/10 text-[#3b82f6]" :
+              indicators.knn.regime === "weak_trend" ? "bg-[#8b5cf6]/10 text-[#8b5cf6]" :
+              indicators.knn.regime === "range" ? "bg-[#71717a]/10 text-[#71717a]" :
+              "bg-[#f59e0b]/10 text-[#f59e0b]"
+            )}>
+              {indicators.knn.regime?.replace("_", " ")}
+            </span>
+          </div>
+          {/* Rejection orb row */}
+          {indicators.knn.rejectionSignal && (
+            <div className={cn(
+              "mt-1 text-[9px] px-1.5 py-0.5 rounded font-semibold",
+              indicators.knn.rejectionType === "bullish_rejection" ? "bg-j-up-bright/10 text-j-up-bright" : "bg-j-down-bright/10 text-j-down-bright"
+            )}>
+              Rejection orb • vol×{indicators.knn.volumeScore?.toFixed(1)} • wick/body {indicators.knn.wickToBody?.toFixed(1)}
+            </div>
+          )}
+          {/* Note */}
+          <div className="mt-0.5 text-[8px] text-[#52525b] leading-tight italic">
+            {indicators.knn.note}
+          </div>
+        </div>
+      )}
+
       <div className="mt-1.5 flex items-center justify-between text-[9px] text-[#52525b]">
         <span>{ts ? ts.toLocaleTimeString() : "--"}</span>
-        <span className={cn(age !== null && age < 2 ? "text-[#22c55e]" : "")}>
+        <span className={cn(age !== null && age < 2 ? "text-j-up" : "")}>
           {age !== null ? (age === 0 ? "just now" : `${age}m ago`) : ""}
         </span>
       </div>
@@ -312,6 +370,30 @@ const Signals = () => {
     },
   });
   trpc.signal.stream.useSubscription(undefined, streamOptsRef.current);
+
+  // KNN SuperTrend alert stream — fires toast alerts on bias flips, rejection orbs, regime changes
+  const knnPrevRef = useRef<Record<string, KnnSnapshotLike>>({});
+  const knnStreamOptsRef = useRef({
+    onData: (data: { symbol: string; snapshot: KnnSnapshotLike }) => {
+      try {
+        const stored = localStorage.getItem("janus_alert_cfg");
+        const cfg = stored ? { ...ALERT_DEFAULTS, ...JSON.parse(stored) } : ALERT_DEFAULTS;
+        const prev = knnPrevRef.current[data.symbol] ?? null;
+        const alerts = checkKnnAlerts(data.snapshot, prev, cfg, data.symbol);
+        knnPrevRef.current[data.symbol] = data.snapshot;
+
+        for (const alert of alerts) {
+          const color = alert.direction === "bullish" ? "hsl(var(--janus-up-bright))" : alert.direction === "bearish" ? "hsl(var(--janus-down-bright))" : "#a1a1aa";
+          toast(alert.message, {
+            description: `${alert.symbol} · KNN`,
+            duration: 6000,
+            style: { borderLeft: `3px solid ${color}` },
+          });
+        }
+      } catch { /* non-fatal */ }
+    },
+  });
+  trpc.signal.knnStream.useSubscription(undefined, knnStreamOptsRef.current);
 
   // Client-side interval trigger — fires analyzeAll at user-selected rate
   useEffect(() => {
@@ -388,11 +470,11 @@ const Signals = () => {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Signal size={18} className="text-[#22c55e]" />
+          <Signal size={18} className="text-j-up" />
           <div>
             <h2 className="text-sm font-semibold text-[#f4f4f5]">Confluence Signal Engine</h2>
             <p className="text-[10px] text-[#71717a] flex items-center gap-1.5">
-              <span className="w-1.5 h-1.5 rounded-full bg-[#22c55e] animate-pulse inline-block" />
+              <span className="w-1.5 h-1.5 rounded-full bg-j-up animate-pulse inline-block" />
               Auto-refresh every {refreshInterval}s
               {lastUpdate && <span className="text-[#52525b]">· {lastUpdate.toLocaleTimeString()}</span>}
             </p>
@@ -428,7 +510,7 @@ const Signals = () => {
           <button
             onClick={handleAnalyze}
             disabled={isAnalyzing}
-            className="flex items-center gap-1 px-3 py-1.5 rounded bg-[#22c55e]/10 text-[#22c55e] text-xs hover:bg-[#22c55e]/20 transition-colors disabled:opacity-50"
+            className="flex items-center gap-1 px-3 py-1.5 rounded bg-j-up/10 text-j-up text-xs hover:bg-j-up/20 transition-colors disabled:opacity-50"
           >
             {isAnalyzing ? <RefreshCw size={12} className="animate-spin" /> : <Zap size={12} />}
             Analyze
@@ -465,7 +547,7 @@ const Signals = () => {
                   const sentiment = tw > 0 ? Math.max(-100, Math.min(100, (ws / tw) * 100)) : 0;
                   const pct = (sentiment + 100) / 2;
                   const slabel = sentiment > 30 ? "BULLISH" : sentiment < -30 ? "BEARISH" : "NEUTRAL";
-                  const scolor = sentiment > 30 ? "#0ecb81" : sentiment < -30 ? "#f6465d" : "#f59e0b";
+                  const scolor = sentiment > 30 ? "hsl(var(--janus-up-bright))" : sentiment < -30 ? "hsl(var(--janus-down-bright))" : "#f59e0b";
                   return (
                     <>
                       <div className="flex items-center justify-between mb-2">
@@ -477,20 +559,20 @@ const Signals = () => {
                       </div>
                       {/* Gauge bar */}
                       <div className="relative mb-1.5">
-                        <div className="h-3 rounded-full overflow-hidden" style={{ background: "linear-gradient(to right,#f6465d,#f59e0b 50%,#0ecb81)", opacity: 0.25 }} />
-                        <div className="absolute inset-0 h-3 rounded-full overflow-hidden" style={{ background: "linear-gradient(to right,#f6465d,#f59e0b 50%,#0ecb81)", clipPath: `inset(0 ${100 - pct}% 0 0 round 9999px)` }} />
+                        <div className="h-3 rounded-full overflow-hidden" style={{ background: "linear-gradient(to right,hsl(var(--janus-down-bright)),hsl(var(--janus-warn)) 50%,hsl(var(--janus-up-bright)))", opacity: 0.25 }} />
+                        <div className="absolute inset-0 h-3 rounded-full overflow-hidden" style={{ background: "linear-gradient(to right,hsl(var(--janus-down-bright)),hsl(var(--janus-warn)) 50%,hsl(var(--janus-up-bright)))", clipPath: `inset(0 ${100 - pct}% 0 0 round 9999px)` }} />
                         <div className="absolute top-1/2 -translate-y-1/2 w-2.5 h-2.5 rounded-full border-2 border-[#09090b] transition-all duration-700" style={{ left: `calc(${pct}% - 5px)`, background: scolor }} />
                         <div className="absolute top-0 bottom-0 w-px bg-[#52525b]/50" style={{ left: "50%" }} />
                       </div>
                       <div className="flex justify-between text-[9px] text-[#52525b] mb-2">
-                        <span className="text-[#f6465d]">Bear</span>
+                        <span className="text-j-down-bright">Bear</span>
                         <span>Neutral</span>
-                        <span className="text-[#0ecb81]">Bull</span>
+                        <span className="text-j-up-bright">Bull</span>
                       </div>
                       <div className="flex gap-1.5">
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#0ecb81]/10 text-[#0ecb81]">{bull} Bull</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-j-up-bright/10 text-j-up-bright">{bull} Bull</span>
                         <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#52525b]/10 text-[#71717a]">{neut} Neutral</span>
-                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-[#f6465d]/10 text-[#f6465d]">{bear} Bear</span>
+                        <span className="text-[9px] px-1.5 py-0.5 rounded bg-j-down-bright/10 text-j-down-bright">{bear} Bear</span>
                       </div>
                     </>
                   );
@@ -504,14 +586,14 @@ const Signals = () => {
             <div className="text-[10px] text-[#71717a] mb-1">Total Signals</div>
             <div className="text-lg font-bold text-[#f4f4f5] tabular-nums">{stats.total}</div>
             <div className="text-[9px] text-[#71717a]">avg {stats.avgComposite}</div>
-            <div className="mt-1 text-[9px] text-[#0ecb81]">{stats.gated} gated · {stats.gatedPercent.toFixed(1)}%</div>
+            <div className="mt-1 text-[9px] text-j-up-bright">{stats.gated} gated · {stats.gatedPercent.toFixed(1)}%</div>
           </div>
 
           {/* Regime Breakdown */}
           <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-3">
             <div className="text-[10px] text-[#71717a] mb-2">Regime Breakdown</div>
             <div className="flex flex-col gap-1">
-              {([["BULLISH","#0ecb81"],["BEARISH","#f6465d"],["ACCUMULATION","#3b82f6"],["DISTRIBUTION","#f59e0b"]] as [string,string][]).map(([l,c]) => (
+              {([["BULLISH","hsl(var(--janus-up-bright))"],["BEARISH","hsl(var(--janus-down-bright))"],["ACCUMULATION","#3b82f6"],["DISTRIBUTION","#f59e0b"]] as [string,string][]).map(([l,c]) => (
                 <div key={l} className="flex items-center justify-between">
                   <span className="text-[9px]" style={{ color: c }}>{l.slice(0,5)}</span>
                   <span className="text-[9px] font-bold text-[#f4f4f5] tabular-nums">{regimeCounts[l] || 0}</span>
@@ -524,7 +606,7 @@ const Signals = () => {
           <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-3">
             <div className="text-[10px] text-[#71717a] mb-2">Low-Signal</div>
             <div className="flex flex-col gap-1">
-              {([["RANGE","#71717a"],["NEUTRAL","#a1a1aa"],["AVOID","#ef4444"]] as [string,string][]).map(([l,c]) => (
+              {([["RANGE","#71717a"],["NEUTRAL","#a1a1aa"],["AVOID","hsl(var(--janus-down))"]] as [string,string][]).map(([l,c]) => (
                 <div key={l} className="flex items-center justify-between">
                   <span className="text-[9px]" style={{ color: c }}>{l.slice(0,5)}</span>
                   <span className="text-[9px] font-bold text-[#f4f4f5] tabular-nums">{regimeCounts[l] || 0}</span>

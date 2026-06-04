@@ -75,7 +75,7 @@ export const marketRouter = createRouter({
       z.object({
         symbol: z.string().default("BTCUSDT"),
         interval: z.string().default("1m"),
-        limit: z.number().min(1).max(1000).default(150),
+        limit: z.number().min(500).max(1000).default(500),
         endTime: z.number().optional(),   // ms timestamp — fetch candles before this time
       })
     )
@@ -124,7 +124,7 @@ export const marketRouter = createRouter({
         const intervalMs = INTERVAL_MS[input.interval] ?? 0;
         if (intervalMs > 60_000) {
           // Fetch enough 1m candles to cover the requested number of higher-TF candles
-          const oneMinNeeded = Math.min(input.limit * (intervalMs / 60_000), 2000);
+          const oneMinNeeded = Math.min(input.limit * (intervalMs / 60_000), 100000); // increased cap to ensure enough candles for large intervals
           const oneMin = await db
             .select()
             .from(marketData)

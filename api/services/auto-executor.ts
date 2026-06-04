@@ -25,11 +25,13 @@ import { globalLlmAdvisor, type SignalContext } from "./llm-advisor";
 import { latestTickerCache } from "./streaming";
 import { markPriceCache, tradingEvents } from "./coindcx-ws";
 import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo } from "./coindcx";
-import { registerPositionForTrailing } from "./trailing-stop";
+import { registerPositionForTrailing, unregisterPosition } from "./trailing-stop";
+import { knnSnapshotCache } from "./knn-supertrend";
 import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
+import { ExitDecision } from "./exit-manager";
 import { snapshotEquity } from "./performance-tracker";
-import { getPaperWallet, lockPaperMargin, getPaperEquity } from "./paper-wallet";
+import { getPaperWallet, lockPaperMargin, releasePaperMargin, getPaperEquity } from "./paper-wallet";
 import { env } from "../lib/env";
 import type { Signal, AutoExecutorConfig } from "@db/schema";
 import type { StrategyType } from "./strategy-config";
@@ -64,6 +66,12 @@ export interface AutoExecutorState {
 }
 
 export class AutoExecutor {
+  constructor() {
+    // Subscribe to exit signals for default user (userId=1)
+    tradingEvents.on(`exit-signal:1`, this.handleExitSignal.bind(this));
+  }
+
+  /** Current executor state */
   state: AutoExecutorState = {
     lastRun: 0,
     signalsProcessed: 0,
@@ -263,7 +271,25 @@ export class AutoExecutor {
     });
     if (!riskCheck.approved) return this.skip(signal, `risk: ${riskCheck.reason}`);
 
-    // Gate 8: LLM Advisor (optional)
+    // Gate 8: KNN SuperTrend filter
+    // Suppresses trades in range regimes and when KNN bias conflicts with signal direction.
+    const knnSnap = knnSnapshotCache.get(symbol);
+    if (knnSnap) {
+      if (knnSnap.regime === "range") {
+        return this.skip(signal, `KNN: range regime — signals suppressed for ${symbol}`);
+      }
+      const knnMinConf = 60;
+      const knnBias = knnSnap.knn.bias;
+      const knnConf = knnSnap.knn.confidence;
+      if (knnBias !== "neutral" && knnConf >= knnMinConf && knnBias !== side) {
+        return this.skip(signal, `KNN: bias=${knnBias} (${knnConf}%) conflicts with signal ${side}`);
+      }
+      if (knnConf < 40) {
+        return this.skip(signal, `KNN: very low confidence (${knnConf}%) — skipping ${symbol}`);
+      }
+    }
+
+    // Gate 9: LLM Advisor (optional)
     let sizeMult = 1.0;
     let llmDecision: ExecutorDecision["llmDecision"] | undefined;
     const regimeData = latestRegimeCache.get("BTCUSDT");
@@ -495,6 +521,43 @@ export class AutoExecutor {
       message: `${symbol}: ${decision.decision} (${decision.confidence}%) via ${decision.keyUsed}`,
       metadata: { signalId, ...decision },
     });
+  }
+
+  // Handles exit‑signal events emitted by the exit‑manager
+  private async handleExitSignal(payload: {
+    positionId: number;
+    symbol: string;
+    strategyType: StrategyType;
+    currentPrice: number;
+    decision: ExitDecision;
+  }): Promise<void> {
+    const db = getDb();
+    const pos = await db.select().from(positions).where(eq(positions.id, payload.positionId)).limit(1);
+    if (pos.length === 0) return;
+    const position = pos[0];
+
+    const realizedPnl = payload.decision.feeAdjustedPnl ?? 0;
+    const unrealizedPnl = payload.decision.unrealizedPnl ?? 0;
+
+    await db
+      .update(positions)
+      .set({
+        status: "closed",
+        currentPrice: String(payload.currentPrice),
+        realizedPnl: String(realizedPnl),
+        unrealizedPnl: String(unrealizedPnl),
+        closedAt: new Date(),
+        updatedAt: new Date(),
+      })
+      .where(eq(positions.id, payload.positionId));
+
+    if (position.isPaper) {
+      await releasePaperMargin(position.userId, parseFloat(position.margin), realizedPnl, position.id);
+    }
+
+    // Clean up trailing‑stop monitoring
+    unregisterPosition(position.id);
+    tradingEvents.emit(`portfolio-update:${position.userId}`);
   }
 }
 

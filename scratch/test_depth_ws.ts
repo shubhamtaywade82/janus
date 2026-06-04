@@ -1,7 +1,7 @@
 import WebSocket from "ws";
 
-// Test spot WS depth format
-const ws = new WebSocket("wss://stream.binance.com:9443/stream?streams=ethusdt@depth20@100ms");
+// Test futures WS depth format (no @100ms)
+const ws = new WebSocket("wss://fstream.binance.com/market/stream?streams=ethusdt@depth20");
 
 ws.on("open", () => console.log("[open]"));
 ws.on("error", (e) => console.error("[error]", e.message));

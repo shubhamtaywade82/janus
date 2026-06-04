@@ -14,7 +14,6 @@ import {
   Activity,
   Sparkles,
   Zap,
-  Bell,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineSeries, LineStyle, createSeriesMarkers } from "lightweight-charts";
@@ -22,6 +21,7 @@ import type { UTCTimestamp, SeriesMarker, Time } from "lightweight-charts";
 import { OrderBlockPrimitive } from "@/lib/chart/primitives/OrderBlockPrimitive";
 import { FVGPrimitive } from "@/lib/chart/primitives/FVGPrimitive";
 import { StructurePrimitive } from "@/lib/chart/primitives/StructurePrimitive";
+import { VolumeProfilePrimitive } from "@/lib/chart/primitives/VolumeProfilePrimitive";
 import { ChartOverlayPanel } from "@/components/ChartOverlayPanel";
 import type { OverlayToggles } from "@/components/ChartOverlayPanel";
 import { IndicatorPanel } from "@/components/IndicatorPanel";
@@ -30,8 +30,10 @@ import type { AlertConfig } from "@/lib/chart/alert-engine";
 import { checkIndicatorAlerts, checkSMCAlerts } from "@/lib/chart/alert-engine";
 import type { IndicatorConfig } from "@/components/IndicatorPanel";
 import { EMA_COLORS, SMA_COLORS } from "@/components/IndicatorPanel";
-import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP } from "@/lib/chart/indicators";
+import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, calcNW, calcMACD, calcStochRSI, calcPSAR, calcIchimoku, calcADX, calcZScore, calcVolumeProfile, calcKeltner, calcDonchian, calcTTMSqueeze } from "@/lib/chart/indicators";
+import { detectMACDSignals, detectADXSignals, detectDirectionFlips, detectStochCross, detectZScoreSignals, detectIchimokuSignals, detectDonchianBreakout, detectNWBandTag, detectVWAPSignals, detectRSIDivergence, detectCVDDivergence } from "@/lib/chart/indicator-signals";
 import type { PriceActionData } from "@/lib/chart/pa-types";
+import { AnimatedNumber } from "@/components/AnimatedNumber";
 
 // ─── Types ───
 interface KlineData {
@@ -42,6 +44,17 @@ interface KlineData {
   close: string;
   volume: string;
 }
+
+const resolveCSSColor = (varName: string, fallback: string): string => {
+  if (typeof window === "undefined") return fallback;
+  const value = getComputedStyle(document.documentElement).getPropertyValue(varName).trim();
+  if (!value) return fallback;
+  if (value.startsWith("hsl") || value.startsWith("#") || value.startsWith("rgb")) {
+    return value;
+  }
+  const formatted = value.includes(",") ? value : value.split(/\s+/).join(", ");
+  return `hsl(${formatted})`;
+};
 
 // ─── TradingView Lightweight Chart Component ───
 const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg }: {
@@ -57,14 +70,39 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const [positionsY, setPositionsY] = useState<Record<number, { entryY: number | null; liqY: number | null }>>({});
   const priceLinesRef = useRef<any[]>([]);
 
-  const [isAlertMode, setIsAlertMode] = useState(false);
   const [alertRules, setAlertRules] = useState<any[]>([]);
   const customAlertLinesRef = useRef<any[]>([]);
-  const isAlertModeRef = useRef(false);
+  const [hoveredCrosshair, setHoveredCrosshair] = useState<{ price: number; y: number } | null>(null);
 
-  useEffect(() => {
-    isAlertModeRef.current = isAlertMode;
-  }, [isAlertMode]);
+  const handleContainerMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    const container = chartContainerRef.current;
+    const series = candlestickSeriesRef.current;
+    if (!container || !series) return;
+
+    const rect = container.getBoundingClientRect();
+    const x = e.clientX - rect.left;
+    const y = e.clientY - rect.top;
+
+    // Check if within bounds of the plot area + price axis (exclude time axis at bottom, which is usually 26px)
+    if (x < 0 || x > rect.width || y < 0 || y > rect.height - 26) {
+      setHoveredCrosshair(null);
+      return;
+    }
+
+    const price = series.coordinateToPrice(y);
+    if (price) {
+      setHoveredCrosshair({
+        price: parseFloat(price.toFixed(2)),
+        y,
+      });
+    } else {
+      setHoveredCrosshair(null);
+    }
+  };
+
+  const handleContainerMouseLeave = () => {
+    setHoveredCrosshair(null);
+  };
 
   const loadAlertRules = useCallback(() => {
     const stored = localStorage.getItem("janus_alert_rules");
@@ -124,6 +162,22 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const obvSeriesRef = useRef<any>(null);
   // Indicator line series — keyed by "ema-21", "sma-50", "bb-upper", "st", "rsi", "vwap" etc.
   const indicatorSeriesRef = useRef<Map<string, any>>(new Map());
+  // RSI reference price lines (70/50/30)
+  const rsiPriceLinesRef      = useRef<any[]>([]);
+  // StochRSI reference price lines (80/20)
+  const stochRsiPriceLinesRef = useRef<any[]>([]);
+  // CVD histogram series ref (per-bar delta; line goes through indicatorSeriesRef)
+  const cvdHistRef  = useRef<any>(null);
+  // MACD histogram series ref
+  const macdHistRef = useRef<any>(null);
+  // Z-Score reference price lines (±2/0)
+  const zScorePriceLinesRef = useRef<any[]>([]);
+  // Volume Profile primitive
+  const vpPrimRef = useRef<VolumeProfilePrimitive | null>(null);
+  // TTM Squeeze histogram series
+  const ttmSqHistRef = useRef<any>(null);
+  // Dedicated indicator signal markers plugin (separate from SMC markers)
+  const indicatorMarkersRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
 
   // ─── Tick animation: persistent lerp loop chasing target ───
   const animFrameRef = useRef<number | null>(null);
@@ -208,12 +262,12 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     chartRef.current = chart;
 
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
-      upColor: "#0ecb81",
-      downColor: "#f6465d",
-      borderUpColor: "#0ecb81",
-      borderDownColor: "#f6465d",
-      wickUpColor: "#0ecb81",
-      wickDownColor: "#f6465d",
+      upColor: resolveCSSColor("--janus-up-bright", "#0ecb81"),
+      downColor: resolveCSSColor("--janus-down-bright", "#f6465d"),
+      borderUpColor: resolveCSSColor("--janus-up-bright", "#0ecb81"),
+      borderDownColor: resolveCSSColor("--janus-down-bright", "#f6465d"),
+      wickUpColor: resolveCSSColor("--janus-up-bright", "#0ecb81"),
+      wickDownColor: resolveCSSColor("--janus-down-bright", "#f6465d"),
     });
     candlestickSeriesRef.current = candlestickSeries;
 
@@ -391,7 +445,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         high: parseFloat(d.high),
         low: parseFloat(d.low),
         close: parseFloat(d.close),
-      }));
+      })).sort((a, b) => (a.time as number) - (b.time as number));
       const volumeData = data.map((d) => {
         const o = parseFloat(d.open);
         const c = parseFloat(d.close);
@@ -400,7 +454,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
           value: parseFloat(d.volume),
           color: c >= o ? "rgba(14, 203, 129, 0.15)" : "rgba(246, 70, 93, 0.15)",
         };
-      });
+      }).sort((a, b) => (a.time as number) - (b.time as number));
       candlestickSeriesRef.current.setData(chartData);
       volumeSeriesRef.current.setData(volumeData);
 
@@ -515,7 +569,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
             time:     (d.time / 1000) as Time,
             position: d.direction === "bullish" ? "belowBar" : "aboveBar",
             shape:    d.direction === "bullish" ? "arrowUp" : "arrowDown",
-            color:    d.direction === "bullish" ? "#22c55e" : "#ef4444",
+            color:    d.direction === "bullish" ? resolveCSSColor("--janus-up", "#0ecb81") : resolveCSSColor("--janus-down", "#f6465d"),
             size:     1.5,
             text:     `${d.atrMultiple.toFixed(1)}×`,
           });
@@ -548,6 +602,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       if (obvSeriesRef.current) {
         obvSeriesRef.current.setData(
           pa.obv.map((p) => ({ time: (p.time / 1000) as UTCTimestamp, value: p.value }))
+            .sort((a, b) => (a.time as number) - (b.time as number))
         );
       }
     } else if (!tog?.obv && obvSeriesRef.current && chartRef.current) {
@@ -574,11 +629,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
 
     const addOrUpdate = (key: string, values: (number | null)[], color: string, dash = false, scaleId = "right") => {
       // WhitespaceData (just {time}) forces a visual break — don't filter nulls, include them as whitespace
-      const lineData = values.map((v, i) =>
-        v !== null
-          ? { time: toTime(i), value: v }
-          : { time: toTime(i) }          // whitespace point = no line drawn = break
-      ) as { time: UTCTimestamp; value?: number }[];
+      // Sort by time: klines data can arrive with out-of-order timestamps (live ticks merged into history)
+      const lineData = values
+        .map((v, i) => v !== null ? { time: toTime(i), value: v } : { time: toTime(i) })
+        .sort((a, b) => (a.time as number) - (b.time as number)) as { time: UTCTimestamp; value?: number }[];
       if (lineData.length === 0) return;
 
       if (!serMap.has(key)) {
@@ -628,41 +682,507 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       }
     }
 
-    // Bollinger Bands
+    // Bollinger Bands — split per-bar into squeeze (amber) and normal (cyan) segments.
+    // Squeeze = BB bands are inside Keltner channels (low-volatility coil).
     if (indicatorCfg.bb) {
       const { upper, middle, lower } = calcBB(closes, indicatorCfg.bbPeriod, indicatorCfg.bbMult);
-      addOrUpdate("bb-upper",  upper,  "rgba(6,182,212,0.70)");
-      addOrUpdate("bb-middle", middle, "rgba(6,182,212,0.40)", true);
-      addOrUpdate("bb-lower",  lower,  "rgba(6,182,212,0.70)");
-    } else {
+      // Compute squeeze state using same period as BB, kMult=1.5
+      const { upper: kcU, lower: kcL } = calcKeltner(
+        highs, lows, closes, indicatorCfg.bbPeriod, indicatorCfg.bbPeriod, 1.5
+      );
+      const sqz = upper.map((u, i) => {
+        const l = lower[i], ku = kcU[i], kl = kcL[i];
+        return u !== null && l !== null && ku !== null && kl !== null
+          ? (u as number) < (ku as number) && (l as number) > (kl as number)
+          : null;
+      });
+
+      // Per-band: value present only on squeeze bars; null (whitespace) otherwise
+      const split = (band: (number | null)[]) => ({
+        sq:   band.map((v, i) => sqz[i] === true  ? v : null),
+        norm: band.map((v, i) => sqz[i] === false ? v : null),
+      });
+
+      const ubands = split(upper), mbands = split(middle), lbands = split(lower);
+
+      addOrUpdate("bb-upper-sq",    ubands.sq,   "rgba(245,158,11,0.90)");
+      addOrUpdate("bb-upper-norm",  ubands.norm, "rgba(6,182,212,0.70)");
+      addOrUpdate("bb-middle-sq",   mbands.sq,   "rgba(245,158,11,0.55)", true);
+      addOrUpdate("bb-middle-norm", mbands.norm, "rgba(6,182,212,0.40)",  true);
+      addOrUpdate("bb-lower-sq",    lbands.sq,   "rgba(245,158,11,0.90)");
+      addOrUpdate("bb-lower-norm",  lbands.norm, "rgba(6,182,212,0.70)");
+      // Remove legacy single-color keys if present
       ["bb-upper", "bb-middle", "bb-lower"].forEach(removeKey);
+    } else {
+      ["bb-upper-sq", "bb-upper-norm", "bb-middle-sq", "bb-middle-norm",
+       "bb-lower-sq", "bb-lower-norm", "bb-upper", "bb-middle", "bb-lower"].forEach(removeKey);
     }
 
-    // SuperTrend — rendered as TWO series (bullish + bearish segments)
+    // SuperTrend — split into separate continuous segments to prevent straight-line bridges across gaps
+    const removePrefixKeys = (prefix: string) => {
+      Array.from(serMap.keys()).forEach((key) => {
+        if (key.startsWith(`${prefix}-`)) {
+          removeKey(key);
+        }
+      });
+    };
+
+    const renderST = (prefix: string, stValues: (number | null)[], stDirection: ("up" | "down" | null)[],
+                      bullColor: string, bearColor: string) => {
+      // Clean up previous segments
+      removePrefixKeys(prefix);
+
+      interface Segment {
+        direction: "up" | "down";
+        data: { time: UTCTimestamp; value: number }[];
+      }
+      const segments: Segment[] = [];
+      let currentSegment: Segment | null = null;
+
+      for (let i = 0; i < stValues.length; i++) {
+        const val = stValues[i];
+        const dir = stDirection[i];
+
+        if (val === null || dir === null) {
+          if (currentSegment) {
+            segments.push(currentSegment);
+            currentSegment = null;
+          }
+          continue;
+        }
+
+        if (!currentSegment || currentSegment.direction !== dir) {
+          if (currentSegment) {
+            segments.push(currentSegment);
+          }
+          currentSegment = {
+            direction: dir,
+            data: [],
+          };
+        }
+
+        currentSegment.data.push({
+          time: toTime(i),
+          value: val,
+        });
+      }
+      if (currentSegment) {
+        segments.push(currentSegment);
+      }
+
+      // Add each segment as a distinct LineSeries
+      segments.forEach((seg, idx) => {
+        const key = `${prefix}-seg-${idx}`;
+        const color = seg.direction === "up" ? bullColor : bearColor;
+        try {
+          const s = chart.addSeries(LineSeries, {
+            color,
+            lineWidth: 1.5,
+            priceScaleId: "right",
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          serMap.set(key, s);
+          s.setData(seg.data);
+        } catch {
+          // Safe check
+        }
+      });
+
+      // clean up legacy single-series key
+      removeKey(prefix);
+    };
+
     if (indicatorCfg.superTrend) {
       const { values, direction } = calcSuperTrend(highs, lows, closes, indicatorCfg.superTrendPeriod, indicatorCfg.superTrendMult);
-      const bullValues: (number | null)[] = values.map((v, i) => direction[i] === "up"   ? v : null);
-      const bearValues: (number | null)[] = values.map((v, i) => direction[i] === "down" ? v : null);
-      addOrUpdate("st-bull", bullValues, "rgba(34,197,94,0.90)");
-      addOrUpdate("st-bear", bearValues, "rgba(239,68,68,0.90)");
+      renderST("st", values, direction, "rgba(34,197,94,0.90)", "rgba(239,68,68,0.90)");
     } else {
-      ["st-bull", "st-bear"].forEach(removeKey);
+      removePrefixKeys("st");
+      removeKey("st");
     }
 
-    // RSI sub-pane
+    // KNN SuperTrend — fixed params (period=10, mult=3) matching backend knn-supertrend service
+    if (indicatorCfg.knnSuperTrend) {
+      const { values, direction } = calcSuperTrend(highs, lows, closes, 10, 3);
+      renderST("knn-st", values, direction, "rgba(6,182,212,0.90)", "rgba(251,146,60,0.90)");
+    } else {
+      removePrefixKeys("knn-st");
+      removeKey("knn-st");
+    }
+
+    // RSI sub-pane with 70/50/30 reference lines
     if (indicatorCfg.rsi) {
       const rsiValues = calcRSI(closes, indicatorCfg.rsiPeriod);
       addOrUpdate("rsi", rsiValues, "rgba(168,85,247,0.85)", false, "rsi");
+      const rsiSeries = serMap.get("rsi");
+      if (rsiSeries && rsiPriceLinesRef.current.length === 0) {
+        const lineOpts = [
+          { price: 70, color: "rgba(239,68,68,0.50)",  lineWidth: 1, lineStyle: 2, title: "OB" },
+          { price: 50, color: "rgba(113,113,122,0.35)", lineWidth: 1, lineStyle: 3, title: "" },
+          { price: 30, color: "rgba(34,197,94,0.50)",  lineWidth: 1, lineStyle: 2, title: "OS" },
+        ] as const;
+        rsiPriceLinesRef.current = lineOpts.map((o) => rsiSeries.createPriceLine(o));
+      }
     } else {
+      // Clean up price lines when RSI toggled off
+      const rsiSeries = serMap.get("rsi");
+      if (rsiSeries) {
+        rsiPriceLinesRef.current.forEach((l) => { try { rsiSeries.removePriceLine(l); } catch { /* safe */ } });
+      }
+      rsiPriceLinesRef.current = [];
       removeKey("rsi");
     }
 
-    // VWAP
+    // VWAP + ±1σ/±2σ bands (volume-weighted standard deviation)
     if (indicatorCfg.vwap) {
-      const vwapValues = calcVWAP(times, highs, lows, closes, volumes);
-      addOrUpdate("vwap", vwapValues, "rgba(245,158,11,0.90)");
+      const { vwap, upper1, lower1, upper2, lower2 } = calcVWAP(times, highs, lows, closes, volumes);
+      addOrUpdate("vwap",    vwap,   "rgba(245,158,11,0.90)");
+      addOrUpdate("vwap-u1", upper1, "rgba(245,158,11,0.50)", true);
+      addOrUpdate("vwap-l1", lower1, "rgba(245,158,11,0.50)", true);
+      addOrUpdate("vwap-u2", upper2, "rgba(245,158,11,0.25)", true);
+      addOrUpdate("vwap-l2", lower2, "rgba(245,158,11,0.25)", true);
     } else {
-      removeKey("vwap");
+      ["vwap", "vwap-u1", "vwap-l1", "vwap-u2", "vwap-l2"].forEach(removeKey);
+    }
+
+    // CVD — per-bar delta histogram + cumulative CVD line, both on "cvd" sub-pane
+    if (indicatorCfg.cvd) {
+      const { delta, cvd } = calcCVD(highs, lows, closes, volumes);
+      const upColor   = "rgba(14,203,129,0.65)";
+      const downColor = "rgba(246,70,93,0.65)";
+      const cvdScaleOpts = { scaleMargins: { top: 0.78, bottom: 0 }, borderVisible: false };
+
+      // Histogram (per-bar delta)
+      if (!cvdHistRef.current && chart) {
+        try {
+          const h = chart.addSeries(HistogramSeries, {
+            priceScaleId: "cvd",
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          h.priceScale().applyOptions(cvdScaleOpts);
+          cvdHistRef.current = h;
+        } catch { /* safe */ }
+      }
+      if (cvdHistRef.current) {
+        const histData = delta
+          .map((v, i) => v !== null ? { time: toTime(i), value: v, color: v >= 0 ? upColor : downColor } : null)
+          .filter(Boolean)
+          .sort((a, b) => (a!.time as number) - (b!.time as number)) as { time: UTCTimestamp; value: number; color: string }[];
+        cvdHistRef.current.setData(histData);
+      }
+
+      // CVD cumulative line
+      addOrUpdate("cvd-line", cvd, "rgba(6,182,212,0.85)", false, "cvd");
+      // Sync scale margins for the line series
+      serMap.get("cvd-line")?.priceScale().applyOptions(cvdScaleOpts);
+
+    } else {
+      // Tear down CVD
+      if (cvdHistRef.current && chart) {
+        try { chart.removeSeries(cvdHistRef.current); } catch { /* safe */ }
+        cvdHistRef.current = null;
+      }
+      removeKey("cvd-line");
+    }
+
+    // MACD — histogram (green/red) + MACD line (blue) + signal line (orange) on "macd" sub-pane
+    if (indicatorCfg.macd) {
+      const { macd, signal, histogram } = calcMACD(closes, indicatorCfg.macdFast, indicatorCfg.macdSlow, indicatorCfg.macdSignal);
+      const macdScaleOpts = { scaleMargins: { top: 0.76, bottom: 0 }, borderVisible: false };
+
+      // Histogram (colored bars)
+      if (!macdHistRef.current && chart) {
+        try {
+          const h = chart.addSeries(HistogramSeries, {
+            priceScaleId: "macd",
+            lastValueVisible: false,
+            priceLineVisible: false,
+          });
+          h.priceScale().applyOptions(macdScaleOpts);
+          macdHistRef.current = h;
+        } catch { /* safe */ }
+      }
+      if (macdHistRef.current) {
+        // 4-color histogram: strong/weak bull (green) + strong/weak bear (red)
+        const histData = histogram
+          .map((v, i) => {
+            if (v === null) return null;
+            const prev = histogram[i - 1] ?? v;
+            let color: string;
+            if (v >= 0) color = v > prev ? "rgba(14,203,129,0.90)" : "rgba(14,203,129,0.42)";
+            else        color = v < prev ? "rgba(246,70,93,0.90)"  : "rgba(246,70,93,0.42)";
+            return { time: toTime(i), value: v, color };
+          })
+          .filter(Boolean)
+          .sort((a, b) => (a!.time as number) - (b!.time as number)) as { time: UTCTimestamp; value: number; color: string }[];
+        macdHistRef.current.setData(histData);
+      }
+
+      // MACD line + signal line
+      addOrUpdate("macd-line",   macd,   "rgba(59,130,246,0.90)", false, "macd");
+      addOrUpdate("macd-signal", signal, "rgba(245,158,11,0.90)", false, "macd");
+      serMap.get("macd-line")?.priceScale().applyOptions(macdScaleOpts);
+      serMap.get("macd-signal")?.priceScale().applyOptions(macdScaleOpts);
+
+    } else {
+      if (macdHistRef.current && chart) {
+        try { chart.removeSeries(macdHistRef.current); } catch { /* safe */ }
+        macdHistRef.current = null;
+      }
+      removeKey("macd-line");
+      removeKey("macd-signal");
+    }
+
+    // Nadaraya-Watson Envelope — kernel regression + MAE bands on main price pane
+    if (indicatorCfg.nw) {
+      const { estimate, upper, lower } = calcNW(closes, indicatorCfg.nwBandwidth, indicatorCfg.nwMult);
+      addOrUpdate("nw-est",   estimate, "rgba(168,85,247,0.90)");
+      addOrUpdate("nw-upper", upper,    "rgba(168,85,247,0.50)", true);
+      addOrUpdate("nw-lower", lower,    "rgba(168,85,247,0.50)", true);
+    } else {
+      ["nw-est", "nw-upper", "nw-lower"].forEach(removeKey);
+    }
+
+    // Stochastic RSI — %K (cyan) + %D (amber) on "stochrsi" sub-pane with 80/20 lines
+    if (indicatorCfg.stochRsi) {
+      const { k, d } = calcStochRSI(closes, indicatorCfg.stochRsiPeriod, indicatorCfg.stochRsiPeriod, indicatorCfg.stochSmoothK, indicatorCfg.stochSmoothD);
+      addOrUpdate("stochrsi-k", k, "rgba(6,182,212,0.85)",  false, "stochrsi");
+      addOrUpdate("stochrsi-d", d, "rgba(245,158,11,0.85)", false, "stochrsi");
+      const scaleOpts = { scaleMargins: { top: 0.76, bottom: 0 }, borderVisible: false };
+      serMap.get("stochrsi-k")?.priceScale().applyOptions(scaleOpts);
+      serMap.get("stochrsi-d")?.priceScale().applyOptions(scaleOpts);
+      // 80/20 reference lines
+      const kSeries = serMap.get("stochrsi-k");
+      if (kSeries && stochRsiPriceLinesRef.current.length === 0) {
+        stochRsiPriceLinesRef.current = [
+          kSeries.createPriceLine({ price: 80, color: "rgba(239,68,68,0.45)",  lineWidth: 1, lineStyle: 2, title: "OB" }),
+          kSeries.createPriceLine({ price: 50, color: "rgba(113,113,122,0.30)", lineWidth: 1, lineStyle: 3, title: "" }),
+          kSeries.createPriceLine({ price: 20, color: "rgba(34,197,94,0.45)",  lineWidth: 1, lineStyle: 2, title: "OS" }),
+        ];
+      }
+    } else {
+      const kSeries = serMap.get("stochrsi-k");
+      if (kSeries) {
+        stochRsiPriceLinesRef.current.forEach((l) => { try { kSeries.removePriceLine(l); } catch { /* safe */ } });
+      }
+      stochRsiPriceLinesRef.current = [];
+      removeKey("stochrsi-k");
+      removeKey("stochrsi-d");
+    }
+
+    // Parabolic SAR — bull dots (green) above price, bear dots (red) below, on main pane
+    if (indicatorCfg.psar) {
+      const { values, direction } = calcPSAR(highs, lows, closes, indicatorCfg.psarStep, indicatorCfg.psarMax);
+      const bullSAR = values.map((v, i) => direction[i] === "up"   ? v : null);
+      const bearSAR = values.map((v, i) => direction[i] === "down" ? v : null);
+      addOrUpdate("psar-bull", bullSAR, "hsl(var(--janus-up))",   false, "right");
+      addOrUpdate("psar-bear", bearSAR, "hsl(var(--janus-down))", false, "right");
+      // Style as dotted (lineStyle 3) to visually approximate dots
+      const dotStyle = { lineWidth: 1, lineStyle: 3 } as const;
+      serMap.get("psar-bull")?.applyOptions({ ...dotStyle, lineWidth: 1 });
+      serMap.get("psar-bear")?.applyOptions({ ...dotStyle, lineWidth: 1 });
+    } else {
+      removeKey("psar-bull");
+      removeKey("psar-bear");
+    }
+
+    // Ichimoku Cloud — 5 lines on main price pane
+    // Tenkan=orange, Kijun=blue, SpanA=green, SpanB=red, Chikou=gray
+    // Note: SpanA/SpanB extend `displacement` bars into the future — arrays are longer than closes
+    if (indicatorCfg.ichimoku) {
+      const { tenkan, kijun, spanA, spanB, chikou } = calcIchimoku(highs, lows, closes);
+      const n = closes.length;
+      const disp = 26;
+      // Main-pane lines (aligned with closes index)
+      addOrUpdate("ichi-tenkan", tenkan.slice(0, n), "rgba(239,68,68,0.85)");
+      addOrUpdate("ichi-kijun",  kijun.slice(0, n),  "rgba(59,130,246,0.85)");
+      addOrUpdate("ichi-chikou", chikou.slice(0, n),  "rgba(113,113,122,0.70)");
+      // Future cloud lines — map displacement-shifted indices to times by extending toTime
+      const futureSpanA: (number | null)[] = new Array(n).fill(null);
+      const futureSpanB: (number | null)[] = new Array(n).fill(null);
+      for (let i = n - disp; i < n; i++) {
+        futureSpanA[i] = spanA[i + disp] ?? null;
+        futureSpanB[i] = spanB[i + disp] ?? null;
+      }
+      addOrUpdate("ichi-spanA", futureSpanA, "hsl(var(--janus-up)/0.60)",   true);
+      addOrUpdate("ichi-spanB", futureSpanB, "hsl(var(--janus-down)/0.60)", true);
+    } else {
+      ["ichi-tenkan", "ichi-kijun", "ichi-chikou", "ichi-spanA", "ichi-spanB"].forEach(removeKey);
+    }
+
+    // ADX + DI lines — all on "adx" sub-pane
+    // ADX=amber (trend strength 0-100), +DI=green, -DI=red
+    if (indicatorCfg.adx) {
+      const { adx, diPlus, diMinus } = calcADX(highs, lows, closes, indicatorCfg.adxPeriod);
+      const adxScaleOpts = { scaleMargins: { top: 0.76, bottom: 0 }, borderVisible: false };
+      addOrUpdate("adx-line",    adx,     "rgba(245,158,11,0.90)",  false, "adx");
+      addOrUpdate("adx-diplus",  diPlus,  "hsl(var(--janus-up)/0.80)",   false, "adx");
+      addOrUpdate("adx-diminus", diMinus, "hsl(var(--janus-down)/0.80)", false, "adx");
+      serMap.get("adx-line")?.priceScale().applyOptions(adxScaleOpts);
+    } else {
+      ["adx-line", "adx-diplus", "adx-diminus"].forEach(removeKey);
+    }
+
+    // Z-Score — sub-pane with ±2/±1/0 reference lines
+    if (indicatorCfg.zScore) {
+      const zValues = calcZScore(closes, indicatorCfg.zScorePeriod);
+      addOrUpdate("zscore", zValues, "rgba(6,182,212,0.85)", false, "zscore");
+      const scaleOpts = { scaleMargins: { top: 0.76, bottom: 0 }, borderVisible: false };
+      serMap.get("zscore")?.priceScale().applyOptions(scaleOpts);
+      const zSeries = serMap.get("zscore");
+      if (zSeries && zScorePriceLinesRef.current.length === 0) {
+        zScorePriceLinesRef.current = [
+          zSeries.createPriceLine({ price:  2, color: "rgba(239,68,68,0.50)",   lineWidth: 1, lineStyle: 2, title: "+2σ" }),
+          zSeries.createPriceLine({ price:  1, color: "rgba(239,68,68,0.25)",   lineWidth: 1, lineStyle: 3, title: "+1σ" }),
+          zSeries.createPriceLine({ price:  0, color: "rgba(113,113,122,0.40)", lineWidth: 1, lineStyle: 0, title: "0" }),
+          zSeries.createPriceLine({ price: -1, color: "rgba(34,197,94,0.25)",   lineWidth: 1, lineStyle: 3, title: "-1σ" }),
+          zSeries.createPriceLine({ price: -2, color: "rgba(34,197,94,0.50)",   lineWidth: 1, lineStyle: 2, title: "-2σ" }),
+        ];
+      }
+    } else {
+      const zSeries = serMap.get("zscore");
+      if (zSeries) {
+        zScorePriceLinesRef.current.forEach((l) => { try { zSeries.removePriceLine(l); } catch { /* safe */ } });
+      }
+      zScorePriceLinesRef.current = [];
+      removeKey("zscore");
+    }
+
+    // Keltner Channels — EMA middle + ATR-based upper/lower bands (cyan)
+    if (indicatorCfg.keltner) {
+      const { upper, middle, lower } = calcKeltner(highs, lows, closes, indicatorCfg.keltnerEma, indicatorCfg.keltnerAtr, indicatorCfg.keltnerMult);
+      addOrUpdate("keltner-upper",  upper,  "rgba(6,182,212,0.70)", true);
+      addOrUpdate("keltner-middle", middle, "rgba(6,182,212,0.90)");
+      addOrUpdate("keltner-lower",  lower,  "rgba(6,182,212,0.70)", true);
+    } else {
+      ["keltner-upper", "keltner-middle", "keltner-lower"].forEach(removeKey);
+    }
+
+    // Donchian Channels — highest high / lowest low / midline (purple)
+    if (indicatorCfg.donchian) {
+      const { upper, middle, lower } = calcDonchian(highs, lows, indicatorCfg.donchianPeriod);
+      addOrUpdate("donchian-upper",  upper,  "rgba(168,85,247,0.70)", true);
+      addOrUpdate("donchian-middle", middle, "rgba(168,85,247,0.45)", true);
+      addOrUpdate("donchian-lower",  lower,  "rgba(168,85,247,0.70)", true);
+    } else {
+      ["donchian-upper", "donchian-middle", "donchian-lower"].forEach(removeKey);
+    }
+
+    // TTM Squeeze — 4-color momentum histogram on "ttmsq" sub-pane
+    if (indicatorCfg.ttmSqueeze) {
+      const { momentum, histColor } = calcTTMSqueeze(
+        closes, highs, lows, indicatorCfg.ttmSqPeriod, indicatorCfg.ttmSqBBMult, indicatorCfg.ttmSqKMult
+      );
+      const ttmScaleOpts = { scaleMargins: { top: 0.78, bottom: 0 }, borderVisible: false };
+      if (!ttmSqHistRef.current && chart) {
+        try {
+          const h = chart.addSeries(HistogramSeries, { priceScaleId: "ttmsq", lastValueVisible: false, priceLineVisible: false });
+          h.priceScale().applyOptions(ttmScaleOpts);
+          ttmSqHistRef.current = h;
+        } catch { /* safe */ }
+      }
+      if (ttmSqHistRef.current) {
+        const colorMap: Record<string, string> = {
+          g_strong: "rgba(14,203,129,0.90)", g_weak: "rgba(14,203,129,0.42)",
+          r_strong: "rgba(246,70,93,0.90)",  r_weak: "rgba(246,70,93,0.42)",
+        };
+        const ttmData = momentum
+          .map((v, i) => {
+            if (v === null || histColor[i] === null) return null;
+            return { time: toTime(i), value: v, color: colorMap[histColor[i]!] ?? "rgba(113,113,122,0.50)" };
+          })
+          .filter(Boolean)
+          .sort((a, b) => (a!.time as number) - (b!.time as number)) as { time: UTCTimestamp; value: number; color: string }[];
+        ttmSqHistRef.current.setData(ttmData);
+      }
+    } else if (!indicatorCfg.ttmSqueeze && ttmSqHistRef.current && chart) {
+      try { chart.removeSeries(ttmSqHistRef.current); } catch { /* safe */ }
+      ttmSqHistRef.current = null;
+    }
+
+    // Volume Profile — canvas primitive attached to candlestick series
+    if (indicatorCfg.volumeProfile && candlestickSeriesRef.current) {
+      const vpData = calcVolumeProfile(highs, lows, closes, volumes, indicatorCfg.volumeProfileBuckets);
+      if (!vpPrimRef.current) {
+        vpPrimRef.current = new VolumeProfilePrimitive();
+        try { candlestickSeriesRef.current.attachPrimitive(vpPrimRef.current); } catch { /* safe */ }
+      }
+      vpPrimRef.current.setData(vpData);
+    } else if (!indicatorCfg.volumeProfile && vpPrimRef.current) {
+      vpPrimRef.current.setData(null);
+      try { candlestickSeriesRef.current?.detachPrimitive(vpPrimRef.current); } catch { /* safe */ }
+      vpPrimRef.current = null;
+    }
+
+    // ── Indicator Signal Markers ─────────────────────────────────────────
+    // Collect signals from all active indicators, render on dedicated plugin.
+    if (candlestickSeriesRef.current) {
+      if (!indicatorMarkersRef.current) {
+        try { indicatorMarkersRef.current = createSeriesMarkers(candlestickSeriesRef.current, []); }
+        catch { /* safe */ }
+      }
+      const signals: ReturnType<typeof detectMACDSignals> = [];
+
+      if (indicatorCfg.macd) {
+        const { macd: m, signal: s } = calcMACD(closes, indicatorCfg.macdFast, indicatorCfg.macdSlow, indicatorCfg.macdSignal);
+        signals.push(...detectMACDSignals(m, s, times));
+      }
+      if (indicatorCfg.adx) {
+        const { adx, diPlus, diMinus } = calcADX(highs, lows, closes, indicatorCfg.adxPeriod);
+        signals.push(...detectADXSignals(adx, diPlus, diMinus, times));
+      }
+      if (indicatorCfg.superTrend) {
+        const { direction } = calcSuperTrend(highs, lows, closes, indicatorCfg.superTrendPeriod, indicatorCfg.superTrendMult);
+        signals.push(...detectDirectionFlips(direction, times, "ST"));
+      }
+      if (indicatorCfg.knnSuperTrend) {
+        // KNN ST direction is computed inline in Dashboard — recompute here for signals
+        const { direction } = calcSuperTrend(highs, lows, closes, 10, 3);
+        signals.push(...detectDirectionFlips(direction, times, "KNN"));
+      }
+      if (indicatorCfg.psar) {
+        const { direction } = calcPSAR(highs, lows, closes, indicatorCfg.psarStep, indicatorCfg.psarMax);
+        signals.push(...detectDirectionFlips(direction, times, "SAR"));
+      }
+      if (indicatorCfg.stochRsi) {
+        const { k, d } = calcStochRSI(closes, indicatorCfg.stochRsiPeriod, indicatorCfg.stochRsiPeriod, indicatorCfg.stochSmoothK, indicatorCfg.stochSmoothD);
+        signals.push(...detectStochCross(k, d, times));
+      }
+      if (indicatorCfg.zScore) {
+        const z = calcZScore(closes, indicatorCfg.zScorePeriod);
+        signals.push(...detectZScoreSignals(z, times));
+      }
+      if (indicatorCfg.ichimoku) {
+        const { tenkan, kijun, spanA, spanB } = calcIchimoku(highs, lows, closes);
+        signals.push(...detectIchimokuSignals(closes, tenkan, kijun, spanA, spanB, times));
+      }
+      if (indicatorCfg.donchian) {
+        const { upper, lower } = calcDonchian(highs, lows, indicatorCfg.donchianPeriod);
+        signals.push(...detectDonchianBreakout(closes, upper, lower, times));
+      }
+      if (indicatorCfg.nw) {
+        const { upper, lower } = calcNW(closes, indicatorCfg.nwBandwidth, indicatorCfg.nwMult);
+        signals.push(...detectNWBandTag(closes, upper, lower, times));
+      }
+      if (indicatorCfg.vwap) {
+        const { vwap } = calcVWAP(times, highs, lows, closes, volumes);
+        signals.push(...detectVWAPSignals(closes, vwap, times));
+      }
+      if (indicatorCfg.rsi) {
+        const rsiVals = calcRSI(closes, indicatorCfg.rsiPeriod);
+        signals.push(...detectRSIDivergence(closes, rsiVals, times));
+      }
+      if (indicatorCfg.cvd) {
+        const { cvd } = calcCVD(highs, lows, closes, volumes);
+        signals.push(...detectCVDDivergence(closes, cvd, times));
+      }
+
+      if (indicatorMarkersRef.current) {
+        indicatorMarkersRef.current.setMarkers(
+          signals.sort((a, b) => (a.time as number) - (b.time as number))
+        );
+      }
     }
 
   }, [indicatorCfg, data, interval]);
@@ -692,7 +1212,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         if (isNaN(entryPrice) || entryPrice <= 0) return null;
 
         const isLong = pos.side === "long";
-        const color = isLong ? "#0ecb81" : "#f6465d";
+        const color = isLong ? resolveCSSColor("--janus-up-bright", "#0ecb81") : resolveCSSColor("--janus-down-bright", "#f6465d");
 
         try {
           const line = series.createPriceLine({
@@ -776,53 +1296,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     customAlertLinesRef.current = newAlertLines;
   }, [alertRules, symbol, chartInitialized]);
 
-  // Subscribe to chart clicks for placing custom alerts
-  useEffect(() => {
-    const chart = chartRef.current;
-    if (!chart || !chartInitialized) return;
 
-    const handleChartClick = (param: any) => {
-      if (!isAlertModeRef.current) return;
-      if (!param.point) return;
-
-      const series = candlestickSeriesRef.current;
-      if (!series) return;
-
-      const price = series.coordinateToPrice(param.point.y);
-      if (price) {
-        const roundedPrice = parseFloat(price.toFixed(2));
-        const operator = roundedPrice > lastPrice ? ">" : "<";
-
-        const newRule = {
-          id: Math.random().toString(36).substring(2, 9),
-          symbol: symbol,
-          type: "price",
-          operator,
-          value: roundedPrice,
-          isActive: true,
-        };
-
-        const stored = localStorage.getItem("janus_alert_rules");
-        const currentRules = stored ? JSON.parse(stored) : [];
-        const updatedRules = [...currentRules, newRule];
-        localStorage.setItem("janus_alert_rules", JSON.stringify(updatedRules));
-
-        window.dispatchEvent(new Event("janus_alerts_changed"));
-        
-        setIsAlertMode(false);
-        toast.success(`Price alert created at $${roundedPrice.toFixed(2)}!`);
-      }
-    };
-
-    chart.subscribeClick(handleChartClick);
-    return () => {
-      try {
-        chart.unsubscribeClick(handleChartClick);
-      } catch (err) {
-        // Safe check
-      }
-    };
-  }, [chartInitialized, symbol, lastPrice]);
 
   // Recalculate vertical coordinates of active positions on the canvas
   const updatePositionsCoordinates = useCallback(() => {
@@ -878,30 +1352,35 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   }, [chartInitialized, updatePositionsCoordinates]);
 
   return (
-    <div ref={chartContainerRef} className="w-full h-full relative select-none">
+    <div
+      ref={chartContainerRef}
+      className="w-full h-full relative select-none"
+      onMouseMove={handleContainerMouseMove}
+      onMouseLeave={handleContainerMouseLeave}
+    >
       {/* HUD Info Overlay */}
       {hudData && (
         <div className="absolute top-2 left-4 z-10 flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] font-mono bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-md border border-white/5 pointer-events-none">
           <span className="text-[#a1a1aa]">{hudData.time}</span>
           <span>
             <span className="text-[#71717a] mr-0.5">O</span>
-            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.open}</span>
+            <span className={hudData.isGreen ? "text-j-up-bright" : "text-j-down-bright"}>{hudData.open}</span>
           </span>
           <span>
             <span className="text-[#71717a] mr-0.5">H</span>
-            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.high}</span>
+            <span className={hudData.isGreen ? "text-j-up-bright" : "text-j-down-bright"}>{hudData.high}</span>
           </span>
           <span>
             <span className="text-[#71717a] mr-0.5">L</span>
-            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.low}</span>
+            <span className={hudData.isGreen ? "text-j-up-bright" : "text-j-down-bright"}>{hudData.low}</span>
           </span>
           <span>
             <span className="text-[#71717a] mr-0.5">C</span>
-            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.close}</span>
+            <span className={hudData.isGreen ? "text-j-up-bright" : "text-j-down-bright"}>{hudData.close}</span>
           </span>
           <span>
             <span className="text-[#71717a] mr-0.5">Chg</span>
-            <span className={hudData.isGreen ? "text-[#0ecb81]" : "text-[#f6465d]"}>{hudData.pct}</span>
+            <span className={hudData.isGreen ? "text-j-up-bright" : "text-j-down-bright"}>{hudData.pct}</span>
           </span>
           <span className="hidden sm:inline">
             <span className="text-[#71717a] mr-0.5">Vol</span>
@@ -946,8 +1425,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
                     className={cn(
                       "absolute px-2 py-0.5 rounded text-[10px] font-bold font-mono shadow-md border transition-all",
                       isProfit
-                        ? "bg-[#0ecb81]/90 border-[#0ecb81] text-black"
-                        : "bg-[#f6465d]/90 border-[#f6465d] text-white"
+                        ? "bg-j-up-bright/90 border-j-up-bright text-black"
+                        : "bg-j-down-bright/90 border-j-down-bright text-white"
                     )}
                     style={{
                       left: "25%",
@@ -961,7 +1440,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
                   <span
                     className="absolute px-2 py-0.5 rounded text-[10px] font-semibold font-mono bg-[#18181b]/90 border border-[#27272a] text-[#f4f4f5] shadow-md"
                     style={{
-                      right: "8px",
+                      right: "68px",
                       transform: "translateY(-50%)",
                     }}
                   >
@@ -992,7 +1471,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
                     <span
                       className="absolute px-2 py-0.5 rounded text-[10px] font-semibold font-mono bg-[#18181b]/90 border border-[#27272a] text-[#f59e0b] shadow-md"
                       style={{
-                        right: "8px",
+                        right: "68px",
                         transform: "translateY(-50%)",
                       }}
                     >
@@ -1006,39 +1485,45 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         </div>
       )}
 
-      {/* Interactive Alert controls */}
-      <div className="absolute top-2 right-4 z-20 flex gap-2 pointer-events-auto items-center">
+      {/* Dynamic Cursor Price Alert Creator (+) Button */}
+      {hoveredCrosshair && (
         <button
-          onClick={() => setIsAlertMode(!isAlertMode)}
-          className={cn(
-            "h-7 px-2.5 rounded-full text-[10px] font-bold flex items-center gap-1.5 shadow-lg border transition-all select-none cursor-pointer",
-            isAlertMode
-              ? "bg-[#ef4444] border-[#ef4444] text-white hover:bg-[#dc2626]"
-              : "bg-[#18181b]/80 backdrop-blur-md border-white/10 text-[#f59e0b] hover:bg-[#27272a]/90 hover:border-white/20"
-          )}
-        >
-          <Bell size={11} className={cn(isAlertMode && "animate-pulse")} />
-          {isAlertMode ? "Cancel Mode" : "Add Price Alert"}
-        </button>
-      </div>
+          onClick={() => {
+            const roundedPrice = hoveredCrosshair.price;
+            const operator = roundedPrice > lastPrice ? ">" : "<";
 
-      {/* Alert Mode Banner */}
-      {isAlertMode && (
-        <div className="absolute top-12 left-1/2 -translate-x-1/2 z-20 bg-[#f59e0b] text-[#09090b] text-[10px] font-bold px-4 py-1.5 rounded-full shadow-lg flex items-center gap-2 animate-bounce select-none pointer-events-auto border border-[#d97706]">
-          <Bell size={12} className="animate-pulse" />
-          <span>Click on the chart area to place a Price Alert line at that level.</span>
-          <button 
-            onClick={() => setIsAlertMode(false)}
-            className="ml-2 hover:bg-black/10 px-1.5 py-0.5 rounded font-bold text-[9px] uppercase cursor-pointer"
-          >
-            Cancel
-          </button>
-        </div>
+            const newRule = {
+              id: Math.random().toString(36).substring(2, 9),
+              symbol: symbol,
+              type: "price",
+              operator,
+              value: roundedPrice,
+              isActive: true,
+            };
+
+            const stored = localStorage.getItem("janus_alert_rules");
+            const currentRules = stored ? JSON.parse(stored) : [];
+            const updatedRules = [...currentRules, newRule];
+            localStorage.setItem("janus_alert_rules", JSON.stringify(updatedRules));
+
+            window.dispatchEvent(new Event("janus_alerts_changed"));
+            toast.success(`Price alert created at $${roundedPrice.toFixed(2)}!`);
+          }}
+          className="absolute z-30 w-5 h-5 bg-[#1c1c1f] hover:bg-[#f59e0b] text-[#e4e4e7] hover:text-black border border-[#3f3f46] rounded-full flex items-center justify-center cursor-pointer transition-all shadow-lg active:scale-95"
+          style={{
+            top: `${hoveredCrosshair.y}px`,
+            right: "55px",
+            transform: "translate(50%, -50%)",
+          }}
+          title={`Create Price Alert at $${hoveredCrosshair.price.toFixed(2)}`}
+        >
+          <Plus size={10} strokeWidth={3} />
+        </button>
       )}
 
       {/* Custom Alerts List Overlay */}
       {chartInitialized && alertRules.length > 0 && (
-        <div className="absolute bottom-2 right-4 z-10 flex flex-col gap-1 max-h-[120px] overflow-y-auto bg-[#09090b]/80 backdrop-blur-md p-2 rounded border border-[#27272a] font-mono text-[9px] pointer-events-auto max-w-[200px] shadow-lg">
+        <div className="absolute bottom-[38px] right-[68px] z-10 flex flex-col gap-1 max-h-[120px] overflow-y-auto bg-[#09090b]/80 backdrop-blur-md p-2 rounded border border-[#27272a] font-mono text-[9px] pointer-events-auto max-w-[200px] shadow-lg">
           <div className="text-[#71717a] font-bold mb-1 uppercase tracking-wider text-[8px]">Active Alert Lines</div>
           {alertRules
             .filter((rule) => rule.symbol === symbol && rule.type === "price")
@@ -1047,12 +1532,12 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
                 <span className="text-[#f59e0b] font-bold">
                   {rule.operator} ${rule.value.toFixed(2)}
                 </span>
-                <span className={cn("text-[7px] uppercase font-bold px-1 rounded-sm", rule.isActive ? "bg-[#0ecb81]/15 text-[#0ecb81]" : "bg-white/15 text-[#a1a1aa]")}>
+                <span className={cn("text-[7px] uppercase font-bold px-1 rounded-sm", rule.isActive ? "bg-j-up-bright/15 text-j-up-bright" : "bg-white/15 text-[#a1a1aa]")}>
                   {rule.isActive ? "ON" : "OFF"}
                 </span>
                 <button
                   onClick={() => handleDeleteRule(rule.id)}
-                  className="text-[#71717a] hover:text-[#ef4444] transition-colors pl-1 font-bold text-xs cursor-pointer"
+                  className="text-[#71717a] hover:text-j-down transition-colors pl-1 font-bold text-xs cursor-pointer"
                   title="Delete Alert"
                 >
                   ✕
@@ -1064,7 +1549,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
 
       {/* Active Position Floating Capsule */}
       {positions && positions.length > 0 && lastPrice > 0 && (
-        <div className="absolute top-11 right-4 z-10 flex flex-col gap-1.5 pointer-events-none">
+        <div className="absolute top-11 right-[68px] z-10 flex flex-col gap-1.5 pointer-events-none">
           {positions.map((pos) => {
             const entry = parseFloat(pos.entryPrice);
             const size = parseFloat(pos.size);
@@ -1083,8 +1568,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
                   className={cn(
                     "px-2 py-0.5 rounded-full text-[9px] font-bold tracking-wide uppercase",
                     isLong
-                      ? "bg-[#0ecb81]/15 text-[#0ecb81]"
-                      : "bg-[#f6465d]/15 text-[#f6465d]"
+                      ? "bg-j-up-bright/15 text-j-up-bright"
+                      : "bg-j-down-bright/15 text-j-down-bright"
                   )}
                 >
                   {isLong ? "Long" : "Short"} {size.toFixed(3)}
@@ -1096,7 +1581,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
                 <span
                   className={cn(
                     "font-bold tabular-nums",
-                    isProfit ? "text-[#0ecb81]" : "text-[#f6465d]"
+                    isProfit ? "text-j-up-bright" : "text-j-down-bright"
                   )}
                 >
                   {isProfit ? "+" : ""}
@@ -1158,7 +1643,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
   const spreadPct = rawBids[0] ? (spread / parseFloat(rawBids[0][0])) * 100 : 0;
 
   const lastPrice = tickerData ? parseFloat(tickerData.lastPrice) : 0;
-  const lastPriceColor = tickerData && parseFloat(tickerData.priceChange) >= 0 ? "#0ecb81" : "#f6465d";
+  const lastPriceColor = tickerData && parseFloat(tickerData.priceChange) >= 0 ? "hsl(var(--janus-up-bright))" : "hsl(var(--janus-down-bright))";
 
   return (
     <div className="flex flex-col h-full text-[10px]">
@@ -1174,7 +1659,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
           <div>
             <div className="text-[9px] text-[#71717a]">Futures</div>
             <div className="text-sm font-bold tabular-nums" style={{ color: lastPriceColor }}>
-              {lastPrice > 0 ? lastPrice.toFixed(2) : "--"}
+              {lastPrice > 0 ? <AnimatedNumber value={lastPrice} decimals={2} duration={150} /> : "--"}
             </div>
           </div>
           {markPrice && (
@@ -1247,8 +1732,8 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 <div key={i} className="grid grid-cols-3 items-center py-0.5 px-2 hover:bg-[#27272a]/30">
                   {/* Bid qty + bar */}
                   <div className="relative flex items-center justify-start">
-                    <div className="absolute inset-y-0 right-0 bg-[#0ecb81]/15 rounded-l" style={{ width: `${bidW}%` }} />
-                    <span className="relative tabular-nums text-[#0ecb81]">
+                    <div className="absolute inset-y-0 right-0 bg-j-up-bright/15 rounded-l" style={{ width: `${bidW}%` }} />
+                    <span className="relative tabular-nums text-j-up-bright">
                       {bid ? bidSize.toFixed(3) : ""}
                     </span>
                   </div>
@@ -1256,16 +1741,16 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                   {/* Price */}
                   <div className="text-center tabular-nums">
                     {bid ? (
-                      <span className="text-[#0ecb81] font-medium">{parseFloat(bid[0]).toFixed(2)}</span>
+                      <span className="text-j-up-bright font-medium">{parseFloat(bid[0]).toFixed(2)}</span>
                     ) : ask ? (
-                      <span className="text-[#f6465d] font-medium">{parseFloat(ask[0]).toFixed(2)}</span>
+                      <span className="text-j-down-bright font-medium">{parseFloat(ask[0]).toFixed(2)}</span>
                     ) : ""}
                   </div>
 
                   {/* Ask qty + bar */}
                   <div className="relative flex items-center justify-end">
-                    <div className="absolute inset-y-0 left-0 bg-[#f6465d]/15 rounded-r" style={{ width: `${askW}%` }} />
-                    <span className="relative tabular-nums text-[#f6465d]">
+                    <div className="absolute inset-y-0 left-0 bg-j-down-bright/15 rounded-r" style={{ width: `${askW}%` }} />
+                    <span className="relative tabular-nums text-j-down-bright">
                       {ask ? askSize.toFixed(3) : ""}
                     </span>
                   </div>
@@ -1287,8 +1772,8 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
 
             // Volatility regime styling
             const regime = metrics.volatilityRegime || "NORMAL";
-            const regimeColor = regime === "HIGH" ? "text-[#ef4444] border-[#ef4444]" : regime === "LOW" ? "text-[#3b82f6] border-[#3b82f6]" : "text-[#a1a1aa] border-[#27272a]";
-            const regimeBg = regime === "HIGH" ? "bg-[#ef4444]/10 animate-pulse" : regime === "LOW" ? "bg-[#3b82f6]/10" : "bg-[#27272a]/20";
+            const regimeColor = regime === "HIGH" ? "text-j-down border-j-down" : regime === "LOW" ? "text-[#3b82f6] border-[#3b82f6]" : "text-[#a1a1aa] border-[#27272a]";
+            const regimeBg = regime === "HIGH" ? "bg-j-down/10 animate-pulse" : regime === "LOW" ? "bg-[#3b82f6]/10" : "bg-[#27272a]/20";
 
             // Imbalance calculations (cap at -1 to +1)
             const imb = Math.max(-1, Math.min(1, metrics.bidAskImbalance || 0));
@@ -1309,7 +1794,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                   </div>
                   <div className="flex flex-col gap-1 p-2 rounded border border-[#27272a] bg-[#27272a]/10 text-center">
                     <span className="text-[8px] uppercase tracking-wider text-[#71717a] font-medium">Net Liquidity Delta</span>
-                    <span className={cn("text-xs font-bold tabular-nums", netDelta >= 0 ? "text-[#0ecb81]" : "text-[#f6465d]")}>
+                    <span className={cn("text-xs font-bold tabular-nums", netDelta >= 0 ? "text-j-up-bright" : "text-j-down-bright")}>
                       {netDelta >= 0 ? "+" : ""}{netDelta.toFixed(1)}
                     </span>
                   </div>
@@ -1319,14 +1804,14 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40">
                   <div className="flex justify-between items-center mb-1 text-[8px] uppercase text-[#71717a] font-semibold">
                     <span>Seller Pressure</span>
-                    <span className={cn("font-bold text-[9px] tabular-nums", imb >= 0 ? "text-[#0ecb81]" : "text-[#f6465d]")}>
+                    <span className={cn("font-bold text-[9px] tabular-nums", imb >= 0 ? "text-j-up-bright" : "text-j-down-bright")}>
                       OFI: {imb >= 0 ? "+" : ""}{imb.toFixed(2)}
                     </span>
                     <span>Buyer Pressure</span>
                   </div>
                   <div className="relative h-2 rounded bg-[#27272a]/40 overflow-hidden mb-1 flex">
-                    <div className="h-full bg-[#f6465d]/40" style={{ width: "50%" }} />
-                    <div className="h-full bg-[#0ecb81]/40" style={{ width: "50%" }} />
+                    <div className="h-full bg-j-down-bright/40" style={{ width: "50%" }} />
+                    <div className="h-full bg-j-up-bright/40" style={{ width: "50%" }} />
                     {/* Imbalance Marker */}
                     <div className="absolute top-0 bottom-0 w-1 bg-[#ffffff] shadow-[0_0_4px_rgba(255,255,255,0.8)] transition-all duration-300" style={{ left: `${imbPct}%`, transform: 'translateX(-50%)' }} />
                   </div>
@@ -1341,10 +1826,10 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
                   <div className="flex justify-between items-center text-[8px] uppercase text-[#71717a] font-semibold">
                     <span className="flex items-center gap-1">
-                      <Zap size={9} className={cn(sweep > 50 ? "text-[#ef4444] animate-bounce" : "text-[#52525b]")} />
+                      <Zap size={9} className={cn(sweep > 50 ? "text-j-down animate-bounce" : "text-[#52525b]")} />
                       Tape Sweep Intensity
                     </span>
-                    <span className={cn("font-bold tabular-nums text-[9px]", sweep > 75 ? "text-[#ef4444]" : sweep > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
+                    <span className={cn("font-bold tabular-nums text-[9px]", sweep > 75 ? "text-j-down" : sweep > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
                       {sweep.toFixed(0)}/100
                     </span>
                   </div>
@@ -1352,14 +1837,14 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                     <div
                       className={cn(
                         "h-full rounded-full transition-all duration-500",
-                        sweep > 75 ? "bg-[#ef4444]" : sweep > 40 ? "bg-[#f59e0b]" : "bg-[#3b82f6]"
+                        sweep > 75 ? "bg-j-down" : sweep > 40 ? "bg-[#f59e0b]" : "bg-[#3b82f6]"
                       )}
                       style={{ width: `${sweep}%` }}
                     />
                   </div>
                   <div className="flex justify-between text-[7px] text-[#52525b]">
                     <span>STABLE</span>
-                    <span className={cn(sweep > 50 && "text-[#ef4444] font-bold")}>
+                    <span className={cn(sweep > 50 && "text-j-down font-bold")}>
                       {sweep > 75 ? "AGGRESSIVE BREAKOUT" : sweep > 40 ? "PRESSURE SWEEP" : "ORDER FLOW CALM"}
                     </span>
                   </div>
@@ -1369,10 +1854,10 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
                   <div className="flex justify-between items-center text-[8px] uppercase text-[#71717a] font-semibold">
                     <span className="flex items-center gap-1">
-                      <Sparkles size={9} className={cn(absorb > 50 ? "text-[#0ecb81]" : "text-[#52525b]")} />
+                      <Sparkles size={9} className={cn(absorb > 50 ? "text-j-up-bright" : "text-[#52525b]")} />
                       Micro Limit Absorption
                     </span>
-                    <span className={cn("font-bold tabular-nums text-[9px]", absorb > 75 ? "text-[#0ecb81]" : absorb > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
+                    <span className={cn("font-bold tabular-nums text-[9px]", absorb > 75 ? "text-j-up-bright" : absorb > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
                       {absorb.toFixed(0)}/100
                     </span>
                   </div>
@@ -1380,14 +1865,14 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                     <div
                       className={cn(
                         "h-full rounded-full transition-all duration-500",
-                        absorb > 75 ? "bg-[#0ecb81]" : absorb > 40 ? "bg-[#8b5cf6]" : "bg-[#71717a]"
+                        absorb > 75 ? "bg-j-up-bright" : absorb > 40 ? "bg-[#8b5cf6]" : "bg-[#71717a]"
                       )}
                       style={{ width: `${absorb}%` }}
                     />
                   </div>
                   <div className="flex justify-between text-[7px] text-[#52525b]">
                     <span>NO WALL</span>
-                    <span className={cn(absorb > 50 && "text-[#0ecb81] font-bold")}>
+                    <span className={cn(absorb > 50 && "text-j-up-bright font-bold")}>
                       {absorb > 75 ? "HEAVY BLOCK ABSORPTION" : absorb > 40 ? "WALL RESISTING" : "TAPING DIRECTLY"}
                     </span>
                   </div>
@@ -1397,13 +1882,13 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 <div className="grid grid-cols-2 gap-2 text-[8px] text-[#71717a] font-semibold mt-1">
                   <div className="p-2 rounded border border-[#27272a]/50 bg-[#27272a]/5">
                     <div className="mb-0.5 uppercase">Liquidity Added</div>
-                    <div className="text-[10px] text-[#0ecb81] font-bold tabular-nums">
+                    <div className="text-[10px] text-j-up-bright font-bold tabular-nums">
                       +{(metrics.liquidityAdded || 0).toFixed(1)}
                     </div>
                   </div>
                   <div className="p-2 rounded border border-[#27272a]/50 bg-[#27272a]/5">
                     <div className="mb-0.5 uppercase">Liquidity Removed</div>
-                    <div className="text-[10px] text-[#f6465d] font-bold tabular-nums">
+                    <div className="text-[10px] text-j-down-bright font-bold tabular-nums">
                       -{(metrics.liquidityRemoved || 0).toFixed(1)}
                     </div>
                   </div>
@@ -1463,7 +1948,7 @@ const RecentTrades = ({ symbol }: { symbol: string }) => {
             <span
               className={cn(
                 "tabular-nums",
-                trade.isBuyerMaker ? "text-[#ef4444]" : "text-[#22c55e]"
+                trade.isBuyerMaker ? "text-j-down" : "text-j-up"
               )}
             >
               {parseFloat(trade.price).toFixed(2)}
@@ -1543,12 +2028,12 @@ const TickerStrip = () => {
         <div key={t.symbol} className="flex items-center gap-2 flex-shrink-0">
           <span className="text-[10px] text-[#71717a] font-medium">{t.symbol}</span>
           <span className="text-[10px] tabular-nums text-[#f4f4f5]">
-            {parseFloat(t.lastPrice).toFixed(2)}
+            <AnimatedNumber value={parseFloat(t.lastPrice)} decimals={2} duration={150} />
           </span>
           <span
             className={cn(
               "text-[10px] tabular-nums",
-              parseFloat(t.priceChangePercent) >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"
+              parseFloat(t.priceChangePercent) >= 0 ? "text-j-up" : "text-j-down"
             )}
           >
             {parseFloat(t.priceChangePercent) >= 0 ? "+" : ""}
@@ -1584,6 +2069,17 @@ const Dashboard = () => {
   const [leverage, setLeverage] = useState(1);
   const [orderSize, setOrderSize] = useState("");
   const [strategyType, setStrategyType] = useState<"scalping" | "intraday" | "swing">("intraday");
+  const [sidebarTab, setSidebarTab] = useState<"trade" | "auto" | "market">(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("janus_dashboard_sidebar_tab");
+      if (saved === "trade" || saved === "auto" || saved === "market") return saved;
+    }
+    return "trade";
+  });
+
+  useEffect(() => {
+    localStorage.setItem("janus_dashboard_sidebar_tab", sidebarTab);
+  }, [sidebarTab]);
 
   useEffect(() => {
     localStorage.setItem("janus_selected_symbol", selectedSymbol);
@@ -1604,7 +2100,7 @@ const Dashboard = () => {
   const klineKeyRef = useRef(`${selectedSymbol}:${interval}`);
 
   const { data: initialKlines } = trpc.market.klines.useQuery(
-    { symbol: selectedSymbol, interval, limit: 150 },
+    { symbol: selectedSymbol, interval, limit: 500 },
     {
       staleTime: 0,           // always fetch fresh when key changes
       refetchInterval: interval === "1m" ? false : 30_000,
@@ -1648,7 +2144,7 @@ const Dashboard = () => {
       const older = await utils.market.klines.fetch({
         symbol: selectedSymbol,
         interval,
-        limit: 200,
+        limit: 500,
         endTime: beforeTime - 1,  // fetch candles strictly before oldest loaded candle
       });
       if (older && older.length > 0) {
@@ -1814,7 +2310,7 @@ const Dashboard = () => {
       toast(evt.message, {
         description: `${selectedSymbol} @ ${evt.price.toFixed(2)} — ${interval}`,
         duration: 8_000,
-        style: { borderLeft: `3px solid ${evt.direction === "bullish" ? "#22c55e" : evt.direction === "bearish" ? "#ef4444" : "#f59e0b"}` },
+        style: { borderLeft: `3px solid ${evt.direction === "bullish" ? "hsl(var(--janus-up))" : evt.direction === "bearish" ? "hsl(var(--janus-down))" : "#f59e0b"}` },
       });
       try {
         sendTelegramAlert({ message: `${evt.emoji} <b>${selectedSymbol} ${interval}</b>\n${evt.message}\nPrice: <code>${evt.price.toFixed(4)}</code>` });
@@ -1890,15 +2386,15 @@ const Dashboard = () => {
                 <span
                   className={cn(
                     "text-xs tabular-nums",
-                    priceChange >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"
+                    priceChange >= 0 ? "text-j-up" : "text-j-down"
                   )}
                 >
-                  {lastPrice.toFixed(2)}
+                  <AnimatedNumber value={lastPrice} decimals={2} duration={150} />
                 </span>
                 <span
                   className={cn(
                     "text-xs tabular-nums",
-                    priceChange >= 0 ? "text-[#22c55e]" : "text-[#ef4444]"
+                    priceChange >= 0 ? "text-j-up" : "text-j-down"
                   )}
                 >
                   {priceChange >= 0 ? "+" : ""}
@@ -1914,7 +2410,7 @@ const Dashboard = () => {
                     className={cn(
                       "px-2 py-0.5 rounded text-[10px] transition-colors",
                       interval === int
-                        ? "bg-[#22c55e]/10 text-[#22c55e]"
+                        ? "bg-j-up/10 text-j-up"
                         : "text-[#71717a] hover:text-[#f4f4f5]"
                     )}
                   >
@@ -1978,7 +2474,7 @@ const Dashboard = () => {
             <select
               value={selectedSymbol}
               onChange={(e) => setSelectedSymbol(e.target.value)}
-              className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-xs text-[#f4f4f5] outline-none focus:border-[#22c55e]"
+              className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-xs text-[#f4f4f5] outline-none focus:border-j-up"
             >
               <option value="BTCUSDT">BTCUSDT</option>
               <option value="ETHUSDT">ETHUSDT</option>
@@ -1993,284 +2489,310 @@ const Dashboard = () => {
 
           <RiskStatus userId={1} />
 
-          {/* AutoTrader Panel */}
-          <div className="px-3 py-2 border-b border-[#27272a]">
-            <AutoTraderPanel userId={1} />
+          {/* Sidebar Tabs */}
+          <div className="flex border-b border-[#27272a] bg-[#09090b] text-[10px] font-semibold">
+            {(["trade", "auto", "market"] as const).map((tab) => {
+              const isActive = sidebarTab === tab;
+              return (
+                <button
+                  key={tab}
+                  onClick={() => setSidebarTab(tab)}
+                  className={cn(
+                    "flex-1 py-2 text-center border-b-2 transition-all uppercase tracking-wider",
+                    isActive
+                      ? "text-j-up border-j-up bg-j-up/5"
+                      : "text-[#71717a] border-transparent hover:text-[#f4f4f5] hover:bg-[#18181b]/50"
+                  )}
+                >
+                  {tab}
+                </button>
+              );
+            })}
           </div>
 
-          {/* Buy/Sell Tabs */}
-          <div className="flex border-b border-[#27272a]">
-            <button
-              onClick={() => setSide("buy")}
-              className={cn(
-                "flex-1 py-2 text-xs font-medium transition-colors",
-                side === "buy"
-                  ? "bg-[#22c55e]/10 text-[#22c55e] border-b-2 border-[#22c55e]"
-                  : "text-[#71717a] hover:text-[#f4f4f5]"
-              )}
-            >
-              <Plus size={12} className="inline mr-1" />
-              Buy / Long
-            </button>
-            <button
-              onClick={() => setSide("sell")}
-              className={cn(
-                "flex-1 py-2 text-xs font-medium transition-colors",
-                side === "sell"
-                  ? "bg-[#ef4444]/10 text-[#ef4444] border-b-2 border-[#ef4444]"
-                  : "text-[#71717a] hover:text-[#f4f4f5]"
-              )}
-            >
-              <Minus size={12} className="inline mr-1" />
-              Sell / Short
-            </button>
-          </div>
-
-          {/* Available Balance */}
-          <div className="px-3 py-2 border-b border-[#27272a]">
-            <div className="flex items-center justify-between">
-              <span className="text-[10px] text-[#71717a]">Available ({marginCurrency})</span>
-              <span className="text-[10px] text-[#f4f4f5] tabular-nums font-medium">
-                {marginCurrency === "INR"
-                  ? `₹${(instrInfo?.availableInr ?? 0).toFixed(2)}`
-                  : `$${availableBalance.toFixed(2)}`}
-              </span>
+          {/* Tab Contents */}
+          <div className={cn("flex-1 overflow-y-auto scrollbar-thin flex flex-col", sidebarTab !== "trade" && "hidden")}>
+            {/* Buy/Sell Tabs */}
+            <div className="flex border-b border-[#27272a]">
+              <button
+                onClick={() => setSide("buy")}
+                className={cn(
+                  "flex-1 py-2 text-xs font-medium transition-colors",
+                  side === "buy"
+                    ? "bg-j-up/10 text-j-up border-b-2 border-j-up"
+                    : "text-[#71717a] hover:text-[#f4f4f5]"
+                )}
+              >
+                <Plus size={12} className="inline mr-1" />
+                Buy / Long
+              </button>
+              <button
+                onClick={() => setSide("sell")}
+                className={cn(
+                  "flex-1 py-2 text-xs font-medium transition-colors",
+                  side === "sell"
+                    ? "bg-j-down/10 text-j-down border-b-2 border-j-down"
+                    : "text-[#71717a] hover:text-[#f4f4f5]"
+                )}
+              >
+                <Minus size={12} className="inline mr-1" />
+                Sell / Short
+              </button>
             </div>
-            {marginCurrency === "INR" && (
-              <div className="text-[9px] text-[#52525b] text-right tabular-nums">
-                ≈ ${availableBalance.toFixed(2)} USDT
+
+            {/* Available Balance */}
+            <div className="px-3 py-2 border-b border-[#27272a]">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] text-[#71717a]">Available ({marginCurrency})</span>
+                <span className="text-[10px] text-[#f4f4f5] tabular-nums font-medium">
+                  {marginCurrency === "INR"
+                    ? `₹${(instrInfo?.availableInr ?? 0).toFixed(2)}`
+                    : `$${availableBalance.toFixed(2)}`}
+                </span>
+              </div>
+              {marginCurrency === "INR" && (
+                <div className="text-[9px] text-[#52525b] text-right tabular-nums">
+                  ≈ ${availableBalance.toFixed(2)} USDT
+                </div>
+              )}
+            </div>
+
+            {/* Strategy Type */}
+            <div className="px-3 py-2 border-b border-[#27272a]">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-[#71717a]">Strategy</span>
+                <span className="text-[10px] text-[#52525b]">fee exit threshold</span>
+              </div>
+              <div className="flex gap-1">
+                {(["scalping", "intraday", "swing"] as const).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setStrategyType(s)}
+                    className={cn(
+                      "flex-1 py-1 rounded text-[9px] transition-colors capitalize",
+                      strategyType === s
+                        ? "bg-[#a855f7]/10 text-[#a855f7] border border-[#a855f7]/30"
+                        : "bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5]"
+                    )}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Leverage */}
+            <div className="px-3 py-2 border-b border-[#27272a]">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-[#71717a]">
+                  Leverage
+                  <span className="text-[#52525b] ml-1">(max {maxLeverage}x)</span>
+                </span>
+                <span className="text-xs text-j-up font-medium">{leverage}x</span>
+              </div>
+              <div className="flex gap-1 flex-wrap">
+                {[1, 2, 3, 5, 10].filter((l) => l <= maxLeverage).concat(
+                  maxLeverage > 10 ? [Math.min(25, maxLeverage)] : []
+                ).map((l) => (
+                  <button
+                    key={l}
+                    onClick={() => setLeverage(l)}
+                    className={cn(
+                      "flex-1 py-1 rounded text-[9px] transition-colors min-w-[28px]",
+                      leverage === l
+                        ? "bg-j-up/10 text-j-up border border-j-up/30"
+                        : "bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5]"
+                    )}
+                  >
+                    {l}x
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Order Size */}
+            <div className="px-3 py-2 border-b border-[#27272a]">
+              <div className="flex items-center justify-between mb-1">
+                <span className="text-[10px] text-[#71717a]">
+                  Size ({selectedSymbol.replace("USDT", "")})
+                </span>
+                <span className="text-[10px] text-[#71717a] tabular-nums">
+                  min {minQty} · step {qtyStep}
+                </span>
+              </div>
+              <input
+                type="number"
+                value={orderSize}
+                onChange={(e) => setOrderSize(e.target.value)}
+                placeholder={`0.${"0".repeat(qtyPrecision)}`}
+                step={qtyStep}
+                min={minQty}
+                className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1.5 text-xs text-[#f4f4f5] outline-none focus:border-j-up tabular-nums"
+              />
+              {/* % of available balance */}
+              <div className="flex gap-1 mt-1">
+                {[25, 50, 75, 100].map((pct) => {
+                  const notional = availableBalance * leverage * (pct / 100);
+                  const qty = lastPrice > 0 ? notional / lastPrice : 0;
+                  return (
+                    <button
+                      key={pct}
+                      onClick={() => setOrderSize(qty > 0 ? qty.toFixed(qtyPrecision) : "")}
+                      className="flex-1 py-0.5 rounded text-[9px] bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5] transition-colors"
+                    >
+                      {pct}%
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Order Summary */}
+            <div className="px-3 py-2 border-b border-[#27272a]">
+              {(() => {
+                const size = parseFloat(orderSize) || 0;
+                const notional = size * lastPrice;
+                const rawMargin = leverage > 0 ? notional / leverage : 0;
+                const rawFee = notional * 0.0005;
+                const margin = marginCurrency === "INR" ? rawMargin * usdtInrRate : rawMargin;
+                const fee = marginCurrency === "INR" ? rawFee * usdtInrRate : rawFee;
+                const belowMin = size > 0 && (size < minQty || notional < minNotional);
+                return (
+                  <>
+                    <div className="flex justify-between text-[10px] mb-1">
+                      <span className="text-[#71717a]">Margin Required</span>
+                      <span className="text-[#f4f4f5] tabular-nums">
+                        {margin > 0 ? `${margin.toFixed(2)} ${marginCurrency}` : "--"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-[10px] mb-1">
+                      <span className="text-[#71717a]">Est. Fee ×2 (entry+exit)</span>
+                      <span className="text-[#71717a] tabular-nums">
+                        {fee > 0 ? (fee * 2).toFixed(4) : "--"} {marginCurrency}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-[10px] mb-1">
+                      <span className="text-[#71717a]">Min move to profit</span>
+                      <span className="text-[#a855f7] tabular-nums font-medium">
+                        {strategyType === "scalping" ? "≥0.10%" : strategyType === "intraday" ? "≥0.10%" : "≥0.10%"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-[10px] mb-1">
+                      <span className="text-[#71717a]">Notional</span>
+                      <span className="text-[#f4f4f5] tabular-nums">
+                        {notional > 0 ? `$${notional.toFixed(2)}` : "--"}
+                      </span>
+                    </div>
+                    {belowMin && (
+                      <div className="text-[9px] text-j-down mt-1">
+                        Min qty {minQty} · min notional ${minNotional}
+                      </div>
+                    )}
+                  </>
+                );
+              })()}
+            </div>
+
+            {/* Place Order Button */}
+            <div className="px-3 py-3 border-b border-[#27272a]">
+              {(() => {
+                const size = parseFloat(orderSize) || 0;
+                const notional = size * lastPrice;
+                const margin = leverage > 0 ? notional / leverage : 0;
+                const invalid = !orderSize || size < minQty || notional < minNotional || margin > availableBalance;
+                return (
+                  <button
+                    onClick={handlePlaceOrder}
+                    disabled={invalid || createPosition.isPending}
+                    className={cn(
+                      "w-full py-2.5 rounded-lg text-xs font-semibold transition-all",
+                      side === "buy"
+                        ? "bg-j-up hover:bg-j-up text-white"
+                        : "bg-j-down hover:bg-j-down text-white",
+                      (invalid || createPosition.isPending) && "opacity-50 cursor-not-allowed"
+                    )}
+                  >
+                    {createPosition.isPending ? (
+                      <RefreshCw size={14} className="inline animate-spin mr-1" />
+                    ) : (
+                      <>{side === "buy" ? <Plus size={14} className="inline mr-1" /> : <Minus size={14} className="inline mr-1" />}</>
+                    )}
+                    {side === "buy" ? "Buy / Long" : "Sell / Short"} {selectedSymbol}
+                  </button>
+                );
+              })()}
+            </div>
+
+            {/* Fee Breakeven Map */}
+            {breakevenMap && breakevenMap.length > 0 && (
+              <div className="px-3 py-2 flex-1 min-h-[150px]">
+                <div className="text-[9px] text-[#52525b] uppercase tracking-wide mb-1.5 flex justify-between">
+                  <span>Min move to profit (0.10% = 2× fee)</span>
+                  <span className="text-[#a855f7]">entry + exit</span>
+                </div>
+                <div className="space-y-0.5">
+                  {breakevenMap.map((entry) => (
+                    <div
+                      key={entry.symbol}
+                      className={cn(
+                        "flex items-center justify-between py-0.5 px-1 rounded text-[9px]",
+                        entry.symbol === selectedSymbol
+                          ? "bg-[#a855f7]/10"
+                          : "hover:bg-[#18181b]"
+                      )}
+                    >
+                      <span className={cn(
+                        "font-medium tabular-nums",
+                        entry.symbol === selectedSymbol ? "text-[#a855f7]" : "text-[#71717a]"
+                      )}>
+                        {entry.symbol.replace("USDT", "")}
+                      </span>
+                      <span className="text-[#52525b] tabular-nums">
+                        ${entry.currentPrice > 0
+                          ? entry.currentPrice >= 1000
+                            ? entry.currentPrice.toLocaleString("en-US", { maximumFractionDigits: 0 })
+                            : entry.currentPrice >= 1
+                              ? entry.currentPrice.toFixed(2)
+                              : entry.currentPrice.toFixed(4)
+                          : "—"}
+                      </span>
+                      <span className={cn(
+                        "tabular-nums font-semibold",
+                        entry.symbol === selectedSymbol ? "text-[#a855f7]" : "text-[#71717a]"
+                      )}>
+                        {entry.minMoveAbs > 0
+                          ? entry.minMoveAbs >= 1
+                            ? `≥$${entry.minMoveAbs.toFixed(2)}`
+                            : `≥$${entry.minMoveAbs.toFixed(4)}`
+                          : "—"}
+                      </span>
+                    </div>
+                  ))}
+                </div>
               </div>
             )}
           </div>
 
-          {/* Strategy Type */}
-          <div className="px-3 py-2 border-b border-[#27272a]">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-[#71717a]">Strategy</span>
-              <span className="text-[10px] text-[#52525b]">fee exit threshold</span>
-            </div>
-            <div className="flex gap-1">
-              {(["scalping", "intraday", "swing"] as const).map((s) => (
-                <button
-                  key={s}
-                  onClick={() => setStrategyType(s)}
-                  className={cn(
-                    "flex-1 py-1 rounded text-[9px] transition-colors capitalize",
-                    strategyType === s
-                      ? "bg-[#a855f7]/10 text-[#a855f7] border border-[#a855f7]/30"
-                      : "bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5]"
-                  )}
-                >
-                  {s}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Leverage */}
-          <div className="px-3 py-2 border-b border-[#27272a]">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-[#71717a]">
-                Leverage
-                <span className="text-[#52525b] ml-1">(max {maxLeverage}x)</span>
-              </span>
-              <span className="text-xs text-[#22c55e] font-medium">{leverage}x</span>
-            </div>
-            <div className="flex gap-1 flex-wrap">
-              {[1, 2, 3, 5, 10].filter((l) => l <= maxLeverage).concat(
-                maxLeverage > 10 ? [Math.min(25, maxLeverage)] : []
-              ).map((l) => (
-                <button
-                  key={l}
-                  onClick={() => setLeverage(l)}
-                  className={cn(
-                    "flex-1 py-1 rounded text-[9px] transition-colors min-w-[28px]",
-                    leverage === l
-                      ? "bg-[#22c55e]/10 text-[#22c55e] border border-[#22c55e]/30"
-                      : "bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5]"
-                  )}
-                >
-                  {l}x
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* Order Size */}
-          <div className="px-3 py-2 border-b border-[#27272a]">
-            <div className="flex items-center justify-between mb-1">
-              <span className="text-[10px] text-[#71717a]">
-                Size ({selectedSymbol.replace("USDT", "")})
-              </span>
-              <span className="text-[10px] text-[#71717a] tabular-nums">
-                min {minQty} · step {qtyStep}
-              </span>
-            </div>
-            <input
-              type="number"
-              value={orderSize}
-              onChange={(e) => setOrderSize(e.target.value)}
-              placeholder={`0.${"0".repeat(qtyPrecision)}`}
-              step={qtyStep}
-              min={minQty}
-              className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1.5 text-xs text-[#f4f4f5] outline-none focus:border-[#22c55e] tabular-nums"
-            />
-            {/* % of available balance */}
-            <div className="flex gap-1 mt-1">
-              {[25, 50, 75, 100].map((pct) => {
-                const notional = availableBalance * leverage * (pct / 100);
-                const qty = lastPrice > 0 ? notional / lastPrice : 0;
-                return (
-                  <button
-                    key={pct}
-                    onClick={() => setOrderSize(qty > 0 ? qty.toFixed(qtyPrecision) : "")}
-                    className="flex-1 py-0.5 rounded text-[9px] bg-[#18181b] text-[#71717a] border border-[#27272a] hover:text-[#f4f4f5] transition-colors"
-                  >
-                    {pct}%
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Order Summary */}
-          <div className="px-3 py-2 border-b border-[#27272a]">
-            {(() => {
-              const size = parseFloat(orderSize) || 0;
-              const notional = size * lastPrice;
-              const rawMargin = leverage > 0 ? notional / leverage : 0;
-              const rawFee = notional * 0.0005;
-              const margin = marginCurrency === "INR" ? rawMargin * usdtInrRate : rawMargin;
-              const fee = marginCurrency === "INR" ? rawFee * usdtInrRate : rawFee;
-              const belowMin = size > 0 && (size < minQty || notional < minNotional);
-              return (
-                <>
-                  <div className="flex justify-between text-[10px] mb-1">
-                    <span className="text-[#71717a]">Margin Required</span>
-                    <span className="text-[#f4f4f5] tabular-nums">
-                      {margin > 0 ? `${margin.toFixed(2)} ${marginCurrency}` : "--"}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-[10px] mb-1">
-                    <span className="text-[#71717a]">Est. Fee ×2 (entry+exit)</span>
-                    <span className="text-[#71717a] tabular-nums">
-                      {fee > 0 ? (fee * 2).toFixed(4) : "--"} {marginCurrency}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-[10px] mb-1">
-                    <span className="text-[#71717a]">Min move to profit</span>
-                    <span className="text-[#a855f7] tabular-nums font-medium">
-                      {strategyType === "scalping" ? "≥0.10%" : strategyType === "intraday" ? "≥0.10%" : "≥0.10%"}
-                    </span>
-                  </div>
-                  <div className="flex justify-between text-[10px] mb-1">
-                    <span className="text-[#71717a]">Notional</span>
-                    <span className="text-[#f4f4f5] tabular-nums">
-                      {notional > 0 ? `$${notional.toFixed(2)}` : "--"}
-                    </span>
-                  </div>
-                  {belowMin && (
-                    <div className="text-[9px] text-[#ef4444] mt-1">
-                      Min qty {minQty} · min notional ${minNotional}
-                    </div>
-                  )}
-                </>
-              );
-            })()}
-          </div>
-
-          {/* Place Order Button */}
-          <div className="px-3 py-3">
-            {(() => {
-              const size = parseFloat(orderSize) || 0;
-              const notional = size * lastPrice;
-              const margin = leverage > 0 ? notional / leverage : 0;
-              const invalid = !orderSize || size < minQty || notional < minNotional || margin > availableBalance;
-              return (
-                <button
-                  onClick={handlePlaceOrder}
-                  disabled={invalid || createPosition.isPending}
-                  className={cn(
-                    "w-full py-2.5 rounded-lg text-xs font-semibold transition-all",
-                    side === "buy"
-                      ? "bg-[#22c55e] hover:bg-[#16a34a] text-white"
-                      : "bg-[#ef4444] hover:bg-[#dc2626] text-white",
-                    (invalid || createPosition.isPending) && "opacity-50 cursor-not-allowed"
-                  )}
-                >
-                  {createPosition.isPending ? (
-                    <RefreshCw size={14} className="inline animate-spin mr-1" />
-                  ) : (
-                    <>{side === "buy" ? <Plus size={14} className="inline mr-1" /> : <Minus size={14} className="inline mr-1" />}</>
-                  )}
-                  {side === "buy" ? "Buy / Long" : "Sell / Short"} {selectedSymbol}
-                </button>
-              );
-            })()}
-          </div>
-
-          {/* Fee Breakeven Map */}
-          {breakevenMap && breakevenMap.length > 0 && (
+          <div className={cn("flex-1 flex flex-col overflow-hidden", sidebarTab !== "auto" && "hidden")}>
+            {/* AutoTrader Panel */}
             <div className="px-3 py-2 border-b border-[#27272a]">
-              <div className="text-[9px] text-[#52525b] uppercase tracking-wide mb-1.5 flex justify-between">
-                <span>Min move to profit (0.10% = 2× fee)</span>
-                <span className="text-[#a855f7]">entry + exit</span>
-              </div>
-              <div className="space-y-0.5">
-                {breakevenMap.map((entry) => (
-                  <div
-                    key={entry.symbol}
-                    className={cn(
-                      "flex items-center justify-between py-0.5 px-1 rounded text-[9px]",
-                      entry.symbol === selectedSymbol
-                        ? "bg-[#a855f7]/10"
-                        : "hover:bg-[#18181b]"
-                    )}
-                  >
-                    <span className={cn(
-                      "font-medium tabular-nums",
-                      entry.symbol === selectedSymbol ? "text-[#a855f7]" : "text-[#71717a]"
-                    )}>
-                      {entry.symbol.replace("USDT", "")}
-                    </span>
-                    <span className="text-[#52525b] tabular-nums">
-                      ${entry.currentPrice > 0
-                        ? entry.currentPrice >= 1000
-                          ? entry.currentPrice.toLocaleString("en-US", { maximumFractionDigits: 0 })
-                          : entry.currentPrice >= 1
-                            ? entry.currentPrice.toFixed(2)
-                            : entry.currentPrice.toFixed(4)
-                        : "—"}
-                    </span>
-                    <span className={cn(
-                      "tabular-nums font-semibold",
-                      entry.symbol === selectedSymbol ? "text-[#a855f7]" : "text-[#71717a]"
-                    )}>
-                      {entry.minMoveAbs > 0
-                        ? entry.minMoveAbs >= 1
-                          ? `≥$${entry.minMoveAbs.toFixed(2)}`
-                          : `≥$${entry.minMoveAbs.toFixed(4)}`
-                        : "—"}
-                    </span>
-                  </div>
-                ))}
-              </div>
+              <AutoTraderPanel userId={1} />
             </div>
-          )}
-
-          {/* LLM Activity Feed */}
-          <div className="h-48 border-t border-[#27272a] overflow-hidden flex flex-col">
-            <LlmActivityFeed />
+            {/* LLM Activity Feed */}
+            <div className="flex-1 min-h-0 overflow-hidden flex flex-col bg-[#09090b]">
+              <LlmActivityFeed />
+            </div>
           </div>
 
-          {/* Order Book */}
-          <div className="flex-1 min-h-0 border-t border-[#27272a] overflow-hidden flex flex-col">
-            <OrderBook symbol={selectedSymbol} tickerData={tickerData} />
-          </div>
-
-          {/* Recent Trades */}
-          <div className="h-48 border-t border-[#27272a] overflow-hidden flex flex-col">
-            <RecentTrades symbol={selectedSymbol} />
+          <div className={cn("flex-1 flex flex-col overflow-hidden", sidebarTab !== "market" && "hidden")}>
+            {/* Order Book */}
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <OrderBook symbol={selectedSymbol} tickerData={tickerData} />
+            </div>
+            {/* Recent Trades */}
+            <div className="h-64 border-t border-[#27272a] flex flex-col overflow-hidden bg-[#09090b]">
+              <RecentTrades symbol={selectedSymbol} />
+            </div>
           </div>
         </div>
       </div>

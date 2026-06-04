@@ -101,7 +101,8 @@ export class LlmAdvisor {
         .from(llmApiKeys)
         .where(eq(llmApiKeys.isActive, true))
         .orderBy(asc(llmApiKeys.priority));
-      this.keys = rows.map((r) => ({
+      
+      const dbKeys = rows.map((r) => ({
         id: r.id,
         label: r.label,
         provider: r.provider,
@@ -110,6 +111,37 @@ export class LlmAdvisor {
         model: r.model,
         priority: r.priority,
       }));
+
+      if (dbKeys.length > 0) {
+        this.keys = dbKeys;
+      } else {
+        const fallbacks: LlmKey[] = [];
+        if (env.ollamaApiKeys.length > 0) {
+          env.ollamaApiKeys.forEach((key, i) => {
+            fallbacks.push({
+              id: -(i + 1),
+              label: i === 0 ? "env-primary" : `env-backup-${i}`,
+              provider: "ollama",
+              endpoint: env.ollamaEndpoint,
+              apiKey: key,
+              model: env.ollamaModel,
+              priority: i + 1,
+            });
+          });
+        }
+        if (fallbacks.length === 0) {
+          fallbacks.push({
+            id: -99,
+            label: "local-ollama",
+            provider: "ollama",
+            endpoint: env.ollamaEndpoint,
+            apiKey: "",
+            model: env.ollamaModel,
+            priority: 1,
+          });
+        }
+        this.keys = fallbacks;
+      }
     } catch {
       // DB not ready yet — keep existing keys
     }
@@ -294,9 +326,34 @@ sizeMult: 0.5 (reduce) | 1.0 (normal) | 1.5 (increase, only if very high convict
     }
   }
 
-  getKeyStatus(): { label: string; provider: string; model: string; healthy: boolean; requestCount?: number }[] {
+  getKeyById(id: number): LlmKey | undefined {
+    return this.keys.find((k) => k.id === id);
+  }
+
+  async testSpecificKey(key: LlmKey): Promise<LlmDecision> {
+    const testCtx: SignalContext = {
+      symbol: "BTCUSDT",
+      direction: "long",
+      compositeScore: 80,
+      threshold: 75,
+      regime: "intraday_trend",
+      strategy: "intraday",
+      currentPrice: 100000,
+      drawdownPct: 0,
+      tradeCount: 0,
+      openPositions: 0,
+    };
+    const prompt = this.buildPrompt(testCtx);
+    const t0 = Date.now();
+    const raw = await this.callLlm(key, prompt);
+    const parsed = this.parseResponse(raw);
+    return { ...parsed, keyUsed: key.label, latencyMs: Date.now() - t0 };
+  }
+
+  getKeyStatus(): { id: number; label: string; provider: string; model: string; healthy: boolean; requestCount?: number }[] {
     const now = Date.now();
     return this.keys.map((k) => ({
+      id: k.id,
       label: k.label,
       provider: k.provider,
       model: k.model,

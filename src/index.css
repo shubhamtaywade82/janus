@@ -32,13 +32,62 @@
     --sidebar-accent-foreground: 0 0% 96%;
     --sidebar-border: 0 0% 15%;
     --sidebar-ring: 0 0% 80%;
-    
-    /* Janus Custom Colors */
-    --janus-green: 142 70% 45%;
-    --janus-red: 0 84% 60%;
-    --janus-yellow: 45 90% 55%;
-    --janus-blue: 217 90% 60%;
-    --janus-purple: 270 60% 55%;
+
+    /* ── Janus semantic tokens (default: dark theme) ──────────────────── */
+
+    /* Direction colors — these CHANGE between themes (migrate to these) */
+    --janus-up:           142 70% 45%;   /* #22c55e  profit / bull / long  */
+    --janus-up-bright:    158 77% 42%;   /* #0ecb81  Binance-style bright  */
+    --janus-down:           0 84% 60%;   /* #ef4444  loss / bear / short   */
+    --janus-down-bright:  353 90% 62%;   /* #f6465d  Binance-style bright  */
+
+    /* Accent colors — constant across all dark themes */
+    --janus-info:         217 91% 60%;   /* #3b82f6  blue / info           */
+    --janus-warn:          45 90% 55%;   /* #f59e0b  amber / paper mode    */
+    --janus-purple:       270 60% 55%;   /* #a855f7  RSI / special         */
+
+    /* Surface & border */
+    --janus-app:          240  6%  4%;   /* #09090b  page background       */
+    --janus-surface:      240  5% 10%;   /* #18181b  card / panel          */
+    --janus-surface-2:    240  4% 12%;   /* #1c1c1f  slightly elevated     */
+    --janus-border:       240  4% 16%;   /* #27272a  default border        */
+    --janus-border-muted: 240  4% 25%;   /* #3f3f46  subtle border         */
+
+    /* Text scale */
+    --janus-text:         240  5% 96%;   /* #f4f4f5  primary               */
+    --janus-text-2:       240  5% 65%;   /* #a1a1aa  secondary             */
+    --janus-text-3:       240  5% 46%;   /* #71717a  muted                 */
+    --janus-text-4:       240  5% 35%;   /* #52525b  dim                   */
+
+    /* Legacy aliases — keep for any existing .text-janus-green usage */
+    --janus-green:  var(--janus-up);
+    --janus-red:    var(--janus-down);
+    --janus-yellow: var(--janus-warn);
+    --janus-blue:   var(--janus-info);
+  }
+
+  /* ── Theme: Binance Dark (brighter, higher-contrast trading colors) ── */
+  [data-theme="dark-binance"] {
+    --janus-up:           158 77% 42%;   /* #0ecb81 */
+    --janus-up-bright:    158 77% 42%;
+    --janus-down:         353 90% 62%;   /* #f6465d */
+    --janus-down-bright:  353 90% 62%;
+  }
+
+  /* ── Theme: Deuteranopia Safe (blue / orange — no red-green pair) ── */
+  [data-theme="colorblind-deu"] {
+    --janus-up:           217 91% 60%;   /* #3b82f6 blue   */
+    --janus-up-bright:    217 91% 60%;
+    --janus-down:          25 95% 53%;   /* #f97316 orange */
+    --janus-down-bright:   25 95% 53%;
+  }
+
+  /* ── Theme: Protanopia Safe (blue / gold — no red-green pair) ── */
+  [data-theme="colorblind-pro"] {
+    --janus-up:           221 83% 53%;   /* #2563eb deeper blue */
+    --janus-up-bright:    221 83% 53%;
+    --janus-down:          37 92% 50%;   /* #d97706 gold        */
+    --janus-down-bright:   37 92% 50%;
   }
 }
 
@@ -53,65 +102,40 @@
 }
 
 @layer utilities {
-  .text-janus-green {
-    color: hsl(var(--janus-green));
-  }
-  .text-janus-red {
-    color: hsl(var(--janus-red));
-  }
-  .text-janus-yellow {
-    color: hsl(var(--janus-yellow));
-  }
-  .text-janus-blue {
-    color: hsl(var(--janus-blue));
-  }
-  .text-janus-purple {
-    color: hsl(var(--janus-purple));
-  }
-  .bg-janus-green {
-    background-color: hsl(var(--janus-green));
-  }
-  .bg-janus-red {
-    background-color: hsl(var(--janus-red));
-  }
-  .bg-janus-green\/10 {
-    background-color: hsl(var(--janus-green) / 0.1);
-  }
-  .bg-janus-red\/10 {
-    background-color: hsl(var(--janus-red) / 0.1);
-  }
-  .border-janus-green {
-    border-color: hsl(var(--janus-green));
-  }
-  .border-janus-red {
-    border-color: hsl(var(--janus-red));
-  }
-  .tabular-nums {
-    font-variant-numeric: tabular-nums;
-  }
+  /* Legacy utility classes — still work, now CSS-var-backed */
+  .text-janus-green   { color: hsl(var(--janus-up)); }
+  .text-janus-red     { color: hsl(var(--janus-down)); }
+  .text-janus-yellow  { color: hsl(var(--janus-warn)); }
+  .text-janus-blue    { color: hsl(var(--janus-info)); }
+  .text-janus-purple  { color: hsl(var(--janus-purple)); }
+  .bg-janus-green     { background-color: hsl(var(--janus-up)); }
+  .bg-janus-red       { background-color: hsl(var(--janus-down)); }
+  .bg-janus-green\/10 { background-color: hsl(var(--janus-up)   / 0.1); }
+  .bg-janus-red\/10   { background-color: hsl(var(--janus-down) / 0.1); }
+  .border-janus-green { border-color: hsl(var(--janus-up)); }
+  .border-janus-red   { border-color: hsl(var(--janus-down)); }
+
+  .tabular-nums { font-variant-numeric: tabular-nums; }
+
   .scrollbar-thin {
     scrollbar-width: thin;
     scrollbar-color: hsl(var(--border)) transparent;
   }
-  .scrollbar-thin::-webkit-scrollbar {
-    width: 4px;
-    height: 4px;
-  }
-  .scrollbar-thin::-webkit-scrollbar-track {
-    background: transparent;
-  }
+  .scrollbar-thin::-webkit-scrollbar { width: 4px; height: 4px; }
+  .scrollbar-thin::-webkit-scrollbar-track { background: transparent; }
   .scrollbar-thin::-webkit-scrollbar-thumb {
     background: hsl(var(--border));
     border-radius: 2px;
   }
 }
 
+/* Flash animations use CSS vars so they adapt to active theme */
 @keyframes flash-up {
-  0%   { background-color: rgba(34, 197, 94, 0.25); }
+  0%   { background-color: hsl(var(--janus-up)   / 0.25); }
   100% { background-color: transparent; }
 }
 @keyframes flash-down {
-  0%   { background-color: rgba(239, 68, 68, 0.25); }
+  0%   { background-color: hsl(var(--janus-down) / 0.25); }
   100% { background-color: transparent; }
 }
 .flash-up   { animation: flash-up   0.6s ease-out; }
