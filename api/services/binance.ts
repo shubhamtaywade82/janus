@@ -70,6 +70,12 @@ export interface BinanceAggTrade {
   m: boolean; // Was the buyer the maker?
 }
 
+export interface BinanceOpenInterest {
+  symbol: string;
+  openInterest: string;
+  time: number;
+}
+
 // ─── Circuit Breaker ───
 // HTTP 418 = Binance IP ban. Block ALL REST calls for ban duration to avoid
 // making the ban worse. Binance bans escalate: 2min → 5min → longer.
@@ -110,7 +116,7 @@ export const binanceCircuitBreaker = new BinanceCircuitBreaker();
 
 // skipCircuitBreaker=true for low-frequency calls (klines) that aren't the source of 418s.
 // The circuit breaker protects high-frequency depth/trades calls only.
-async function binanceFetch(url: string, errorPrefix: string, skipCircuitBreaker = false): Promise<any> {
+async function binanceFetch(url: string, errorPrefix: string, skipCircuitBreaker = false): Promise<unknown> {
   if (!skipCircuitBreaker) binanceCircuitBreaker.checkOrThrow();
   const res = await fetch(url);
   if (res.status === 418 || res.status === 429) {
@@ -120,6 +126,10 @@ async function binanceFetch(url: string, errorPrefix: string, skipCircuitBreaker
   if (!res.ok) throw new Error(`${errorPrefix}: ${res.status}`);
   if (!skipCircuitBreaker) binanceCircuitBreaker.onSuccess();
   return res.json();
+}
+
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
 }
 
 // ─── REST API Functions ───
@@ -136,41 +146,46 @@ export async function fetchKlines(
   // 1. Try futures REST (may be geo-blocked in some regions)
   try {
     const url = `${BINANCE_API_BASE}/fapi/v1/klines?${qsBase}`;
-    const data = await binanceFetch(url, "Binance klines error", true) as any[];
+    const data = await binanceFetch(url, "Binance klines error", true) as unknown[];
     return mapKlines(data);
-  } catch (e: any) { errors.push(`futures: ${e.message}`); }
+  } catch (e: unknown) { errors.push(`futures: ${getErrorMessage(e)}`); }
 
   // 2. Try spot REST mirrors in order (globally accessible)
   for (const base of BINANCE_SPOT_BASES) {
     try {
       const url = `${base}/api/v3/klines?${qsBase}`;
-      const data = await binanceFetch(url, "Binance spot klines error", true) as any[];
+      const data = await binanceFetch(url, "Binance spot klines error", true) as unknown[];
       return mapKlines(data);
-    } catch (e: any) { errors.push(`spot(${base}): ${e.message}`); }
+    } catch (e: unknown) { errors.push(`spot(${base}): ${getErrorMessage(e)}`); }
   }
 
   throw new Error(`fetchKlines failed (all endpoints): ${errors.join(" | ")}`);
 }
 
-function mapKlines(data: any[]): BinanceKline[] {
-  return data.map((d: any[]) => ({
-    openTime: d[0],
-    open: d[1],
-    high: d[2],
-    low: d[3],
-    close: d[4],
-    volume: d[5],
-    closeTime: d[6],
-    quoteVolume: d[7],
-    trades: d[8],
-  }));
+type BinanceKlineRaw = [number, string, string, string, string, string, number, string, number, ...unknown[]];
+
+function mapKlines(data: unknown[]): BinanceKline[] {
+  return data.map((entry) => {
+    const d = entry as BinanceKlineRaw;
+    return {
+      openTime: d[0],
+      open: d[1],
+      high: d[2],
+      low: d[3],
+      close: d[4],
+      volume: d[5],
+      closeTime: d[6],
+      quoteVolume: d[7],
+      trades: d[8],
+    };
+  });
 }
 
 export async function fetch24hTicker(symbol?: string): Promise<BinanceTicker24h | BinanceTicker24h[]> {
   const url = symbol
     ? `${BINANCE_API_BASE}/fapi/v1/ticker/24hr?symbol=${symbol}`
     : `${BINANCE_API_BASE}/fapi/v1/ticker/24hr`;
-  return binanceFetch(url, "Binance 24h ticker error", true);
+  return binanceFetch(url, "Binance 24h ticker error", true) as Promise<BinanceTicker24h | BinanceTicker24h[]>;
 }
 
 export async function fetchOrderBook(
@@ -178,7 +193,7 @@ export async function fetchOrderBook(
   limit: number = 100
 ): Promise<BinanceOrderBook> {
   const url = `${BINANCE_API_BASE}/fapi/v1/depth?symbol=${symbol}&limit=${limit}`;
-  return binanceFetch(url, "Binance depth error");
+  return binanceFetch(url, "Binance depth error") as Promise<BinanceOrderBook>;
 }
 
 export async function fetchRecentTrades(
@@ -186,7 +201,7 @@ export async function fetchRecentTrades(
   limit: number = 50
 ): Promise<BinanceRecentTrade[]> {
   const url = `${BINANCE_API_BASE}/fapi/v1/trades?symbol=${symbol}&limit=${limit}`;
-  return binanceFetch(url, "Binance trades error");
+  return binanceFetch(url, "Binance trades error") as Promise<BinanceRecentTrade[]>;
 }
 
 export async function fetchAggTrades(
@@ -194,21 +209,29 @@ export async function fetchAggTrades(
   limit: number = 50
 ): Promise<BinanceAggTrade[]> {
   const url = `${BINANCE_API_BASE}/fapi/v1/aggTrades?symbol=${symbol}&limit=${limit}`;
-  const data = await binanceFetch(url, "Binance aggTrades error") as any[];
-  return data.map((d: any) => ({
-    a: d.a, p: d.p, q: d.q, f: d.f, l: d.l, T: d.T, m: d.m,
-  }));
+  const data = await binanceFetch(url, "Binance aggTrades error") as unknown[];
+  return data.map((entry) => {
+    const d = entry as BinanceAggTrade;
+    return {
+      a: d.a, p: d.p, q: d.q, f: d.f, l: d.l, T: d.T, m: d.m,
+    };
+  });
 }
 
 export async function fetchMarkPrice(symbol: string): Promise<{ markPrice: string; indexPrice: string; estimatedSettlePrice: string }> {
   const url = `${BINANCE_API_BASE}/fapi/v1/premiumIndex?symbol=${symbol}`;
-  return binanceFetch(url, "Binance mark price error");
+  return binanceFetch(url, "Binance mark price error") as Promise<{ markPrice: string; indexPrice: string; estimatedSettlePrice: string }>;
 }
 
 export async function fetchFundingRate(symbol: string): Promise<{ fundingRate: string; fundingTime: number }> {
   const url = `${BINANCE_API_BASE}/fapi/v1/fundingRate?symbol=${symbol}&limit=1`;
-  const data = await binanceFetch(url, "Binance funding rate error") as any[];
+  const data = await binanceFetch(url, "Binance funding rate error") as { fundingRate: string; fundingTime: number }[];
   return data[0];
+}
+
+export async function fetchOpenInterest(symbol: string): Promise<BinanceOpenInterest> {
+  const url = `${BINANCE_API_BASE}/fapi/v1/openInterest?symbol=${symbol}`;
+  return binanceFetch(url, "Binance open interest error", true) as Promise<BinanceOpenInterest>;
 }
 
 // ─── WebSocket URL Generator ───
