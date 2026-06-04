@@ -52,6 +52,7 @@ export interface SwingPoint {
   type:     "high" | "low";
   strength: number;  // 1–10
   index:    number;
+  label?:   "HH" | "LH" | "HL" | "LL";
 }
 
 export function detectSwings(klines: Kline[], lookback = 5): SwingPoint[] {
@@ -83,6 +84,32 @@ export function detectSwings(klines: Kline[], lookback = 5): SwingPoint[] {
 
     if (isSwingHigh) swings.push({ time: klines[i].time, price: curHigh, type: "high", strength, index: i });
     if (isSwingLow)  swings.push({ time: klines[i].time, price: curLow,  type: "low",  strength, index: i });
+  }
+
+  // Classify Highs and Lows (HH, LH, HL, LL)
+  let lastHighPrice = -Infinity;
+  let lastLowPrice = Infinity;
+  let firstHigh = true;
+  let firstLow = true;
+
+  for (const s of swings) {
+    if (s.type === "high") {
+      if (!firstHigh) {
+        s.label = s.price > lastHighPrice ? "HH" : "LH";
+      } else {
+        s.label = "HH";
+        firstHigh = false;
+      }
+      lastHighPrice = s.price;
+    } else {
+      if (!firstLow) {
+        s.label = s.price > lastLowPrice ? "HL" : "LL";
+      } else {
+        s.label = "LL";
+        firstLow = false;
+      }
+      lastLowPrice = s.price;
+    }
   }
 
   return swings;

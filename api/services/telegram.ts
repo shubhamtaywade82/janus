@@ -57,3 +57,36 @@ export async function testTelegramConnection(botToken: string, chatId: string): 
   const testMessage = `🤖 <b>Janus Trading Bot</b>\n\nConnection test successful! You will now receive alert notifications here.`;
   return sendTelegramMessage({ botToken, chatId, text: testMessage });
 }
+
+/**
+ * Broadcasts an alert message to the primary Telegram chat by fetching credentials from the DB.
+ */
+export async function broadcastTelegramAlert(text: string): Promise<boolean> {
+  try {
+    const { db } = await import("../../db");
+    const { users } = await import("../../db/schema");
+    const user = await db
+      .select({
+        telegramBotToken: users.telegramBotToken,
+        telegramChatId: users.telegramChatId,
+      })
+      .from(users)
+      .limit(1);
+
+    if (!user || user.length === 0) return false;
+    const settings = user[0];
+    
+    if (!settings.telegramBotToken || !settings.telegramChatId) {
+      return false;
+    }
+
+    return sendTelegramMessage({
+      botToken: settings.telegramBotToken,
+      chatId: settings.telegramChatId,
+      text,
+    });
+  } catch (error) {
+    console.error("Failed to broadcast telegram alert:", error);
+    return false;
+  }
+}

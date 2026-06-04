@@ -1,5 +1,6 @@
 import { EventEmitter } from "events";
 import { marketStateManager } from "./market-state";
+import { broadcastTelegramAlert } from "./telegram";
 
 export type LiquidityPriority = "SSS" | "SS" | "S" | "A" | "B";
 
@@ -449,6 +450,12 @@ export class LiquidityEngine extends EventEmitter {
     // ─── Emit Events ───
     for (const ev of events) {
       this.emit("liquidity_event", ev);
+      
+      // Broadcast extreme high-priority events to Telegram
+      if (ev.priority === "SSS" || ev.priority === "SS") {
+        const text = `🚨 <b>[${ev.priority}] ${ev.symbol} Liquidity Alert</b>\n\n<b>Type:</b> ${ev.type.replace(/_/g, " ")}\n<b>Message:</b> ${ev.message}`;
+        broadcastTelegramAlert(text).catch(err => console.error("Failed to broadcast telegram alert", err));
+      }
     }
   }
 }
