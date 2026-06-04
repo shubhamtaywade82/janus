@@ -685,9 +685,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     });
   }, [data, symbol, interval]);
 
-  // 3. Live Price tick updates for non-1m timeframes using lastPrice prop
+  // 3. Live price tick — drives chart animation for all timeframes from ticker lastPrice.
+  // klineStream provides high/low/volume updates; lastPrice provides real-time close.
   useEffect(() => {
-    if (!candlestickSeriesRef.current || !volumeSeriesRef.current || data.length === 0 || interval === "1m" || lastPrice <= 0) return;
+    if (!candlestickSeriesRef.current || !volumeSeriesRef.current || data.length === 0 || lastPrice <= 0) return;
 
     const last = data[data.length - 1];
     const lastTime = last.openTime / 1000;
