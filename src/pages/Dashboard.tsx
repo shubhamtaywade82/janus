@@ -1924,9 +1924,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
     { symbol },
     {
       onData: (event: any) => {
-        if (activeTab === "telemetry") {
-          setLiquidityEvents((prev) => [event, ...prev].slice(0, 10));
-        }
+        setLiquidityEvents((prev) => [event, ...prev].slice(0, 50));
       },
     }
   );
