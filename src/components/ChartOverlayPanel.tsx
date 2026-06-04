@@ -11,6 +11,7 @@ export interface OverlayToggles {
   displacement: boolean;
   premiumDiscount: boolean;
   obv:          boolean;
+  sessions:     boolean;
 }
 
 const DEFAULTS: OverlayToggles = {
@@ -22,6 +23,7 @@ const DEFAULTS: OverlayToggles = {
   displacement:    false,
   premiumDiscount: false,
   obv:             false,
+  sessions:        true,
 };
 
 const LAYERS: { key: keyof OverlayToggles; label: string; color: string; shortLabel: string }[] = [
@@ -33,6 +35,7 @@ const LAYERS: { key: keyof OverlayToggles; label: string; color: string; shortLa
   { key: "displacement",    label: "Displacement",     shortLabel: "DIS",  color: "#f59e0b" },
   { key: "premiumDiscount", label: "Prem / Disc",      shortLabel: "P/D",  color: "#52525b" },
   { key: "obv",             label: "OBV",              shortLabel: "OBV",  color: "#06b6d4" },
+  { key: "sessions",        label: "Sessions",         shortLabel: "SES",  color: "#3b82f6" },
 ];
 
 interface Props {
