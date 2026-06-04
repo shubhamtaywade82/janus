@@ -3,6 +3,7 @@ import { PositionAction as PA } from "./types";
 import { positionStore } from "./position-store";
 import { positionManagerBus } from "./event-bus";
 import { createFuturesOrder } from "../coindcx";
+import { syncTrailingStopLoss } from "../trailing-stop";
 import { env } from "../../lib/env";
 import { getDb } from "../../queries/connection";
 import { positions, exchangeCredentials } from "@db/schema";
@@ -51,6 +52,7 @@ export async function executeAction(
           .where(eq(positions.id, position.id));
 
         positionStore.updateProtection(position.id, newSl, position.takeProfit);
+        syncTrailingStopLoss(position.id, newSl);
         positionManagerBus.emit("position:action-executed", position.id, action, "ok",
           `SL moved to breakeven: ${newSl.toFixed(4)}`);
         return { success: true, detail: `Stop moved to breakeven @ ${newSl.toFixed(4)}` };
@@ -68,6 +70,7 @@ export async function executeAction(
           .where(eq(positions.id, position.id));
 
         positionStore.updateProtection(position.id, newSl, position.takeProfit);
+        syncTrailingStopLoss(position.id, newSl);
         positionManagerBus.emit("position:action-executed", position.id, action, "ok",
           `SL trailed to ${newSl.toFixed(4)}`);
         return { success: true, detail: `Stop trailed to ${newSl.toFixed(4)}` };

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createRouter, publicQuery } from "../middleware";
+import { createRouter, publicQuery, authedQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { positions, trades, exchangeCredentials, futuresWallets } from "@db/schema";
 import { desc, eq, and } from "drizzle-orm";
@@ -573,10 +573,10 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── Create a new position (simulated/live) ───
-  createPosition: publicQuery
+  createPosition: authedQuery
     .input(
       z.object({
-        userId: z.number(),
+        userId: z.number().optional(),
         symbol: z.string(),
         side: z.enum(["long", "short"]),
         entryPrice: z.string(),
@@ -591,7 +591,8 @@ export const tradingRouter = createRouter({
         strategyType: z.enum(["scalping", "intraday", "swing", "grid", "momentum_reversal", "bb_reversion", "ml_sizing", "scalping_micro"]).default("intraday"),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user.id;
       const db = getDb();
 
       // 0. Kill switch — block all new positions if halt is active
@@ -617,7 +618,7 @@ export const tradingRouter = createRouter({
         const riskCreds = await db
           .select()
           .from(exchangeCredentials)
-          .where(and(eq(exchangeCredentials.userId, input.userId), eq(exchangeCredentials.exchange, "coindcx")))
+          .where(and(eq(exchangeCredentials.userId, userId), eq(exchangeCredentials.exchange, "coindcx")))
           .limit(1);
 
         if (riskCreds[0]) {
@@ -630,7 +631,7 @@ export const tradingRouter = createRouter({
           } catch { /* non-fatal — use 0 as fallback */ }
         }
 
-        const session = getOrCreateSession(input.userId, walletBalance || 10_000);
+        const session = getOrCreateSession(userId, walletBalance || 10_000);
         const notional = parseFloat(input.entryPrice) * parseFloat(input.size);
         const riskDecision = globalRiskEngine.checkTradeAllowed(session, {
           notional,
@@ -674,7 +675,7 @@ export const tradingRouter = createRouter({
         .from(exchangeCredentials)
         .where(
           and(
-            eq(exchangeCredentials.userId, input.userId),
+            eq(exchangeCredentials.userId, userId),
             eq(exchangeCredentials.exchange, "coindcx")
           )
         )
@@ -724,7 +725,7 @@ export const tradingRouter = createRouter({
       // Check for existing open paper position for same instrument and side
       const existingPaperPos = await db.select().from(positions).where(
         and(
-          eq(positions.userId, input.userId),
+          eq(positions.userId, userId),
           eq(positions.symbol, input.symbol),
           eq(positions.side, input.side),
           eq(positions.isPaper, true),
@@ -734,26 +735,21 @@ export const tradingRouter = createRouter({
 
       let resultId: number;
       if (existingPaperPos.length > 0) {
-        // Aggregate the new signal into the existing position
         const existing = existingPaperPos[0];
         const newSize = (parseFloat(existing.size) || 0) + parseFloat(input.size);
         const newMargin = (parseFloat(existing.margin) || 0) + parseFloat(input.margin);
-        // Weighted average entry price based on size
         const weightedEntry = ((parseFloat(existing.entryPrice) || 0) * (parseFloat(existing.size) || 0) +
           parseFloat(input.entryPrice) * parseFloat(input.size)) / newSize;
         await db.update(positions).set({
           size: String(newSize),
           margin: String(newMargin),
           entryPrice: String(weightedEntry),
-          // Keep other fields from original position; update stopLoss/takeProfit if provided
           ...(input.stopLoss && { stopLoss: input.stopLoss }),
           ...(input.takeProfit && { takeProfit: input.takeProfit }),
           updatedAt: new Date(),
         }).where(eq(positions.id, existing.id));
         resultId = existing.id;
-        // Emit update event for aggregated position
-        tradingEvents.emit(`portfolio-update:${input.userId}`);
-        // Update trailing stop if applicable
+        tradingEvents.emit(`portfolio-update:${userId}`);
         if (input.stopLoss) {
           registerPositionForTrailing({
             id: resultId,
@@ -762,12 +758,12 @@ export const tradingRouter = createRouter({
             entryPrice: weightedEntry,
             stopLoss: parseFloat(input.stopLoss),
             strategyType: input.strategyType as import("../services/strategy-config").StrategyType,
-            userId: input.userId,
+            userId,
           });
         }
       } else {
         const result = await db.insert(positions).values({
-          userId: input.userId,
+          userId,
           symbol: input.symbol,
           side: input.side,
           entryPrice: input.entryPrice,
@@ -787,7 +783,7 @@ export const tradingRouter = createRouter({
           isPaper: !exchangeOrderId,
         }).returning({ id: positions.id });
         resultId = result[0].id;
-        tradingEvents.emit(`portfolio-update:${input.userId}`);
+        tradingEvents.emit(`portfolio-update:${userId}`);
         if (input.stopLoss) {
           registerPositionForTrailing({
             id: resultId,
@@ -796,16 +792,16 @@ export const tradingRouter = createRouter({
             entryPrice: parseFloat(input.entryPrice),
             stopLoss: parseFloat(input.stopLoss),
             strategyType: input.strategyType as import("../services/strategy-config").StrategyType,
-            userId: input.userId,
+            userId,
           });
         }
       }
 
-      return { id: resultId, ...input, exchangeOrderId };
+      return { id: resultId, ...input, userId, exchangeOrderId };
     }),
 
   // ─── Close a position ───
-  closePosition: publicQuery
+  closePosition: authedQuery
     .input(
       z.object({
         id: z.number(),
@@ -813,10 +809,15 @@ export const tradingRouter = createRouter({
         realizedPnl: z.string(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const pos = await db.select().from(positions).where(eq(positions.id, input.id)).limit(1);
-      const userId = pos[0]?.userId || 1;
+      if (!pos[0]) throw new TRPCError({ code: "NOT_FOUND", message: "Position not found" });
+
+      const userId = pos[0].userId;
+      if (userId !== ctx.user.id) {
+        throw new TRPCError({ code: "FORBIDDEN", message: "Cannot close another user's position" });
+      }
 
       await db
         .update(positions)
@@ -830,10 +831,15 @@ export const tradingRouter = createRouter({
         })
         .where(eq(positions.id, input.id));
 
-      // Release margin back to paper wallet if this was a paper position
-      if (pos[0]?.isPaper) {
+      if (pos[0].isPaper) {
         await releasePaperMargin(userId, parseFloat(pos[0].margin), parseFloat(input.realizedPnl), pos[0].id);
       }
+
+      // Update risk session so circuit breakers fire correctly
+      const pnl = parseFloat(input.realizedPnl);
+      const session = getOrCreateSession(userId, 0);
+      const updatedSession = globalRiskEngine.recordTrade(session, { pnl });
+      sessions.set(userId, updatedSession);
 
       unregisterPosition(input.id);
       tradingEvents.emit(`portfolio-update:${userId}`);
@@ -1070,19 +1076,19 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── Save exchange credentials ───
-  saveCredentials: publicQuery
+  saveCredentials: authedQuery
     .input(
       z.object({
-        userId: z.number(),
         exchange: z.enum(["coindcx", "binance"]),
         apiKey: z.string(),
         apiSecret: z.string(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user.id;
       const db = getDb();
       await db.insert(exchangeCredentials).values({
-        userId: input.userId,
+        userId,
         exchange: input.exchange,
         apiKey: input.apiKey,
         apiSecret: input.apiSecret,
@@ -1096,14 +1102,15 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── Get exchange credentials ───
-  credentials: publicQuery
-    .input(z.object({ userId: z.number() }))
-    .query(async ({ input }) => {
+  credentials: authedQuery
+    .query(async ({ ctx }) => {
       const db = getDb();
-      return db
+      const rows = await db
         .select()
         .from(exchangeCredentials)
-        .where(eq(exchangeCredentials.userId, input.userId));
+        .where(eq(exchangeCredentials.userId, ctx.user.id));
+      // Mask API secret — never send the raw secret to the client
+      return rows.map((r) => ({ ...r, apiSecret: r.apiSecret ? "••••••••" : "" }));
     }),
 
   // ─── Get futures wallet (with derived metrics) ───
@@ -1177,27 +1184,22 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── Wallet transfer (Spot <-> Futures) ───
-  walletTransfer: publicQuery
+  walletTransfer: authedQuery
     .input(
       z.object({
-        userId: z.number(),
         currencyShortName: z.string(),
         amount: z.number().positive(),
         fromWallet: z.enum(["spot", "futures"]),
         toWallet: z.enum(["spot", "futures"]),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user.id;
       const db = getDb();
       const creds = await db
         .select()
         .from(exchangeCredentials)
-        .where(
-          and(
-            eq(exchangeCredentials.userId, input.userId),
-            eq(exchangeCredentials.exchange, "coindcx")
-          )
-        )
+        .where(and(eq(exchangeCredentials.userId, userId), eq(exchangeCredentials.exchange, "coindcx")))
         .limit(1);
       if (!creds || !creds[0]) {
         throw new TRPCError({ code: "NOT_FOUND", message: "CoinDCX credentials not found" });
@@ -1211,31 +1213,26 @@ export const tradingRouter = createRouter({
           to_wallet: input.toWallet,
         }
       );
-      tradingEvents.emit(`portfolio-update:${input.userId}`);
+      tradingEvents.emit(`portfolio-update:${userId}`);
       return result;
     }),
 
   // ─── Add / Remove margin ───
-  addRemoveMargin: publicQuery
+  addRemoveMargin: authedQuery
     .input(
       z.object({
-        userId: z.number(),
         positionId: z.string(),
         amount: z.number().positive(),
         type: z.enum(["add", "remove"]),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
+      const userId = ctx.user.id;
       const db = getDb();
       const creds = await db
         .select()
         .from(exchangeCredentials)
-        .where(
-          and(
-            eq(exchangeCredentials.userId, input.userId),
-            eq(exchangeCredentials.exchange, "coindcx")
-          )
-        )
+        .where(and(eq(exchangeCredentials.userId, userId), eq(exchangeCredentials.exchange, "coindcx")))
         .limit(1);
       if (!creds || !creds[0]) {
         throw new TRPCError({ code: "NOT_FOUND", message: "CoinDCX credentials not found" });
@@ -1248,7 +1245,7 @@ export const tradingRouter = createRouter({
           type: input.type,
         }
       );
-      tradingEvents.emit(`portfolio-update:${input.userId}`);
+      tradingEvents.emit(`portfolio-update:${userId}`);
       return result;
     }),
 

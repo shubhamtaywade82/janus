@@ -144,6 +144,18 @@ export function unregisterPosition(positionId: number) {
   trackedPositions.delete(positionId);
 }
 
+// Called by position manager when it moves a SL so the trailing engine
+// doesn't roll it back on the next 2s tick.
+export function syncTrailingStopLoss(positionId: number, newStopLoss: number): void {
+  const pos = trackedPositions.get(positionId);
+  if (!pos) return;
+  const isBetter =
+    pos.side === "long" ? newStopLoss > pos.stopLoss : newStopLoss < pos.stopLoss;
+  if (isBetter) {
+    pos.stopLoss = newStopLoss;
+  }
+}
+
 function ensureTrailingEngine() {
   if (trailingTimer) return;
   trailingTimer = setInterval(async () => {
