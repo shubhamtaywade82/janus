@@ -1521,17 +1521,17 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
             localStorage.setItem("janus_alert_rules", JSON.stringify(updatedRules));
 
             window.dispatchEvent(new Event("janus_alerts_changed"));
-            toast.success(`Price alert created at $${roundedPrice.toFixed(2)}!`);
+             toast.success(`Price alert created at $${formatPrice(roundedPrice, symbol)}!`);
           }}
-          className="absolute z-30 w-5 h-5 bg-[#1c1c1f] hover:bg-[#f59e0b] text-[#e4e4e7] hover:text-black border border-[#3f3f46] rounded-full flex items-center justify-center cursor-pointer transition-all shadow-lg active:scale-95"
+          className="absolute z-30 w-[18px] h-[18px] bg-[#1c1c1f] hover:bg-[#f59e0b] text-[#e4e4e7] hover:text-black border border-[#3f3f46] rounded-full flex items-center justify-center cursor-pointer transition-all shadow-lg active:scale-95"
           style={{
             top: `${hoveredCrosshair.y}px`,
-            right: "55px",
+            right: "58px",
             transform: "translate(50%, -50%)",
           }}
-          title={`Create Price Alert at $${hoveredCrosshair.price.toFixed(2)}`}
+          title={`Create Price Alert at $${formatPrice(hoveredCrosshair.price, symbol)}`}
         >
-          <Plus size={10} strokeWidth={3} />
+          <Plus size={8} strokeWidth={3} />
         </button>
       )}
 
