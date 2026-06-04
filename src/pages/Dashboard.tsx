@@ -617,16 +617,32 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       // Seed volume history buffer for live MA computation
       volumeHistoryRef.current = volumeData.map((d) => ({ time: d.time as number, value: d.value }));
 
-      const isSymbolOrIntervalChange = prevSymbolRef.current !== symbol || prevIntervalRef.current !== interval;
-      if (chartRef.current && isSymbolOrIntervalChange) {
+      const isSymbolChange = prevSymbolRef.current !== symbol;
+      const isIntervalChange = prevIntervalRef.current !== interval;
+      if (chartRef.current && (isSymbolChange || isIntervalChange)) {
         const storedRange = localStorage.getItem("janus_chart_logical_range");
         let restored = false;
         if (storedRange) {
           try {
             const parsed = JSON.parse(storedRange);
             if (typeof parsed.from === "number" && typeof parsed.to === "number") {
-              chartRef.current.timeScale().setVisibleLogicalRange(parsed);
-              restored = true;
+              if (isSymbolChange) {
+                // Symbol changed: restore only the zoom width (number of bars)
+                // and anchor it to the end of the new data to avoid out-of-bounds locking.
+                const rangeWidth = Math.min(parsed.to - parsed.from, chartData.length - 10);
+                const totalBars = chartData.length;
+                if (rangeWidth > 5) {
+                  chartRef.current.timeScale().setVisibleLogicalRange({
+                    from: totalBars - rangeWidth,
+                    to: totalBars,
+                  });
+                  restored = true;
+                }
+              } else {
+                // Same symbol: restore exact visible coordinates
+                chartRef.current.timeScale().setVisibleLogicalRange(parsed);
+                restored = true;
+              }
             }
           } catch (err) {
             console.warn("[chart] Failed to restore chart logical range:", err);
@@ -1867,11 +1883,11 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
 
   // Aggregate dynamically
   const bids = useMemo(() => {
-    return aggregateOrderBook(rawBids, priceStep, true).slice(0, 10);
+    return aggregateOrderBook(rawBids, priceStep, true).slice(0, 8);
   }, [rawBids, priceStep]);
 
   const asks = useMemo(() => {
-    return aggregateOrderBook(rawAsks, priceStep, false).slice(0, 10);
+    return aggregateOrderBook(rawAsks, priceStep, false).slice(0, 8);
   }, [rawAsks, priceStep]);
 
   const maxBidSize = Math.max(...bids.map(([, q]) => parseFloat(q)), 1);
@@ -1965,53 +1981,61 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
       {activeTab === "book" ? (
         <>
           {/* Column headers */}
-          <div className="grid grid-cols-3 px-2 py-1 border-b border-[#27272a]/50 text-[9px] text-[#52525b]">
-            <span>BID QTY</span>
-            <span className="text-center">PRICE</span>
-            <span className="text-right">ASK QTY</span>
+          <div className="grid grid-cols-2 px-3 py-1 border-b border-[#27272a]/50 text-[9px] text-[#52525b]">
+            <span>PRICE</span>
+            <span className="text-right">QTY</span>
           </div>
 
-          {/* Rows: bid | price | ask */}
-          <div className="flex-1 overflow-auto scrollbar-thin">
-            {Array.from({ length: Math.max(bids.length, asks.length) }).map((_, i) => {
-              const bid = bids[i];
-              const ask = asks[i];
-              const bidSize = bid ? parseFloat(bid[1]) : 0;
-              const askSize = ask ? parseFloat(ask[1]) : 0;
-              const bidW = bid ? (bidSize / maxBidSize) * 100 : 0;
-              const askW = ask ? (askSize / maxAskSize) * 100 : 0;
-
-              const priceDecForStep = priceStep < 1 ? Math.round(-Math.log10(priceStep)) : 0;
-
-              return (
-                <div key={i} className="grid grid-cols-3 items-center py-0.5 px-2 hover:bg-[#27272a]/30">
-                  {/* Bid qty + bar */}
-                  <div className="relative flex items-center justify-start">
-                    <div className="absolute inset-y-0 right-0 bg-j-up-bright/15 rounded-l" style={{ width: `${bidW}%` }} />
-                    <span className="relative tabular-nums text-j-up-bright">
-                      {bid ? bidSize.toFixed(3) : ""}
+          <div className="flex-1 flex flex-col justify-between overflow-hidden">
+            {/* Asks (Top, highest at top, best ask at bottom) */}
+            <div className="flex-1 overflow-y-auto scrollbar-none flex flex-col justify-end">
+              {asks.slice().reverse().map((ask, i) => {
+                const askSize = parseFloat(ask[1]);
+                const askW = (askSize / maxAskSize) * 100;
+                const priceDecForStep = priceStep < 1 ? Math.round(-Math.log10(priceStep)) : 0;
+                return (
+                  <div key={`ask-${i}`} className="relative grid grid-cols-2 items-center py-0.5 px-3 hover:bg-[#27272a]/30">
+                    <div className="absolute inset-y-0 right-0 bg-j-down-bright/10 rounded-l transition-all duration-300" style={{ width: `${askW}%` }} />
+                    <span className="relative tabular-nums text-j-down-bright font-medium">
+                      {formatPrice(ask[0], symbol, priceDecForStep)}
+                    </span>
+                    <span className="relative text-right tabular-nums text-zinc-300">
+                      {askSize.toFixed(3)}
                     </span>
                   </div>
+                );
+              })}
+            </div>
 
-                  {/* Price */}
-                  <div className="text-center tabular-nums">
-                    {bid ? (
-                      <span className="text-j-up-bright font-medium">{formatPrice(bid[0], symbol, priceDecForStep)}</span>
-                    ) : ask ? (
-                      <span className="text-j-down-bright font-medium">{formatPrice(ask[0], symbol, priceDecForStep)}</span>
-                    ) : ""}
-                  </div>
+            {/* Mid-market price banner */}
+            <div className="py-1 px-3 border-y border-[#27272a]/50 bg-[#18181b]/50 flex items-center justify-between font-bold">
+              <span className="text-[11px] tabular-nums" style={{ color: lastPriceColor }}>
+                {lastPrice > 0 ? <AnimatedNumber value={lastPrice} decimals={getPriceDecimals(symbol)} duration={150} /> : "--"}
+              </span>
+              {spread > 0 && (
+                <span className="text-[9px] text-[#71717a] font-normal">Spread {formatPrice(spread, symbol, priceStep < 1 ? Math.round(-Math.log10(priceStep)) : 0)} ({spreadPct.toFixed(2)}%)</span>
+              )}
+            </div>
 
-                  {/* Ask qty + bar */}
-                  <div className="relative flex items-center justify-end">
-                    <div className="absolute inset-y-0 left-0 bg-j-down-bright/15 rounded-r" style={{ width: `${askW}%` }} />
-                    <span className="relative tabular-nums text-j-down-bright">
-                      {ask ? askSize.toFixed(3) : ""}
+            {/* Bids (Bottom, best bid at top, lowest price at bottom) */}
+            <div className="flex-1 overflow-y-auto scrollbar-none">
+              {bids.map((bid, i) => {
+                const bidSize = parseFloat(bid[1]);
+                const bidW = (bidSize / maxBidSize) * 100;
+                const priceDecForStep = priceStep < 1 ? Math.round(-Math.log10(priceStep)) : 0;
+                return (
+                  <div key={`bid-${i}`} className="relative grid grid-cols-2 items-center py-0.5 px-3 hover:bg-[#27272a]/30">
+                    <div className="absolute inset-y-0 right-0 bg-j-up-bright/10 rounded-l transition-all duration-300" style={{ width: `${bidW}%` }} />
+                    <span className="relative tabular-nums text-j-up-bright font-medium">
+                      {formatPrice(bid[0], symbol, priceDecForStep)}
+                    </span>
+                    <span className="relative text-right tabular-nums text-zinc-300">
+                      {bidSize.toFixed(3)}
                     </span>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         </>
       ) : (
@@ -2245,7 +2269,13 @@ const TickerStreamSubscriber = ({
 };
 
 // ─── Ticker Strip ───
-const TickerStrip = () => {
+const TickerStrip = ({
+  activeSymbol,
+  onSelectSymbol,
+}: {
+  activeSymbol: string;
+  onSelectSymbol: (symbol: string) => void;
+}) => {
   const [tickersMap, setTickersMap] = useState<Record<string, any>>({});
 
   const { data: initialTickers } = trpc.market.ticker24h.useQuery(
@@ -2275,30 +2305,42 @@ const TickerStrip = () => {
   const tickerList = supportedSymbols.map((s) => tickersMap[s]).filter(Boolean);
 
   return (
-    <div className="flex items-center gap-6 px-4 py-1.5 border-b border-[#27272a] bg-[#09090b] overflow-x-auto scrollbar-thin">
+    <div className="flex items-center gap-3 px-4 py-1.5 border-b border-[#27272a] bg-[#09090b] overflow-x-auto scrollbar-thin">
       {supportedSymbols.map((symbol) => (
         <TickerStreamSubscriber key={symbol} symbol={symbol} onUpdate={handleTickerUpdate} />
       ))}
-      {tickerList.map((t: any) => (
-        <div key={t.symbol} className="flex items-center gap-2 flex-shrink-0">
-          <span className="text-[10px] text-[#71717a] font-medium">{t.symbol}</span>
-          <span className="text-[10px] tabular-nums text-[#f4f4f5]">
-            <AnimatedNumber value={parseFloat(t.lastPrice)} decimals={getPriceDecimals(t.symbol)} duration={150} />
-          </span>
-          <span
+      {tickerList.map((t: any) => {
+        const isActive = t.symbol === activeSymbol;
+        return (
+          <button
+            key={t.symbol}
+            onClick={() => onSelectSymbol(t.symbol)}
             className={cn(
-              "text-[10px] tabular-nums",
-              parseFloat(t.priceChangePercent) >= 0 ? "text-j-up" : "text-j-down"
+              "flex items-center gap-2 flex-shrink-0 px-2 py-0.5 rounded transition-all hover:bg-[#27272a]/30 cursor-pointer outline-none border text-left",
+              isActive ? "border-[#f59e0b] bg-[#f59e0b]/5" : "border-transparent"
             )}
           >
-            {parseFloat(t.priceChangePercent) >= 0 ? "+" : ""}
-            {parseFloat(t.priceChangePercent).toFixed(2)}%
-          </span>
-        </div>
-      ))}
+            <span className={cn("text-[10px] font-semibold", isActive ? "text-[#f59e0b]" : "text-[#71717a]")}>
+              {t.symbol}
+            </span>
+            <span className="text-[10px] tabular-nums text-[#f4f4f5]">
+              <AnimatedNumber value={parseFloat(t.lastPrice)} decimals={getPriceDecimals(t.symbol)} duration={150} />
+            </span>
+            <span
+              className={cn(
+                "text-[10px] tabular-nums",
+                parseFloat(t.priceChangePercent) >= 0 ? "text-j-up" : "text-j-down"
+              )}
+            >
+              {parseFloat(t.priceChangePercent) >= 0 ? "+" : ""}
+              {parseFloat(t.priceChangePercent).toFixed(2)}%
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
-}
+};
 
 // ─── Main Dashboard ───
 const Dashboard = () => {
@@ -2628,7 +2670,7 @@ const Dashboard = () => {
   return (
     <div className="flex flex-col h-full">
       <ExitSignalToast userId={1} />
-      <TickerStrip />
+      <TickerStrip activeSymbol={selectedSymbol} onSelectSymbol={setSelectedSymbol} />
 
       <div className="flex flex-1 overflow-hidden">
         {/* Left Panel - Chart + Order Book */}
