@@ -815,10 +815,11 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     // FVGs
     fvgPrimRef.current.setFVGs(tog?.fvg && pa?.fvgs ? pa.fvgs : []);
 
-    // Structure + Liquidity
+    // Structure + Liquidity + Swings
     strPrimRef.current.setData(
       tog?.structure  && pa?.structure  ? pa.structure  : [],
-      tog?.liquidity  && pa?.liquidity  ? pa.liquidity  : []
+      tog?.liquidity  && pa?.liquidity  ? pa.liquidity  : [],
+      tog?.swings     && pa?.swings     ? pa.swings     : []
     );
 
     // Swing markers + displacement markers — create plugin lazily on first use
@@ -832,18 +833,6 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     if (markersPluginRef.current) {
       const markers: SeriesMarker<Time>[] = [];
 
-      if (tog?.swings && pa?.swings) {
-        for (const s of pa.swings) {
-          markers.push({
-            time:     (s.time / 1000) as Time,
-            position: s.type === "high" ? "aboveBar" : "belowBar",
-            shape:    "circle", // Use circle with size 0 to effectively hide the shape
-            color:    s.type === "high" ? "#a1a1aa" : "#a1a1aa",
-            size:     0.01,
-            text:     s.label || "",
-          });
-        }
-      }
 
       if (tog?.displacement && pa?.displacement) {
         for (const d of pa.displacement) {
@@ -2625,7 +2614,7 @@ const TickerStrip = ({
   const handleTickerUpdate = useCallback((symbol: string, data: any) => {
     setTickersMap((prev) => ({
       ...prev,
-      [symbol]: data,
+      [symbol]: { ...prev[symbol], ...data },
     }));
   }, []);
 
@@ -2851,7 +2840,7 @@ const Dashboard = () => {
   const tickerCallbackRef = useRef<(data: any) => void>(() => {});
   useEffect(() => {
     tickerCallbackRef.current = (data: any) => {
-      setTicker(data);
+      setTicker((prev: any) => (prev ? { ...prev, ...data } : data));
     };
   }, []);
 
