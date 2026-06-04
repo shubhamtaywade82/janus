@@ -138,20 +138,26 @@ const PositionRow = ({
         </div>
       </td>
       <td className="px-3 py-2">
-        <span
-          className={cn(
-            "text-xs px-1.5 py-0.5 rounded",
-            liqPercent < 5
-              ? "bg-j-down/10 text-j-down"
-              : liqPercent < 15
-              ? "bg-[#f59e0b]/10 text-[#f59e0b]"
-              : "bg-j-up/10 text-j-up"
+        <div className="flex flex-col gap-0.5">
+          <span
+            className={cn(
+              "text-xs px-1.5 py-0.5 rounded w-fit",
+              liqPercent < 5
+                ? "bg-j-down/10 text-j-down"
+                : liqPercent < 15
+                ? "bg-[#f59e0b]/10 text-[#f59e0b]"
+                : "bg-j-up/10 text-j-up"
+            )}
+          >
+            <Shield size={10} className="inline mr-0.5" />
+            {liqPercent.toFixed(1)}%
+          </span>
+          {position.liquidationPrice && parseFloat(position.liquidationPrice) > 0 && (
+            <span className="text-[9px] text-[#71717a] tabular-nums">
+              Liq: {formatPrice(position.liquidationPrice, position.symbol, position.basePrecision)}
+            </span>
           )}
-          title={`Liq: ${formatPrice(position.liquidationPrice, position.symbol, position.basePrecision)}`}
-        >
-          <Shield size={10} className="inline mr-0.5" />
-          {liqPercent.toFixed(1)}%
-        </span>
+        </div>
       </td>
       <td className="px-3 py-2">
         <div className="flex items-center gap-2">
