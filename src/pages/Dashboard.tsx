@@ -70,6 +70,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const [hudData, setHudData] = useState<any>(null);
   const [chartInitialized, setChartInitialized] = useState(false);
   const [positionsY, setPositionsY] = useState<Record<number, { entryY: number | null; liqY: number | null }>>({});
+  const [isScrolledBack, setIsScrolledBack] = useState(false);
   const priceLinesRef = useRef<any[]>([]);
 
   const [alertRules, setAlertRules] = useState<any[]>([]);
@@ -463,7 +464,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
 
-    // Lazy load older candles when user scrolls to the left edge
+    // Lazy load + "go live" detection on scroll
     chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (!range) return;
 
@@ -474,6 +475,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
           to: range.to
         }));
       } catch (err) {}
+
+      // Show "go live" button when right edge is > 3 bars behind the last loaded bar
+      const lastIdx = dataRef.current.length - 1;
+      setIsScrolledBack(lastIdx > 0 && range.to < lastIdx - 3);
 
       // When left edge approaches the first bar (< 5 bars left of data start)
       if (range.from > 5) return;
@@ -1675,6 +1680,20 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
             <span className="text-[#f4f4f5]">{hudData.volume}</span>
           </span>
         </div>
+      )}
+
+      {/* Go-to-live button — appears when user scrolls into history */}
+      {isScrolledBack && (
+        <button
+          onClick={() => chartRef.current?.timeScale().scrollToRealTime()}
+          className="absolute bottom-8 right-4 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold bg-[#f59e0b]/90 hover:bg-[#f59e0b] text-black shadow-lg transition-all animate-pulse"
+          title="Go to current candle"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="shrink-0">
+            <path d="M2 5h6M6 3l2 2-2 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          Live
+        </button>
       )}
 
       {/* HTML Position Lines Left/Right Labels Overlay */}
