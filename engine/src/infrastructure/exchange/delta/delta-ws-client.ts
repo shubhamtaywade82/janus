@@ -19,7 +19,18 @@ export type DeltaWsChannel =
   | `v2/ticker/${string}`           // mark price
   | `l2_orderbook/${string}`        // orderbook
   | `all_trades/${string}`          // public trades
-  | `candlestick_1m/${string}`      // 1-min candles
+  | `candlestick_1m/${string}`      // candles
+  | `candlestick_3m/${string}`
+  | `candlestick_5m/${string}`
+  | `candlestick_15m/${string}`
+  | `candlestick_30m/${string}`
+  | `candlestick_1h/${string}`
+  | `candlestick_2h/${string}`
+  | `candlestick_4h/${string}`
+  | `candlestick_6h/${string}`
+  | `candlestick_12h/${string}`
+  | `candlestick_1d/${string}`
+  | `candlestick_1w/${string}`
   | "orders"                        // private orders
   | "fills"                         // private fills
   | "positions";                    // private positions

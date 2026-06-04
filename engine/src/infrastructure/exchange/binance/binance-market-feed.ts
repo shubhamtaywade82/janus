@@ -1,16 +1,22 @@
 import { BinanceWsClient } from "./binance-ws-client.js";
-import { mapDepthToSnapshot, mapTradeToTick, mapKlineToCandle } from "./binance-mapper.js";
+import { EXCHANGE_ID } from "./binance-mapper.js";
+import { subscribeBinanceDepth } from "./channels/depth-feed.js";
+import { subscribeBinanceTrades, subscribeBinanceAggTrades } from "./channels/trade-feed.js";
+import { subscribeBinanceKlines } from "./channels/klines-feed.js";
+import { subscribeBinanceMarkPrice, subscribeBinanceBookTicker } from "./channels/funding-feed.js";
 import type { MarketDataFeedPort } from "../../../application/ports/market-data-feed.port.js";
 import type { OrderbookSnapshot } from "../../../domain/market-data/orderbook.js";
 import type { TradeTick } from "../../../domain/market-data/trade-tick.js";
+import type { AggTrade } from "../../../domain/market-data/market-tick.js";
 import type { Candle, CandleInterval } from "../../../domain/market-data/candle.js";
+import type { FundingRate, OpenInterest, MarkPrice, BookTicker } from "../../../domain/market-data/funding.js";
 import { logger } from "../../observability/logger.js";
 
 const FUTURES_WS_URL = "wss://fstream.binance.com";
 const FUTURES_REST_BASE = "https://fapi.binance.com";
 
 export class BinanceMarketFeed implements MarketDataFeedPort {
-  readonly feedId = "binance";
+  readonly feedId = EXCHANGE_ID;
 
   private wsClient: BinanceWsClient;
   private log = logger.child({ feed: "binance" });
@@ -33,83 +39,57 @@ export class BinanceMarketFeed implements MarketDataFeedPort {
     this.wsClient.disconnect();
   }
 
-  async *subscribeOrderbook(symbol: string): AsyncIterable<OrderbookSnapshot> {
-    const stream = `${symbol.toLowerCase()}@depth20@100ms`;
-    this.wsClient.subscribe([stream]);
+  subscribeOrderbook(symbol: string): AsyncIterable<OrderbookSnapshot> {
+    return subscribeBinanceDepth(this.wsClient, symbol);
+  }
 
-    const queue: OrderbookSnapshot[] = [];
-    let resolve: (() => void) | null = null;
+  subscribeBookTicker(symbol: string): AsyncIterable<BookTicker> {
+    return subscribeBinanceBookTicker(this.wsClient, symbol);
+  }
 
-    const handler = (data: Record<string, unknown>) => {
-      queue.push(mapDepthToSnapshot(symbol, data));
-      resolve?.();
-      resolve = null;
-    };
+  subscribeTrades(symbol: string): AsyncIterable<TradeTick> {
+    return subscribeBinanceTrades(this.wsClient, symbol);
+  }
 
-    this.wsClient.on(`stream:${stream}`, handler);
+  subscribeAggTrades(symbol: string): AsyncIterable<AggTrade> {
+    return subscribeBinanceAggTrades(this.wsClient, symbol);
+  }
 
-    try {
-      while (true) {
-        if (queue.length === 0) {
-          await new Promise<void>((r) => { resolve = r; });
-        }
-        while (queue.length) {
-          yield queue.shift()!;
-        }
-      }
-    } finally {
-      this.wsClient.off(`stream:${stream}`, handler);
+  subscribeCandles(symbol: string, interval: CandleInterval): AsyncIterable<Candle> {
+    return subscribeBinanceKlines(this.wsClient, symbol, interval);
+  }
+
+  async *subscribeMarkPrice(symbol: string): AsyncIterable<MarkPrice> {
+    for await (const { markPrice } of subscribeBinanceMarkPrice(this.wsClient, symbol)) {
+      yield markPrice;
     }
   }
 
-  async *subscribeTrades(symbol: string): AsyncIterable<TradeTick> {
-    const stream = `${symbol.toLowerCase()}@trade`;
-    this.wsClient.subscribe([stream]);
-
-    const queue: TradeTick[] = [];
-    let resolve: (() => void) | null = null;
-
-    const handler = (data: Record<string, unknown>) => {
-      queue.push(mapTradeToTick(symbol, data));
-      resolve?.();
-      resolve = null;
-    };
-
-    this.wsClient.on(`stream:${stream}`, handler);
-
-    try {
-      while (true) {
-        if (queue.length === 0) await new Promise<void>((r) => { resolve = r; });
-        while (queue.length) yield queue.shift()!;
-      }
-    } finally {
-      this.wsClient.off(`stream:${stream}`, handler);
+  async *subscribeFundingRate(symbol: string): AsyncIterable<FundingRate> {
+    for await (const { fundingRate } of subscribeBinanceMarkPrice(this.wsClient, symbol)) {
+      yield fundingRate;
     }
   }
 
-  async *subscribeCandles(symbol: string, interval: CandleInterval): AsyncIterable<Candle> {
-    const stream = `${symbol.toLowerCase()}@kline_${interval}`;
-    this.wsClient.subscribe([stream]);
-
-    const queue: Candle[] = [];
-    let resolve: (() => void) | null = null;
-
-    const handler = (data: Record<string, unknown>) => {
-      const candle = mapKlineToCandle(symbol, data);
-      queue.push(candle);
-      resolve?.();
-      resolve = null;
-    };
-
-    this.wsClient.on(`stream:${stream}`, handler);
-
-    try {
-      while (true) {
-        if (queue.length === 0) await new Promise<void>((r) => { resolve = r; });
-        while (queue.length) yield queue.shift()!;
+  async *subscribeOpenInterest(symbol: string): AsyncIterable<OpenInterest> {
+    // Binance OI requires a separate REST poll — WS not available for futures OI changes
+    while (true) {
+      try {
+        const res = await fetch(`${FUTURES_REST_BASE}/fapi/v1/openInterest?symbol=${symbol}`);
+        if (res.ok) {
+          const data = await res.json() as Record<string, unknown>;
+          yield {
+            symbol,
+            exchange: EXCHANGE_ID,
+            openInterest: parseFloat(String(data.openInterest ?? 0)),
+            openInterestUsd: 0,
+            ts: Date.now(),
+          };
+        }
+      } catch {
+        // non-fatal
       }
-    } finally {
-      this.wsClient.off(`stream:${stream}`, handler);
+      await new Promise((r) => setTimeout(r, 10_000));
     }
   }
 
@@ -132,5 +112,9 @@ export class BinanceMarketFeed implements MarketDataFeedPort {
       trades: n,
       closed: true,
     }));
+  }
+
+  get rawClient(): BinanceWsClient {
+    return this.wsClient;
   }
 }
