@@ -194,6 +194,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const animCurrent = useRef({ close: 0, vol: 0 });
   const animLoopRunning = useRef(false);
   const animSeeded = useRef(false); // track if we've seeded initial values
+  // Running high/low for the current candle — only expand, never contract (prevents wick flicker)
+  const liveHighRef = useRef(0);
+  const liveLowRef = useRef(Infinity);
+  const liveTimeRef = useRef(0); // openTime (seconds) of the candle being tracked
   const VOLUME_MA_PERIOD = 20; // 20-period volume MA
 
   const startAnimLoop = useCallback(() => {
@@ -258,16 +262,14 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const c = animCurrent.current.close;
       const v = animCurrent.current.vol;
 
-      // Animated candle update: clamp intermediate high/low to target high/low.
-      // Doing this prevents range fluctuations (where the canvas scale shifts up and down 
-      // dynamically during animation frames, causing the chart to visually vibrate).
-      const finalHigh = Math.max(t.open, t.close, t.high);
-      const finalLow = Math.min(t.open, t.close, t.low);
+      // Use full high/low from animTarget directly — do NOT clamp to animated close.
+      // Clamping made the wick length depend on the lerp position, causing wicks to
+      // flicker every frame as `c` moved. Wicks are accurate; only close animates.
       candlestickSeriesRef.current.update({
         time: t.time as UTCTimestamp,
         open: t.open,
-        high: Math.min(finalHigh, Math.max(t.open, c)),
-        low: Math.max(finalLow, Math.min(t.open, c)),
+        high: t.high,
+        low: t.low,
         close: c,
       });
 
@@ -694,8 +696,22 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     const lastTime = last.openTime / 1000;
     const o = parseFloat(last.open);
     const targetClose = lastPrice;
-    const h = Math.max(parseFloat(last.high), targetClose);
-    const l = Math.min(parseFloat(last.low), targetClose);
+
+    // Always merge: kline high/low (from klineStream via data prop) + live price.
+    // On candle change, reset accumulator; otherwise only expand — never contract.
+    const klineHigh = parseFloat(last.high);
+    const klineLow = parseFloat(last.low);
+    if (liveTimeRef.current !== lastTime) {
+      liveTimeRef.current = lastTime;
+      liveHighRef.current = klineHigh;
+      liveLowRef.current = klineLow;
+    }
+    // Expand to include both the kline's actual high/low AND the current tick price
+    liveHighRef.current = Math.max(liveHighRef.current, klineHigh, targetClose);
+    liveLowRef.current = Math.min(liveLowRef.current, klineLow, targetClose);
+
+    const h = liveHighRef.current;
+    const l = liveLowRef.current;
     const vol = parseFloat(last.volume);
 
     if (!animSeeded.current) {
