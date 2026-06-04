@@ -148,6 +148,29 @@ describe("MarketStateManager", () => {
       side: "BUY",
       timestamp: 1000,
     });
+    expect(state.cumulativeCvd).toBe(25000);
+    expect(state.cvdWindow.values()[0]).toEqual({
+      delta: 25000,
+      cumulative: 25000,
+      price: 50000,
+      timestamp: 1000,
+    });
+  });
+
+  it("should track open interest snapshots", () => {
+    manager.updateOpenInterest(symbol, {
+      openInterest: 123456.78,
+      quoteOI: 987654.32,
+      timestamp: 1000,
+    });
+
+    const state = manager.get(symbol)!;
+    expect(state.latestOpenInterest).toEqual({
+      openInterest: 123456.78,
+      quoteOI: 987654.32,
+      timestamp: 1000,
+    });
+    expect(state.openInterestWindow.values()).toEqual([state.latestOpenInterest]);
   });
 
   it("should calculate order book and derived metrics", () => {

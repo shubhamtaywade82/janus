@@ -1,10 +1,11 @@
 import { EventEmitter } from "events";
 import WebSocket from "ws";
 import { getDb } from "../queries/connection";
-import { marketData, orderBookSnapshots, recentTicks } from "@db/schema";
+import { fundingRateHistory, liquidationEvents, marketData, openInterestData, orderBookSnapshots, recentTicks } from "@db/schema";
 import { marketStateManager } from "./market-state";
 import { getOrCreateFeedHealth, feedHealthRegistry } from "./feed-health";
 import { liquidityEngine } from "./liquidity-engine";
+import { fetchOpenInterest } from "./binance";
 
 export const marketEvents = new EventEmitter();
 marketEvents.setMaxListeners(100);
@@ -15,9 +16,11 @@ export const latestTickerCache = new Map<string, { lastPrice: number; symbol: st
 interface ActiveSymbolStream {
   ws: WebSocket | null;
   subscribers: number;
+  openInterestTimer: ReturnType<typeof setInterval> | null;
 }
 
 export const activeStreams = new Map<string, ActiveSymbolStream>();
+const OPEN_INTEREST_POLL_MS = 30_000;
 
 // Global heartbeat — ticks all FeedHealth instances every 5s
 let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -34,6 +37,34 @@ function getBinanceWsUrl(symbol: string): string {
   return `wss://fstream.binance.com/stream?streams=${s}@depth20@100ms/${s}@trade/${s}@ticker/${s}@kline_1m/${s}@forceOrder/${s}@markPrice`;
 }
 
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function pollOpenInterest(symbol: string): Promise<void> {
+  try {
+    const oi = await fetchOpenInterest(symbol);
+    const openInterest = parseFloat(String(oi.openInterest));
+    const timestamp = Number(oi.time) || Date.now();
+
+    if (!Number.isFinite(openInterest) || openInterest <= 0) return;
+
+    marketStateManager.updateOpenInterest(symbol, {
+      openInterest,
+      timestamp,
+    });
+
+    const db = getDb();
+    await db.insert(openInterestData).values({
+      symbol,
+      openInterest: String(openInterest),
+      timestamp: new Date(timestamp),
+    }).catch(() => {});
+  } catch (err: unknown) {
+    console.warn(`[streaming] Open interest poll failed for ${symbol}:`, getErrorMessage(err));
+  }
+}
+
 export function subscribeToSymbol(symbol: string) {
   const current = activeStreams.get(symbol);
   if (current) {
@@ -45,6 +76,7 @@ export function subscribeToSymbol(symbol: string) {
   const streamInfo: ActiveSymbolStream = {
     ws: null,
     subscribers: 1,
+    openInterestTimer: null,
   };
   activeStreams.set(symbol, streamInfo);
 
@@ -53,11 +85,16 @@ export function subscribeToSymbol(symbol: string) {
 
   const ws = new WebSocket(url);
   streamInfo.ws = ws;
+  pollOpenInterest(symbol).catch(() => {});
+  streamInfo.openInterestTimer = setInterval(() => {
+    pollOpenInterest(symbol).catch(() => {});
+  }, OPEN_INTEREST_POLL_MS);
 
-  let lastDbSave = {
+  const lastDbSave = {
     depth: 0,
     trade: 0,
     kline: 0,
+    funding: 0,
   };
 
   ws.on("message", async (dataStr) => {
@@ -78,8 +115,8 @@ export function subscribeToSymbol(symbol: string) {
 
         // Update in-memory state manager
         marketStateManager.updateOrderBook(symbol, {
-          bids: bids.map(([p, q]: any) => [parseFloat(String(p)), parseFloat(String(q))]),
-          asks: asks.map(([p, q]: any) => [parseFloat(String(p)), parseFloat(String(q))]),
+          bids: bids.map(([p, q]: [unknown, unknown]) => [parseFloat(String(p)), parseFloat(String(q))]),
+          asks: asks.map(([p, q]: [unknown, unknown]) => [parseFloat(String(p)), parseFloat(String(q))]),
           timestamp: data.E || Date.now(),
         });
 
@@ -219,7 +256,7 @@ export function subscribeToSymbol(symbol: string) {
           orderType: o.o,
           timeInForce: o.f,
           originalQuantity: o.q,
-          price: o.p,
+          price: parseFloat(String(o.p)),
           averagePrice: o.ap,
           orderStatus: o.X,
           lastFilledQuantity: o.l,
@@ -229,9 +266,18 @@ export function subscribeToSymbol(symbol: string) {
         marketEvents.emit(`${symbol}:liquidation`, formattedLiquidation);
         
         // Pass to Market State
-        if (typeof marketStateManager !== "undefined" && typeof (marketStateManager as any).updateLiquidation === "function") {
-          (marketStateManager as any).updateLiquidation(symbol, formattedLiquidation);
-        }
+        marketStateManager.updateLiquidation(symbol, formattedLiquidation);
+
+        const db = getDb();
+        await db.insert(liquidationEvents).values({
+          symbol,
+          side: formattedLiquidation.side,
+          price: String(formattedLiquidation.price),
+          quantity: formattedLiquidation.originalQuantity,
+          filledQty: formattedLiquidation.orderFilledAccumulatedQuantity,
+          status: formattedLiquidation.orderStatus,
+          tradeTime: new Date(formattedLiquidation.orderTradeTime),
+        }).catch(() => {});
       }
       else if (stream.endsWith("@markPrice")) {
         const formattedFunding = {
@@ -245,8 +291,19 @@ export function subscribeToSymbol(symbol: string) {
         marketEvents.emit(`${symbol}:funding`, formattedFunding);
 
         // Pass to Market State
-        if (typeof marketStateManager !== "undefined" && typeof (marketStateManager as any).updateFunding === "function") {
-          (marketStateManager as any).updateFunding(symbol, formattedFunding);
+        marketStateManager.updateFunding(symbol, formattedFunding);
+
+        const now = Date.now();
+        if (now - lastDbSave.funding > 60_000) {
+          lastDbSave.funding = now;
+          const db = getDb();
+          await db.insert(fundingRateHistory).values({
+            symbol,
+            fundingRate: formattedFunding.fundingRate,
+            markPrice: formattedFunding.markPrice,
+            nextFundingTime: new Date(formattedFunding.nextFundingTime),
+            timestamp: new Date(data.E || now),
+          }).catch(() => {});
         }
       }
 
@@ -266,6 +323,10 @@ export function subscribeToSymbol(symbol: string) {
     console.log(`[streaming] WS closed for ${symbol}`);
     const state = activeStreams.get(symbol);
     if (state && state.subscribers > 0) {
+      if (state.openInterestTimer) {
+        clearInterval(state.openInterestTimer);
+        state.openInterestTimer = null;
+      }
       const health = getOrCreateFeedHealth(symbol);
       health.status = "reconnecting";
       health.reconnectAttempts++;
@@ -286,6 +347,10 @@ export function unsubscribeFromSymbol(symbol: string) {
   current.subscribers--;
   if (current.subscribers <= 0) {
     console.log(`[streaming] No subscribers left for ${symbol}. Closing WS connection.`);
+    if (current.openInterestTimer) {
+      clearInterval(current.openInterestTimer);
+      current.openInterestTimer = null;
+    }
     if (current.ws) {
       current.ws.close();
     }

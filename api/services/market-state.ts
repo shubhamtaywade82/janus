@@ -34,6 +34,19 @@ export interface FundingTick {
   timestamp: number;
 }
 
+export interface OpenInterestTick {
+  openInterest: number;
+  quoteOI?: number;
+  timestamp: number;
+}
+
+export interface CvdTick {
+  delta: number;
+  cumulative: number;
+  price: number;
+  timestamp: number;
+}
+
 export interface LiquidityDelta {
   level: number;
   bidRemoved: number;
@@ -74,7 +87,11 @@ export interface InstrumentState {
   bookWindow: RingBuffer<OrderBookSnapshot>;
   deltaWindow: RingBuffer<LiquidityDelta>;
   liquidationWindow: RingBuffer<LiquidationTick>;
+  openInterestWindow: RingBuffer<OpenInterestTick>;
+  cvdWindow: RingBuffer<CvdTick>;
   latestFunding: FundingTick | null;
+  latestOpenInterest: OpenInterestTick | null;
+  cumulativeCvd: number;
 
   metrics: MarketMetrics;
   updatedAt: number;
@@ -178,7 +195,11 @@ export class MarketStateManager {
         bookWindow: new RingBuffer<OrderBookSnapshot>(50),
         deltaWindow: new RingBuffer<LiquidityDelta>(500),
         liquidationWindow: new RingBuffer<LiquidationTick>(1000),
+        openInterestWindow: new RingBuffer<OpenInterestTick>(500),
+        cvdWindow: new RingBuffer<CvdTick>(1000),
         latestFunding: null,
+        latestOpenInterest: null,
+        cumulativeCvd: 0,
         metrics: {
           spread: 0,
           spreadPercent: 0,
@@ -251,6 +272,22 @@ export class MarketStateManager {
   }
 
   /**
+   * Update Open Interest snapshots from REST polling.
+   */
+  updateOpenInterest(symbol: string, oiInput: { openInterest: number; quoteOI?: number; timestamp?: number }): void {
+    const state = this.getOrInitializeState(symbol);
+    const tick: OpenInterestTick = {
+      openInterest: oiInput.openInterest,
+      quoteOI: oiInput.quoteOI,
+      timestamp: oiInput.timestamp ?? Date.now(),
+    };
+    state.latestOpenInterest = tick;
+    state.openInterestWindow.push(tick);
+    state.updatedAt = tick.timestamp;
+    state.sequenceNo++;
+  }
+
+  /**
    * Update the trade tape.
    */
   updateTrade(
@@ -267,6 +304,18 @@ export class MarketStateManager {
       timestamp,
     };
     state.tradeWindow.push(trade);
+
+    const delta = trade.side === "BUY"
+      ? trade.quantity * trade.price
+      : -trade.quantity * trade.price;
+    state.cumulativeCvd += delta;
+    state.cvdWindow.push({
+      delta,
+      cumulative: state.cumulativeCvd,
+      price: trade.price,
+      timestamp,
+    });
+
     state.updatedAt = timestamp;
     state.sequenceNo++;
   }
