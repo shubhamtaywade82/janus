@@ -347,7 +347,7 @@ const Signals = () => {
   const [analyzeTrigger, setAnalyzeTrigger] = useState(0);
   const [analyzeAllTrigger, setAnalyzeAllTrigger] = useState(0);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
-  const [refreshInterval, setRefreshInterval] = useState(30); // seconds
+  const [refreshInterval, setRefreshInterval] = useState(0); // seconds (0 = disabled)
 
   const { data: signals, isLoading, refetch } = trpc.signal.latest.useQuery(
     { limit: 50 },
@@ -475,7 +475,7 @@ const Signals = () => {
             <h2 className="text-sm font-semibold text-[#f4f4f5]">Confluence Signal Engine</h2>
             <p className="text-[10px] text-[#71717a] flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-j-up animate-pulse inline-block" />
-              Auto-refresh every {refreshInterval}s
+              {refreshInterval === 0 ? "Auto-refresh disabled" : `Auto-refresh every ${refreshInterval}s`}
               {lastUpdate && <span className="text-[#52525b]">· {lastUpdate.toLocaleTimeString()}</span>}
             </p>
           </div>
@@ -500,6 +500,7 @@ const Signals = () => {
               onChange={(e) => setRefreshInterval(Number(e.target.value))}
               className="bg-transparent text-[10px] text-[#f4f4f5] outline-none"
             >
+              <option value={0}>Manual Only</option>
               <option value={10}>10s</option>
               <option value={30}>30s</option>
               <option value={60}>60s</option>

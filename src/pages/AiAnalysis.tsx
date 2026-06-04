@@ -56,7 +56,13 @@ export default function AiAnalysis() {
 
   const { data: analysis, isLoading, isRefetching, refetch } = trpc.signal.comprehensiveAnalysis.useQuery(
     { symbol: selectedSymbol || "BTCUSDT" },
-    { enabled: selectedSymbol !== "", staleTime: 10000 }
+    { 
+      enabled: selectedSymbol !== "", 
+      staleTime: Infinity,
+      refetchOnWindowFocus: false,
+      refetchOnMount: false,
+      refetchOnReconnect: false,
+    }
   );
 
   const handleRefresh = () => {
@@ -202,13 +208,21 @@ export default function AiAnalysis() {
                       className={cn(
                         "inline-flex items-center px-2 py-0.5 rounded text-[10px] font-black uppercase border",
                         analysis.summary.recommended_action === "TAKE_POSITION"
-                          ? "bg-j-up-bright/15 text-j-up-bright border-j-up-bright/35"
+                          ? (analysis.trade_setup?.setup_type.includes("LONG") || overallBias === "BULLISH"
+                            ? "bg-j-up-bright/15 text-j-up-bright border-j-up-bright/35"
+                            : "bg-j-down-bright/15 text-j-down-bright border-j-down-bright/35")
                           : analysis.summary.recommended_action === "WAIT_FOR_CONFIRMATION"
                           ? "bg-yellow-500/10 text-yellow-500 border-yellow-500/30"
                           : "bg-zinc-800 text-zinc-400 border-zinc-700"
                       )}
                     >
-                      {analysis.summary.recommended_action.replace(/_/g, " ")}
+                      {analysis.summary.recommended_action === "TAKE_POSITION"
+                        ? (analysis.trade_setup?.setup_type.includes("LONG") || overallBias === "BULLISH"
+                          ? "TAKE LONG"
+                          : analysis.trade_setup?.setup_type.includes("SHORT") || overallBias === "BEARISH"
+                          ? "TAKE SHORT"
+                          : "TAKE POSITION")
+                        : analysis.summary.recommended_action.replace(/_/g, " ")}
                     </span>
                   </div>
                 </div>
