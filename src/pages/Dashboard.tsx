@@ -753,10 +753,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
           markers.push({
             time:     (s.time / 1000) as Time,
             position: s.type === "high" ? "aboveBar" : "belowBar",
-            shape:    s.type === "high" ? "arrowDown" : "arrowUp",
-            color:    s.type === "high" ? "#71717a" : "#71717a",
-            size:     0.6,
-            text:     "",
+            shape:    "circle", // Use circle with size 0 to effectively hide the shape
+            color:    s.type === "high" ? "#a1a1aa" : "#a1a1aa",
+            size:     0.01,
+            text:     s.label || "",
           });
         }
       }
