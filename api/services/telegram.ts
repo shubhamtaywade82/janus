@@ -58,13 +58,15 @@ export async function testTelegramConnection(botToken: string, chatId: string): 
   return sendTelegramMessage({ botToken, chatId, text: testMessage });
 }
 
+import { getDb } from "../queries/connection";
+import { users } from "@db/schema";
+
 /**
  * Broadcasts an alert message to the primary Telegram chat by fetching credentials from the DB.
  */
 export async function broadcastTelegramAlert(text: string): Promise<boolean> {
   try {
-    const { db } = await import("../../db");
-    const { users } = await import("../../db/schema");
+    const db = getDb();
     const user = await db
       .select({
         telegramBotToken: users.telegramBotToken,
