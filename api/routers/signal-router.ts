@@ -18,7 +18,7 @@ import {
   aggregateTradeTape,
 } from "../services/confluence";
 import { fetchKlines, fetchOpenInterest, SUPPORTED_PAIRS } from "../services/binance";
-import { subscribeToSymbol } from "../services/streaming";
+import { subscribeToSymbol, marketEvents } from "../services/streaming";
 import { marketStateManager } from "../services/market-state";
 import { STRATEGY_CONFIGS, type StrategyType } from "../services/strategy-config";
 import { globalLlmAdvisor } from "../services/llm-advisor";
@@ -1182,117 +1182,147 @@ function evaluateSymbolSignal(
   };
 }
 
-async function runAutoAnalysis() {
-  const now = Date.now();
+let klineUpdateListener: ((symbol: string, kline: any) => void) | null = null;
 
-  if (autoRegimeDetect && now - lastRegimeDetectAt >= REGIME_DETECT_INTERVAL_MS) {
-    lastRegimeDetectAt = now;
-    const regimeResults = await Promise.allSettled(
-      SUPPORTED_PAIRS.map((pair) => detectRegimeForSymbol(pair.binance))
-    );
+async function runAnalysisForSymbol(binanceSymbol: string) {
+  const pair = SUPPORTED_PAIRS.find((p) => p.binance === binanceSymbol);
+  if (!pair) return;
 
-    regimeResults.forEach((result, i) => {
-      if (result.status === "fulfilled") {
-        const pair = SUPPORTED_PAIRS[i];
-        const prev = symbolStrategyMap.get(pair.binance);
-        const next = result.value.strategy;
-        latestRegimeCache.set(pair.binance, result.value);
-        symbolStrategyMap.set(pair.binance, next);
-
-        if (prev && prev !== next) {
-          console.log(`[regime] ${pair.binance}: ${prev} → ${next} (${result.value.regime})`);
-          signalEvents.emit("strategy-switch", {
-            symbol: pair.binance,
-            from: prev,
-            to: next,
-            regime: result.value.regime,
-            reason: result.value.reason,
-          });
-        } else if (!prev) {
-          console.log(`[regime] ${pair.binance}: initial strategy = ${next} (${result.value.regime})`);
-        }
-      }
-    });
-  }
-
-  const batchSignals: typeof signals.$inferSelect[] = [];
   try {
     const db = getDb();
 
-    for (const pair of SUPPORTED_PAIRS) {
-      const strategy = autoRegimeDetect
-        ? (symbolStrategyMap.get(pair.binance) ?? activeStrategyType)
-        : activeStrategyType;
-
-      const config = STRATEGY_CONFIGS[strategy];
-
-      const lastAt = symbolLastAnalyzedAt.get(pair.binance) ?? 0;
-      if (now - lastAt < config.signalIntervalMs) continue;
-      symbolLastAnalyzedAt.set(pair.binance, now);
-
+    // Run regime detection for this symbol if needed
+    if (autoRegimeDetect) {
       try {
-        const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = await getConfluenceInput(pair.binance);
-        const currentPrice = prices[prices.length - 1] || 0;
+        const regimeVal = await detectRegimeForSymbol(binanceSymbol);
+        latestRegimeCache.set(binanceSymbol, regimeVal);
+        const prev = symbolStrategyMap.get(binanceSymbol);
+        const next = regimeVal.strategy;
+        symbolStrategyMap.set(binanceSymbol, next);
 
-        let knnSnapshot: KnnSupertrendSnapshot | null = null;
-        if (prices.length >= 30 && highs.length >= 30 && lows.length >= 30) {
-          try {
-            knnSnapshot = computeKnnSupertrend(pair.binance, "1m", prices, highs, lows, volumes);
-          } catch (knnErr) {
-            console.warn(`[knn] compute failed for ${pair.binance}:`, knnErr);
-          }
+        if (prev && prev !== next) {
+          console.log(`[regime] ${binanceSymbol}: ${prev} → ${next} (${regimeVal.regime})`);
+          signalEvents.emit("strategy-switch", {
+            symbol: binanceSymbol,
+            from: prev,
+            to: next,
+            regime: regimeVal.regime,
+            reason: regimeVal.reason,
+          });
         }
-
-        const signalData = evaluateSymbolSignal(
-          pair.coindcx, strategy, currentPrice,
-          prices, volumes, highs, lows,
-          obMetrics, tapeMetrics, extraMetrics
-        );
-
-        if (knnSnapshot) {
-          signalData.metadata = {
-            ...(signalData.metadata as Record<string, unknown> ?? {}),
-            knn: {
-              bias: knnSnapshot.knn.bias,
-              confidence: knnSnapshot.knn.confidence,
-              agreement: knnSnapshot.knn.agreement,
-              neighbors: knnSnapshot.knn.neighbors,
-              stDirection: knnSnapshot.supertrend.direction,
-              stLevel: knnSnapshot.supertrend.level,
-              stFlip: knnSnapshot.supertrend.flip,
-              regime: knnSnapshot.regime,
-              entryAllowed: knnSnapshot.entryAllowed,
-              setupQuality: knnSnapshot.setupQuality,
-              rejectionSignal: knnSnapshot.rejection.signal,
-              rejectionType: knnSnapshot.rejection.type,
-              wickToBody: knnSnapshot.rejection.wickToBody,
-              volumeScore: knnSnapshot.rejection.volumeScore,
-              note: knnSnapshot.note,
-            },
-          };
-        }
-
-        const inserted = await db.insert(signals).values(signalData).returning().catch(() => []);
-        if (inserted[0]) {
-          batchSignals.push(inserted[0]);
-          if (knnSnapshot) signalEvents.emit("knn-snapshot", { symbol: pair.binance, snapshot: knnSnapshot });
-        }
-      } catch (err) {
-        console.error(`[signal-router] Analysis failed for ${pair.binance}:`, err);
+      } catch (regimeErr) {
+        console.warn(`[regime] detection failed for ${binanceSymbol}:`, regimeErr);
       }
     }
 
-    if (batchSignals.length > 0) {
-      signalEvents.emit("update");
-      globalAutoExecutor.onSignalBatch(batchSignals).catch((err) =>
-        console.error("[auto-executor] Batch error:", err)
-      );
+    const strategy = autoRegimeDetect
+      ? (symbolStrategyMap.get(binanceSymbol) ?? activeStrategyType)
+      : activeStrategyType;
+
+    const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = await getConfluenceInput(binanceSymbol);
+    const currentPrice = prices[prices.length - 1] || 0;
+
+    let knnSnapshot: KnnSupertrendSnapshot | null = null;
+    if (prices.length >= 30 && highs.length >= 30 && lows.length >= 30) {
+      try {
+        knnSnapshot = computeKnnSupertrend(binanceSymbol, "1m", prices, highs, lows, volumes);
+      } catch (knnErr) {
+        console.warn(`[knn] compute failed for ${binanceSymbol}:`, knnErr);
+      }
+    }
+
+    const signalData = evaluateSymbolSignal(
+      pair.coindcx, strategy, currentPrice,
+      prices, volumes, highs, lows,
+      obMetrics, tapeMetrics, extraMetrics
+    );
+
+    if (knnSnapshot) {
+      signalData.metadata = {
+        ...(signalData.metadata as Record<string, unknown> ?? {}),
+        knn: {
+          bias: knnSnapshot.knn.bias,
+          confidence: knnSnapshot.knn.confidence,
+          agreement: knnSnapshot.knn.agreement,
+          neighbors: knnSnapshot.knn.neighbors,
+          stDirection: knnSnapshot.supertrend.direction,
+          stLevel: knnSnapshot.supertrend.level,
+          stFlip: knnSnapshot.supertrend.flip,
+          regime: knnSnapshot.regime,
+          entryAllowed: knnSnapshot.entryAllowed,
+          setupQuality: knnSnapshot.setupQuality,
+          rejectionSignal: knnSnapshot.rejection.signal,
+          rejectionType: knnSnapshot.rejection.type,
+          wickToBody: knnSnapshot.rejection.wickToBody,
+          volumeScore: knnSnapshot.rejection.volumeScore,
+          note: knnSnapshot.note,
+        },
+      };
+    }
+
+    // Fetch previous signal for comparison
+    const lastSignal = await db
+      .select()
+      .from(signals)
+      .where(eq(signals.symbol, pair.coindcx))
+      .orderBy(desc(signals.createdAt))
+      .limit(1)
+      .catch(() => []);
+    const prev = lastSignal[0];
+
+    // Detect SMC Events on this 1m timeframe
+    const last1mCandles = await getCandlesForTimeframe(binanceSymbol, "1m");
+    const tfStructure = analyzeTimeframeStructure(last1mCandles, "1m");
+    const isBosOrChoch = tfStructure.bos || tfStructure.choch;
+
+    // Detect indicator alerts
+    const ema20Val = ema(prices, 20);
+    const ema50Val = ema(prices, 50);
+    const n = prices.length - 1;
+    const isEmaCross = n >= 1 && (
+      (ema20Val[n-1] <= ema50Val[n-1] && ema20Val[n] > ema50Val[n]) ||
+      (ema20Val[n-1] >= ema50Val[n-1] && ema20Val[n] < ema50Val[n])
+    );
+
+    const rsiVal = calculateRSI(prices, 14);
+    const prevRsiVal = n >= 1 ? calculateRSI(prices.slice(0, n), 14) : 50;
+    const isRsiExtreme = (rsiVal >= 70 && prevRsiVal < 70) || (rsiVal <= 30 && prevRsiVal > 30);
+
+    const isSTFlip = !!knnSnapshot?.supertrend.flip;
+    const isRejection = !!knnSnapshot?.rejection.signal;
+
+    // Detect transitions in signals
+    const isDirectionFlip = prev ? signalData.direction !== prev.direction : false;
+    const isGatedFlip = prev ? signalData.isGated !== prev.isGated : false;
+
+    // Determine if signal should be recorded and emitted
+    const shouldRecord =
+      !prev ||
+      isBosOrChoch ||
+      isSTFlip ||
+      isRejection ||
+      isEmaCross ||
+      isRsiExtreme ||
+      isDirectionFlip ||
+      isGatedFlip;
+
+    if (shouldRecord) {
+      const inserted = await db.insert(signals).values(signalData).returning().catch(() => []);
+      if (inserted[0]) {
+        signalEvents.emit("update");
+        if (knnSnapshot) {
+          signalEvents.emit("knn-snapshot", { symbol: binanceSymbol, snapshot: knnSnapshot });
+        }
+        globalAutoExecutor.onSignalBatch(inserted).catch((err) =>
+          console.error("[auto-executor] Batch error:", err)
+        );
+      }
+    } else {
+      console.log(`[signal-router] Skipping duplicate signal update for ${binanceSymbol} (no active SMC, indicator alerts, or bias transitions).`);
     }
   } catch (err) {
-    console.error("[signal-router] Loop error:", err);
+    console.error(`[signal-router] Analysis failed for ${binanceSymbol}:`, err);
   }
-
-  autoAnalysisTimer = setTimeout(runAutoAnalysis, MIN_LOOP_MS);
 }
 
 async function bootstrapHistoricalKlines() {
@@ -1352,12 +1382,6 @@ async function bootstrapHistoricalKlines() {
 export function startAutoAnalysis(strategyType: StrategyType = "intraday", autoSwitch?: boolean) {
   if (autoSwitch !== undefined) autoRegimeDetect = autoSwitch;
 
-  if (autoAnalysisTimer) {
-    if (activeStrategyType === strategyType && autoSwitch === undefined) return;
-    clearTimeout(autoAnalysisTimer);
-    autoAnalysisTimer = null;
-  }
-
   activeStrategyType = strategyType;
 
   bootstrapHistoricalKlines().catch((err) => {
@@ -1369,8 +1393,20 @@ export function startAutoAnalysis(strategyType: StrategyType = "intraday", autoS
   }
 
   const mode = autoRegimeDetect ? "per-symbol-regime" : "fixed";
-  console.log(`[signal-router] Starting auto-analysis mode=${mode} fallback=${strategyType} loop=${MIN_LOOP_MS}ms`);
-  runAutoAnalysis();
+  console.log(`[signal-router] Starting event-driven auto-analysis mode=${mode} fallback=${strategyType}`);
+
+  if (klineUpdateListener) {
+    marketEvents.off("kline-update", klineUpdateListener);
+  }
+
+  klineUpdateListener = async (symbol: string, kline: any) => {
+    if (kline.isClosed) {
+      console.log(`[signal-router] 1m Candle closed for ${symbol}. Running confluence/SMC analysis.`);
+      await runAnalysisForSymbol(symbol);
+    }
+  };
+
+  marketEvents.on("kline-update", klineUpdateListener);
 }
 
 export const signalRouter = createRouter({
