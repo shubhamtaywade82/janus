@@ -214,8 +214,9 @@ export async function getPositionRecommendation(
     try {
       const { callPositionManagementLlm } = await import("./llm-client");
       const prompt = buildPositionPrompt(position, ctx, bias, portfolio);
+      // paper → local Ollama;  live → Ollama.com cloud (3-key rotation)
       const aiResult = await Promise.race([
-        callPositionManagementLlm(prompt),
+        callPositionManagementLlm(prompt, position.isPaper),
         new Promise<null>((_, reject) =>
           setTimeout(() => reject(new Error("LLM timeout")), aiTimeoutMs)
         ),

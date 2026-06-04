@@ -4,6 +4,7 @@ import { createRouter, publicQuery } from "../middleware";
 import { positionLifecycleManager, positionStore } from "../services/position-manager/index";
 import { DEFAULT_POSITION_MANAGER_CONFIG } from "../services/position-manager/types";
 import { positionManagerBus } from "../services/position-manager/event-bus";
+import { getLlmKeyHealth } from "../services/position-manager/llm-client";
 import { getDb } from "../queries/connection";
 import { aiAssessments } from "@db/position-manager-schema";
 import { eq, desc, gte, and } from "drizzle-orm";
@@ -131,6 +132,10 @@ export const positionManagerRouter = createRouter({
       positionLifecycleManager.updateConfig(input);
       return { success: true };
     }),
+
+  // ── LLM key health ───────────────────────────────────────────────────────
+  // Shows paper (local Ollama) and live (Ollama.com cloud) key status.
+  llmHealth: publicQuery.query(() => getLlmKeyHealth()),
 
   // ── Live event stream ────────────────────────────────────────────────────
   assessmentStream: publicQuery.subscription(() => {
