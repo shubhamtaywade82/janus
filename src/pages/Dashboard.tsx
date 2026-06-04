@@ -57,12 +57,14 @@ const resolveCSSColor = (varName: string, fallback: string): string => {
 };
 
 // ─── TradingView Lightweight Chart Component ───
-const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg }: {
+const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice }: {
   data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string;
   onLoadMore?: (beforeTime: number) => void;
   overlayData?: PriceActionData | null;
   overlayToggles?: OverlayToggles;
   indicatorCfg?: IndicatorConfig | null;
+  bidPrice?: number;
+  askPrice?: number;
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
@@ -72,6 +74,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
 
   const [alertRules, setAlertRules] = useState<any[]>([]);
   const customAlertLinesRef = useRef<any[]>([]);
+  const bidAskLinesRef = useRef<{ bidLine: any; askLine: any }>({ bidLine: null, askLine: null });
   const [hoveredCrosshair, setHoveredCrosshair] = useState<{ price: number; y: number } | null>(null);
 
   const handleContainerMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -1494,6 +1497,64 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     customAlertLinesRef.current = newAlertLines;
   }, [alertRules, symbol, chartInitialized]);
 
+  // Draw bid and ask price lines
+  useEffect(() => {
+    const series = candlestickSeriesRef.current;
+    if (!series || !chartInitialized) return;
+
+    if (bidAskLinesRef.current.bidLine) {
+      try { series.removePriceLine(bidAskLinesRef.current.bidLine); } catch {}
+      bidAskLinesRef.current.bidLine = null;
+    }
+    if (bidAskLinesRef.current.askLine) {
+      try { series.removePriceLine(bidAskLinesRef.current.askLine); } catch {}
+      bidAskLinesRef.current.askLine = null;
+    }
+
+    if (bidPrice && bidPrice > 0) {
+      try {
+        bidAskLinesRef.current.bidLine = series.createPriceLine({
+          price: bidPrice,
+          color: "rgba(16, 185, 129, 0.65)",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "BID",
+        });
+      } catch (err) {
+        console.error("Error creating bid line", err);
+      }
+    }
+
+    if (askPrice && askPrice > 0) {
+      try {
+        bidAskLinesRef.current.askLine = series.createPriceLine({
+          price: askPrice,
+          color: "rgba(239, 68, 68, 0.65)",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "ASK",
+        });
+      } catch (err) {
+        console.error("Error creating ask line", err);
+      }
+    }
+
+    return () => {
+      const s = candlestickSeriesRef.current;
+      if (!s) return;
+      if (bidAskLinesRef.current.bidLine) {
+        try { s.removePriceLine(bidAskLinesRef.current.bidLine); } catch {}
+        bidAskLinesRef.current.bidLine = null;
+      }
+      if (bidAskLinesRef.current.askLine) {
+        try { s.removePriceLine(bidAskLinesRef.current.askLine); } catch {}
+        bidAskLinesRef.current.askLine = null;
+      }
+    };
+  }, [bidPrice, askPrice, chartInitialized]);
+
 
 
   // Recalculate vertical coordinates of active positions on the canvas
@@ -2458,6 +2519,13 @@ const Dashboard = () => {
 
   const [klines, setKlines] = useState<KlineData[]>([]);
   const [ticker, setTicker] = useState<any>(null);
+  const [bestBid, setBestBid] = useState<number | null>(null);
+  const [bestAsk, setBestAsk] = useState<number | null>(null);
+
+  useEffect(() => {
+    setBestBid(null);
+    setBestAsk(null);
+  }, [selectedSymbol]);
 
   // Track which symbol+interval the current klines state belongs to
   const klineKeyRef = useRef(`${selectedSymbol}:${interval}`);
@@ -2588,6 +2656,27 @@ const Dashboard = () => {
   trpc.market.tickerStream.useSubscription(
     { symbol: selectedSymbol },
     tickerStreamOpts.current
+  );
+
+  const depthCallbackRef = useRef<(data: any) => void>(() => {});
+  useEffect(() => {
+    depthCallbackRef.current = (data: any) => {
+      if (data.bids && data.bids.length > 0) {
+        setBestBid(parseFloat(data.bids[0][0]));
+      }
+      if (data.asks && data.asks.length > 0) {
+        setBestAsk(parseFloat(data.asks[0][0]));
+      }
+    };
+  }, []);
+
+  const depthStreamOpts = useRef({
+    onData: (data: any) => depthCallbackRef.current(data),
+  });
+
+  trpc.market.orderBookStream.useSubscription(
+    { symbol: selectedSymbol },
+    depthStreamOpts.current
   );
 
   // Fetch portfolio for open positions
@@ -2813,6 +2902,8 @@ const Dashboard = () => {
                 overlayData={paData ?? null}
                 overlayToggles={overlayToggles}
                 indicatorCfg={indicatorCfg}
+                bidPrice={bestBid ?? undefined}
+                askPrice={bestAsk ?? undefined}
               />
             ) : initialKlines === null || initialKlines === undefined ? (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
