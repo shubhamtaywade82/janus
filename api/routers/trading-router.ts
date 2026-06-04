@@ -1034,28 +1034,36 @@ export const tradingRouter = createRouter({
 
         tradingEvents.on(`exit-signal:${input.userId}`, onExitSignal);
 
-        // Start monitoring open positions for this user
-        const db = getDb();
-        db.select()
-          .from(positions)
-          .where(and(eq(positions.userId, input.userId), eq(positions.status, "open")))
-          .then((openPositions) => {
-            const monitored = openPositions.map((p) => ({
-              id: p.id,
-              symbol: p.symbol,
-              side: p.side,
-              entryPrice: parseFloat(p.entryPrice),
-              size: parseFloat(p.size),
-              strategyType: (p.strategyType ?? "intraday") as any,
-              stopLoss: p.stopLoss ? parseFloat(p.stopLoss) : null,
-              takeProfit: p.takeProfit ? parseFloat(p.takeProfit) : null,
-            }));
-            startExitMonitor(input.userId, monitored);
-          })
-          .catch(() => {});
+        const refreshMonitor = () => {
+          const db = getDb();
+          db.select()
+            .from(positions)
+            .where(and(eq(positions.userId, input.userId), eq(positions.status, "open")))
+            .then((openPositions) => {
+              const monitored = openPositions.map((p) => ({
+                id: p.id,
+                symbol: p.symbol,
+                side: p.side,
+                entryPrice: parseFloat(p.entryPrice),
+                size: parseFloat(p.size),
+                strategyType: (p.strategyType ?? "intraday") as any,
+                stopLoss: p.stopLoss ? parseFloat(p.stopLoss) : null,
+                takeProfit: p.takeProfit ? parseFloat(p.takeProfit) : null,
+              }));
+              startExitMonitor(input.userId, monitored);
+            })
+            .catch(() => {});
+        };
+
+        // Start initial monitoring
+        refreshMonitor();
+
+        // Refresh monitoring when positions open or close
+        tradingEvents.on(`portfolio-update:${input.userId}`, refreshMonitor);
 
         return () => {
           tradingEvents.off(`exit-signal:${input.userId}`, onExitSignal);
+          tradingEvents.off(`portfolio-update:${input.userId}`, refreshMonitor);
           stopExitMonitor(input.userId);
         };
       });
