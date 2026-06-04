@@ -97,7 +97,10 @@ export async function executeAction(
         const exitPct = recommendation.exitSizePct ?? 0.5;
         const exitQty = position.quantity * exitPct;
 
-        if (!position.isPaper && env.placeOrders) {
+        if (!position.isPaper) {
+          if (!env.placeOrders) {
+            return { success: false, detail: "PARTIAL_EXIT skipped: PLACE_ORDERS=false" };
+          }
           try {
             const creds = await fetchCredentials(userId);
             const coindcxSide = position.side === "LONG" ? "sell" : "buy";
@@ -116,7 +119,7 @@ export async function executeAction(
           }
         }
 
-        // Update position size in DB
+        // Update position size in DB (paper: always; live: only after successful exchange order)
         const newQty = position.quantity - exitQty;
         const newMargin = position.margin * (newQty / position.quantity);
         await db
@@ -135,7 +138,10 @@ export async function executeAction(
 
       // ── Full exit ───────────────────────────────────────────────────────
       case PA.FULL_EXIT: {
-        if (!position.isPaper && env.placeOrders) {
+        if (!position.isPaper) {
+          if (!env.placeOrders) {
+            return { success: false, detail: "FULL_EXIT skipped: PLACE_ORDERS=false" };
+          }
           try {
             const creds = await fetchCredentials(userId);
             const coindcxSide = position.side === "LONG" ? "sell" : "buy";
@@ -154,6 +160,7 @@ export async function executeAction(
           }
         }
 
+        // Close in DB (paper: always; live: only after successful exchange order above)
         await db
           .update(positions)
           .set({

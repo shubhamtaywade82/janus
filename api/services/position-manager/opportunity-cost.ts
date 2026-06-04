@@ -1,7 +1,7 @@
 import type { ManagedPosition, OpportunityCostResult } from "./types";
 import { getDb } from "../../queries/connection";
 import { signals } from "@db/schema";
-import { desc, gte, ne } from "drizzle-orm";
+import { desc, gte } from "drizzle-orm";
 
 // ─── Opportunity Cost Evaluator ──────────────────────────────────────────────
 // Runs every 10 minutes and asks: "Is this the BEST use of my capital?"

@@ -84,6 +84,10 @@ export class PositionLifecycleManager {
     this.config = { ...this.config, ...partial };
   }
 
+  getConfig(): PositionManagerConfig {
+    return { ...this.config };
+  }
+
   getAssessmentHistory(): AssessmentRecord[] {
     return this.assessmentHistory.slice(-50);
   }
@@ -307,7 +311,7 @@ export class PositionLifecycleManager {
       recommendation,
       policyResult: policy,
       opportunityCost: null,
-      actionTaken: policy.approved ? policy.action : recommendation.action,
+      actionTaken: policy.approved ? policy.action : PA.KEEP_OPEN,
       assessedAt: new Date(),
     };
 
@@ -355,12 +359,13 @@ export class PositionLifecycleManager {
 
         // If verdict is EXIT and we have high confidence, add it to recommendations
         if (oppCost.verdict === "EXIT" && this.config.autoApplyActions) {
+          const exitCtx = await buildMarketContext(position.binanceSymbol);
           const record: AssessmentRecord = {
             positionId: position.id,
             symbol: position.symbol,
             lifecycleState: positionStore.get(position.id)?.lifecycleState ?? "MANAGED",
-            marketContext: await buildMarketContext(position.binanceSymbol),
-            bias: evaluateBias(await buildMarketContext(position.binanceSymbol), position),
+            marketContext: exitCtx,
+            bias: evaluateBias(exitCtx, position),
             recommendation: {
               action: PA.FULL_EXIT,
               confidence: 0.70,

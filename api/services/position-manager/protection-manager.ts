@@ -3,7 +3,6 @@ import { calculateStopLoss } from "./sl-calculator";
 import { calculateTakeProfit } from "./tp-calculator";
 import { positionStore } from "./position-store";
 import { positionManagerBus } from "./event-bus";
-import { coindcxApi } from "../coindcx";
 import { getDb } from "../../queries/connection";
 import { positions } from "@db/schema";
 import { eq } from "drizzle-orm";

@@ -2,7 +2,6 @@ import { z } from "zod";
 import { TRPCError } from "@trpc/server";
 import { createRouter, publicQuery } from "../middleware";
 import { positionLifecycleManager, positionStore } from "../services/position-manager/index";
-import { DEFAULT_POSITION_MANAGER_CONFIG } from "../services/position-manager/types";
 import { positionManagerBus } from "../services/position-manager/event-bus";
 import { getLlmKeyHealth } from "../services/position-manager/llm-client";
 import { getDb } from "../queries/connection";
@@ -109,7 +108,7 @@ export const positionManagerRouter = createRouter({
 
   // ── Get/update config ────────────────────────────────────────────────────
   getConfig: publicQuery.query(() => {
-    return DEFAULT_POSITION_MANAGER_CONFIG;
+    return positionLifecycleManager.getConfig();
   }),
 
   updateConfig: publicQuery

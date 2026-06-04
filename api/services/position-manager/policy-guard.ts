@@ -5,7 +5,6 @@ import type {
 } from "./types";
 import { PositionAction as PA } from "./types";
 import { positionStore } from "./position-store";
-import { globalRiskEngine } from "../risk-engine";
 
 // ─── Policy Guard ────────────────────────────────────────────────────────────
 // Validates AI / code-based recommendations against hard risk rules.
@@ -55,31 +54,22 @@ export function policyGuard(
       };
     }
 
-    // Check risk engine
-    const riskCheck = globalRiskEngine.checkTradeAllowed(position.userId, 0, 0, 0);
-    if (!riskCheck.allowed) {
-      return {
-        approved: false,
-        action: PA.KEEP_OPEN,
-        reason: `SCALE_IN rejected by risk engine: ${riskCheck.reason}`,
-      };
-    }
   }
 
   // ── FULL_EXIT / PARTIAL_EXIT: require minimum confidence ──────────────
   if (action === PA.FULL_EXIT && confidence < 0.60) {
     return {
-      approved: false,
+      approved: true,
       action: PA.TIGHTEN_TP,
-      reason: `FULL_EXIT downgraded: confidence ${(confidence * 100).toFixed(0)}% < 60% threshold`,
+      reason: `FULL_EXIT downgraded to TIGHTEN_TP: confidence ${(confidence * 100).toFixed(0)}% < 60% threshold`,
     };
   }
 
   if (action === PA.PARTIAL_EXIT && confidence < 0.45) {
     return {
       approved: false,
-      action: PA.TRAIL_SL,
-      reason: `PARTIAL_EXIT downgraded to TRAIL_SL: insufficient confidence (${(confidence * 100).toFixed(0)}%)`,
+      action: PA.KEEP_OPEN,
+      reason: `PARTIAL_EXIT rejected: confidence ${(confidence * 100).toFixed(0)}% < 45% threshold`,
     };
   }
 
