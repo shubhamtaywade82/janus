@@ -52,6 +52,7 @@ export const users = pgTable("users", {
   lastSignInAt: timestamp("lastSignInAt").defaultNow().notNull(),
   telegramBotToken: varchar("telegram_bot_token", { length: 255 }),
   telegramChatId: varchar("telegram_chat_id", { length: 50 }),
+  telegramLiquidityAlertsEnabled: boolean("telegram_liquidity_alerts_enabled").default(true).notNull(),
 });
 
 export type User = typeof users.$inferSelect;

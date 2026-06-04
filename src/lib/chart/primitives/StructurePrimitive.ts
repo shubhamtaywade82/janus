@@ -8,10 +8,12 @@ export class StructurePrimitive implements ISeriesPrimitive<Time> {
   private _param: SeriesAttachedParameter<Time> | null = null;
   private _structure: StructureBreak[] = [];
   private _liquidity: LiquidityLevel[] = [];
+  private _swings: any[] = [];
 
-  setData(structure: StructureBreak[], liquidity: LiquidityLevel[]) {
+  setData(structure: StructureBreak[], liquidity: LiquidityLevel[], swings: any[] = []) {
     this._structure = structure;
     this._liquidity = liquidity;
+    this._swings = swings;
     this._param?.requestUpdate();
   }
 
@@ -87,6 +89,29 @@ export class StructurePrimitive implements ISeriesPrimitive<Time> {
                 ctx.fillText(label, Math.round(x2 * hpr) + 3, Math.round(y * vpr) - 2);
                 ctx.textAlign = "left";
               }
+
+              // ─── Swings (LL, LH, HH, HL) ───
+              for (const swing of self._swings) {
+                if (!swing.label) continue;
+                const x = toX(swing.time);
+                const y = toY(swing.price);
+                if (x === null || y === null) continue;
+
+                ctx.fillStyle = "#a1a1aa";
+                ctx.font = `bold ${Math.max(10, Math.round(10 * Math.min(hpr, vpr)))}px sans-serif`;
+                ctx.textAlign = "center";
+                
+                // Position text above HH/LH, below LL/HL
+                if (swing.type === "high") {
+                  ctx.textBaseline = "bottom";
+                  ctx.fillText(swing.label, Math.round(x * hpr), Math.round(y * vpr) - 5 * vpr);
+                } else {
+                  ctx.textBaseline = "top";
+                  ctx.fillText(swing.label, Math.round(x * hpr), Math.round(y * vpr) + 5 * vpr);
+                }
+                ctx.textAlign = "left"; // reset
+              }
+
               ctx.restore();
             });
             } catch { /* never crash the chart render loop */ }

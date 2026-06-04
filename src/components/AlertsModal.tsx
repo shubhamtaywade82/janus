@@ -85,6 +85,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
   // Telegram settings state
   const [botToken, setBotToken] = useState("");
   const [chatId, setChatId] = useState("");
+  const [telegramLiquidityAlertsEnabled, setTelegramLiquidityAlertsEnabled] = useState(true);
   const [isSavingTelegram, setIsSavingTelegram] = useState(false);
   const [isTestingTelegram, setIsTestingTelegram] = useState(false);
 
@@ -102,6 +103,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
     if (telegramSettings) {
       setBotToken(telegramSettings.telegramBotToken || "");
       setChatId(telegramSettings.telegramChatId || "");
+      setTelegramLiquidityAlertsEnabled(telegramSettings.telegramLiquidityAlertsEnabled ?? true);
     }
   }, [telegramSettings]);
 
@@ -135,6 +137,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
       await saveTelegramSettings.mutateAsync({
         telegramBotToken: botToken.trim() || null,
         telegramChatId: chatId.trim() || null,
+        telegramLiquidityAlertsEnabled,
       });
       toast.success("Telegram settings saved successfully!");
       refetchTelegram();
@@ -498,6 +501,24 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                 <span className="text-[8px] text-[#71717a] mt-1 block">
                   Enter your User ID for private DMs or a negative Group/Channel ID (e.g. <code>-100...</code>).
                 </span>
+              </div>
+
+              <div className="flex items-center gap-2.5 bg-[#18181b]/50 border border-[#27272a] rounded p-2.5 mt-1 select-none">
+                <input
+                  id="telegramLiquidityAlertsEnabled"
+                  type="checkbox"
+                  checked={telegramLiquidityAlertsEnabled}
+                  onChange={(e) => setTelegramLiquidityAlertsEnabled(e.target.checked)}
+                  className="w-3.5 h-3.5 rounded border-[#27272a] bg-[#18181b] text-[#f59e0b] focus:ring-0 focus:ring-offset-0 cursor-pointer accent-[#f59e0b]"
+                />
+                <div className="flex flex-col">
+                  <label htmlFor="telegramLiquidityAlertsEnabled" className="text-[10px] font-bold text-[#f4f4f5] cursor-pointer">
+                    Enable Liquidity Alerts to Telegram
+                  </label>
+                  <span className="text-[8px] text-[#71717a]">
+                    Send high-priority liquidity alerts (sweeps, squeezes, cascades) to Telegram.
+                  </span>
+                </div>
               </div>
 
               <div className="flex gap-2 mt-2">

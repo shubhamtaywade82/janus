@@ -90,12 +90,20 @@ export async function broadcastTelegramAlert(text: string): Promise<boolean> {
   try {
     const db = getDb();
     const user = await db
-      .select({ telegramBotToken: users.telegramBotToken, telegramChatId: users.telegramChatId })
+      .select({ 
+        telegramBotToken: users.telegramBotToken, 
+        telegramChatId: users.telegramChatId,
+        telegramLiquidityAlertsEnabled: users.telegramLiquidityAlertsEnabled
+      })
       .from(users)
       .limit(1);
 
     if (!user || user.length === 0) return false;
     const settings = user[0];
+    if (!settings.telegramLiquidityAlertsEnabled) {
+      console.log("[telegram] Broadcast of liquidity alert skipped (disabled in user settings)");
+      return false;
+    }
     if (!settings.telegramBotToken || !settings.telegramChatId) return false;
 
     return sendTelegramMessage({
