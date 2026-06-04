@@ -3126,6 +3126,14 @@ const Dashboard = () => {
                       </span>
                     </div>
                     <div className="flex justify-between text-[10px] mb-1">
+                      <span className="text-[#71717a]">Est. Liquidation</span>
+                      <span className="text-[#f59e0b] tabular-nums">
+                        {lastPrice > 0 && leverage > 0 && size > 0
+                          ? `$${(side === "buy" ? lastPrice * (1 - 1 / leverage) : lastPrice * (1 + 1 / leverage)).toFixed(2)}`
+                          : "--"}
+                      </span>
+                    </div>
+                    <div className="flex justify-between text-[10px] mb-1">
                       <span className="text-[#71717a]">Min move to profit</span>
                       <span className="text-[#a855f7] tabular-nums font-medium">
                         {strategyType === "scalping" ? "≥0.10%" : strategyType === "intraday" ? "≥0.10%" : "≥0.10%"}
