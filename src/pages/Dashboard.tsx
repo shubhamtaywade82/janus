@@ -179,29 +179,81 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const ttmSqHistRef = useRef<any>(null);
   // Dedicated indicator signal markers plugin (separate from SMC markers)
   const indicatorMarkersRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
+  // ─── Price line overlay (smooth thin line tracking close price) ───
+  const priceLineSeriesRef = useRef<any>(null);
+  // ─── Volume MA line overlay ───
+  const volumeMASeriesRef = useRef<any>(null);
+  // Volume history buffer for computing running MA during animation
+  const volumeHistoryRef = useRef<{ time: number; value: number }[]>([]);
 
   // ─── Tick animation: persistent lerp loop chasing target ───
   const animFrameRef = useRef<number | null>(null);
   const animTarget = useRef({ time: 0, open: 0, high: 0, low: 0, close: 0, vol: 0 });
-  const animCurrent = useRef({ close: 0 });
+  const animCurrent = useRef({ close: 0, vol: 0 });
   const animLoopRunning = useRef(false);
+  const animSeeded = useRef(false); // track if we've seeded initial values
+  const VOLUME_MA_PERIOD = 20; // 20-period volume MA
 
   const startAnimLoop = useCallback(() => {
     if (animLoopRunning.current) return;
     animLoopRunning.current = true;
-    const LERP = 0.09; // per-frame factor (~60fps → smooth ~250ms settle)
+    const LERP = 0.18; // per-frame factor (~60fps → snappy ~100ms settle)
+    const VOL_LERP = 0.22; // slightly faster for volume
+    let idleFrames = 0; // keep loop alive briefly after settling
+    const MAX_IDLE = 10; // ~160ms of idle frames before stopping
     const loop = () => {
       if (!candlestickSeriesRef.current) { animLoopRunning.current = false; return; }
       const t = animTarget.current;
-      const diff = t.close - animCurrent.current.close;
-      if (Math.abs(diff) < 0.0005) {
+      const closeDiff = t.close - animCurrent.current.close;
+      const volDiff = t.vol - animCurrent.current.vol;
+      const closeSettled = Math.abs(closeDiff) < 0.00001;
+      const volSettled = Math.abs(volDiff) < 0.001;
+
+      if (closeSettled && volSettled) {
+        // Snap to exact target
         animCurrent.current.close = t.close;
-        animLoopRunning.current = false;
+        animCurrent.current.vol = t.vol;
+
+        // Keep the loop alive briefly so the next tick can skip startup latency
+        idleFrames++;
+        if (idleFrames >= MAX_IDLE) {
+          animLoopRunning.current = false;
+          return;
+        }
+
+        // Still do a final render
         candlestickSeriesRef.current.update({ time: t.time as UTCTimestamp, open: t.open, high: t.high, low: t.low, close: t.close });
+        if (volumeSeriesRef.current) {
+          volumeSeriesRef.current.update({ time: t.time as UTCTimestamp, value: t.vol, color: t.close >= t.open ? "rgba(14,203,129,0.15)" : "rgba(246,70,93,0.15)" });
+        }
+        if (priceLineSeriesRef.current) {
+          priceLineSeriesRef.current.update({ time: t.time as UTCTimestamp, value: t.close });
+        }
+        if (volumeMASeriesRef.current) {
+          const hist = volumeHistoryRef.current;
+          if (hist.length > 0) {
+            hist[hist.length - 1].value = t.vol;
+            const slice = hist.slice(-VOLUME_MA_PERIOD);
+            const ma = slice.reduce((s, v) => s + v.value, 0) / slice.length;
+            volumeMASeriesRef.current.update({ time: t.time as UTCTimestamp, value: ma });
+          }
+        }
+        animFrameRef.current = requestAnimationFrame(loop);
         return;
       }
-      animCurrent.current.close += diff * LERP;
+
+      // We have movement — reset idle counter
+      idleFrames = 0;
+
+      // Lerp close price
+      if (!closeSettled) animCurrent.current.close += closeDiff * LERP;
+      // Lerp volume
+      if (!volSettled) animCurrent.current.vol += volDiff * VOL_LERP;
+
       const c = animCurrent.current.close;
+      const v = animCurrent.current.vol;
+
+      // Animated candle update
       candlestickSeriesRef.current.update({
         time: t.time as UTCTimestamp,
         open: t.open,
@@ -209,6 +261,32 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         low: Math.min(t.low, c),
         close: c,
       });
+
+      // Animated volume bar update
+      if (volumeSeriesRef.current) {
+        volumeSeriesRef.current.update({
+          time: t.time as UTCTimestamp,
+          value: v,
+          color: c >= t.open ? "rgba(14,203,129,0.15)" : "rgba(246,70,93,0.15)",
+        });
+      }
+
+      // Animated price line overlay update
+      if (priceLineSeriesRef.current) {
+        priceLineSeriesRef.current.update({ time: t.time as UTCTimestamp, value: c });
+      }
+
+      // Animated volume MA line update
+      if (volumeMASeriesRef.current) {
+        const hist = volumeHistoryRef.current;
+        if (hist.length > 0) {
+          hist[hist.length - 1].value = v;
+          const slice = hist.slice(-VOLUME_MA_PERIOD);
+          const ma = slice.reduce((s, val) => s + val.value, 0) / slice.length;
+          volumeMASeriesRef.current.update({ time: t.time as UTCTimestamp, value: ma });
+        }
+      }
+
       animFrameRef.current = requestAnimationFrame(loop);
     };
     animFrameRef.current = requestAnimationFrame(loop);
@@ -287,6 +365,20 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         bottom: 0,
       },
     });
+
+    // ─── Price line overlay: removed (close-to-close yellow line) ───
+    priceLineSeriesRef.current = null;
+
+    // ─── Volume MA line overlay ───
+    const volumeMASeries = chart.addSeries(LineSeries, {
+      color: "rgba(139, 92, 246, 0.6)", // soft purple
+      lineWidth: 1,
+      priceScaleId: "", // same pane as volume histogram
+      lastValueVisible: false,
+      priceLineVisible: false,
+      crosshairMarkerVisible: false,
+    });
+    volumeMASeriesRef.current = volumeMASeries;
 
     // Sync HUD with crosshair movement
     chart.subscribeCrosshairMove((param) => {
@@ -372,6 +464,9 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       strPrimRef.current = null;
       markersPluginRef.current = null;
       obvSeriesRef.current = null;
+      priceLineSeriesRef.current = null;
+      volumeMASeriesRef.current = null;
+      volumeHistoryRef.current = [];
       indicatorSeriesRef.current.clear();
       setChartInitialized(false);
     };
@@ -404,6 +499,9 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   }, [chartInitialized]);
 
   // 1c. Update price scale precision based on selected symbol
+  // NOTE: We set precision for the price axis label display but use a very
+  // small minMove so that the lerp animation loop can produce smooth
+  // intermediate frames without the chart library quantizing them away.
   useEffect(() => {
     if (!candlestickSeriesRef.current) return;
     const dec = getPriceDecimals(symbol);
@@ -411,7 +509,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       priceFormat: {
         type: "price",
         precision: dec,
-        minMove: parseFloat(Math.pow(10, -dec).toFixed(dec)),
+        minMove: 0.0001, // keep small for smooth lerp animation frames
       },
     });
   }, [symbol, chartInitialized]);
@@ -437,19 +535,28 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const vol = parseFloat(last.volume);
 
       // If this is the first tick, seed current position so there's no jump
-      if (animCurrent.current.close === 0) animCurrent.current.close = targetClose;
+      if (!animSeeded.current) {
+        animCurrent.current.close = targetClose;
+        animCurrent.current.vol = vol;
+        animSeeded.current = true;
+      }
 
-      // Update target — the lerp loop will smoothly chase it
+      // Update target — the lerp loop will smoothly chase both price AND volume
       animTarget.current = { time: lastTime, open: o, high: h, low: l, close: targetClose, vol };
 
-      // Volume update is immediate
-      volumeSeriesRef.current.update({
-        time: lastTime as UTCTimestamp,
-        value: vol,
-        color: targetClose >= o ? "rgba(14,203,129,0.15)" : "rgba(246,70,93,0.15)",
-      });
+      // Update volume history buffer for MA calculation
+      const hist = volumeHistoryRef.current;
+      if (isNewCandle) {
+        // New candle: push new entry
+        hist.push({ time: lastTime, value: vol });
+        // Keep buffer bounded
+        if (hist.length > VOLUME_MA_PERIOD + 5) hist.splice(0, hist.length - VOLUME_MA_PERIOD - 5);
+      } else if (hist.length > 0) {
+        // Update existing last entry
+        hist[hist.length - 1] = { time: lastTime, value: vol };
+      }
 
-      // Kick off the lerp loop (no-op if already running)
+      // Kick off the lerp loop (no-op if already running) — handles candle, volume bar, price line, volume MA
       startAnimLoop();
     } else {
       // Full reload — symbol/interval change or initial load
@@ -472,6 +579,28 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       candlestickSeriesRef.current.setData(chartData);
       volumeSeriesRef.current.setData(volumeData);
 
+      // Price line overlay: set close prices
+      if (priceLineSeriesRef.current) {
+        const priceLineData = chartData.map((d) => ({ time: d.time, value: d.close }));
+        priceLineSeriesRef.current.setData(priceLineData);
+      }
+
+      // Volume MA line: compute rolling MA over volume data
+      if (volumeMASeriesRef.current) {
+        const volValues = volumeData.map((d) => ({ time: d.time, value: d.value }));
+        const volumeMAData: { time: UTCTimestamp; value: number }[] = [];
+        for (let i = 0; i < volValues.length; i++) {
+          const start = Math.max(0, i - VOLUME_MA_PERIOD + 1);
+          const window = volValues.slice(start, i + 1);
+          const ma = window.reduce((s, v) => s + v.value, 0) / window.length;
+          volumeMAData.push({ time: volValues[i].time, value: ma });
+        }
+        volumeMASeriesRef.current.setData(volumeMAData);
+      }
+
+      // Seed volume history buffer for live MA computation
+      volumeHistoryRef.current = volumeData.map((d) => ({ time: d.time as number, value: d.value }));
+
       const isSymbolOrIntervalChange = prevSymbolRef.current !== symbol || prevIntervalRef.current !== interval;
       if (chartRef.current && isSymbolOrIntervalChange) {
         chartRef.current.timeScale().fitContent();
@@ -479,6 +608,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       }
       // Reset animation state on full reload
       animCurrent.current.close = 0;
+      animCurrent.current.vol = 0;
+      animSeeded.current = false;
       animLoopRunning.current = false;
       if (animFrameRef.current) { cancelAnimationFrame(animFrameRef.current); animFrameRef.current = null; }
     }
@@ -517,7 +648,11 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     const l = Math.min(parseFloat(last.low), targetClose);
     const vol = parseFloat(last.volume);
 
-    if (animCurrent.current.close === 0) animCurrent.current.close = targetClose;
+    if (!animSeeded.current) {
+      animCurrent.current.close = targetClose;
+      animCurrent.current.vol = vol;
+      animSeeded.current = true;
+    }
 
     animTarget.current = { time: lastTime, open: o, high: h, low: l, close: targetClose, vol };
     startAnimLoop();
@@ -1199,7 +1334,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       }
     }
 
-  }, [indicatorCfg, data, interval]);
+  // Throttle: only rerun heavy indicator calculations when candle count changes
+  // (new candle) or when config/interval changes — NOT on every intra-candle tick.
+  // The tick-level animation (lerp loop) runs independently via requestAnimationFrame.
+  }, [indicatorCfg, data.length, interval]);
 
   // Draw custom position lines (entry price and liquidation price) with empty titles
   // so the HTML overlay can render custom left/right aligned labels on top.
