@@ -12,6 +12,7 @@ export interface OverlayToggles {
   premiumDiscount: boolean;
   obv:          boolean;
   sessions:     boolean;
+  crosshairTooltip: boolean;
 }
 
 const DEFAULTS: OverlayToggles = {
@@ -24,6 +25,7 @@ const DEFAULTS: OverlayToggles = {
   premiumDiscount: false,
   obv:             false,
   sessions:        true,
+  crosshairTooltip: true,
 };
 
 const LAYERS: { key: keyof OverlayToggles; label: string; color: string; shortLabel: string }[] = [
@@ -36,6 +38,7 @@ const LAYERS: { key: keyof OverlayToggles; label: string; color: string; shortLa
   { key: "premiumDiscount", label: "Prem / Disc",      shortLabel: "P/D",  color: "#52525b" },
   { key: "obv",             label: "OBV",              shortLabel: "OBV",  color: "#06b6d4" },
   { key: "sessions",        label: "Sessions",         shortLabel: "SES",  color: "#3b82f6" },
+  { key: "crosshairTooltip", label: "Tooltip",         shortLabel: "TIP",  color: "#71717a" },
 ];
 
 interface Props {
