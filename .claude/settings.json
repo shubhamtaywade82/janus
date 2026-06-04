@@ -1,0 +1,17 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/home/nemesis/project/trading-workspace/janus/.claude/hooks/check-and-test.sh",
+            "timeout": 120,
+            "statusMessage": "Running check + tests..."
+          }
+        ]
+      }
+    ]
+  }
+}
