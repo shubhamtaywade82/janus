@@ -34,6 +34,13 @@ if (!(_g.__activeStreams instanceof Map)) {
 export const activeStreams = _g.__activeStreams as Map<string, ActiveSymbolStream>;
 const OPEN_INTEREST_POLL_MS = 30_000;
 
+// Per-symbol ticker state: merged from @ticker (24h stats) + @trade (live lastPrice)
+// Survives HMR via globalThis
+if (!(_g.__tickerStateCache instanceof Map)) {
+  _g.__tickerStateCache = new Map<string, Record<string, unknown>>();
+}
+const tickerStateCache = _g.__tickerStateCache as Map<string, Record<string, unknown>>;
+
 // Global heartbeat — ticks all FeedHealth instances every 5s
 let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
 function ensureHeartbeat() {
@@ -169,6 +176,14 @@ export function subscribeToSymbol(symbol: string) {
         });
         marketStateManager.updateLtp(symbol, parseFloat(String(data.p)), data.T);
 
+        // Emit live ticker update on every trade so the UI price stays current.
+        // @ticker stream fires infrequently on Binance Futures; @trade is the real-time source.
+        const prevTicker = tickerStateCache.get(symbol) ?? {};
+        const liveTickerFromTrade = { ...prevTicker, symbol: data.s ?? symbol, lastPrice: String(data.p) };
+        tickerStateCache.set(symbol, liveTickerFromTrade);
+        latestTickerCache.set(symbol, { lastPrice: parseFloat(String(data.p)), symbol: data.s ?? symbol });
+        marketEvents.emit(`${symbol}:ticker`, liveTickerFromTrade);
+
         // Save trade to DB
         const now = Date.now();
         if (now - lastDbSave.trade > 1000) {
@@ -183,7 +198,7 @@ export function subscribeToSymbol(symbol: string) {
             tradeTime: new Date(data.T),
           }).catch(() => {});
         }
-      } 
+      }
       else if (stream.endsWith("@ticker")) {
         const formattedTicker = {
           symbol: data.s,
@@ -204,12 +219,14 @@ export function subscribeToSymbol(symbol: string) {
           count: data.n,
         };
 
+        // Merge 24h stats into the shared ticker state so live trade emissions keep them
+        tickerStateCache.set(symbol, { ...formattedTicker });
         latestTickerCache.set(symbol, { lastPrice: parseFloat(data.c), symbol: data.s });
         marketEvents.emit(`${symbol}:ticker`, formattedTicker);
 
         // Update in-memory state manager LTP
         marketStateManager.updateLtp(symbol, parseFloat(String(data.c)), data.E || Date.now());
-      } 
+      }
       else if (stream.endsWith("@kline_1m")) {
         const k = data.k;
         const formattedKline = {
@@ -368,4 +385,19 @@ export function unsubscribeFromSymbol(symbol: string) {
     }
     activeStreams.delete(symbol);
   }
+}
+
+// ─── Vite HMR: force-close all WS connections on hot-reload ───
+// New streaming.ts module = new message handlers. Old connections have stale closures.
+// Closing them triggers the reconnect loop which uses the fresh subscribeToSymbol.
+if ((import.meta as any).hot) {
+  (import.meta as any).hot.dispose(() => {
+    console.log("[streaming] HMR: closing all WS connections for fresh handlers");
+    for (const [, stream] of activeStreams) {
+      if (stream.openInterestTimer) clearInterval(stream.openInterestTimer);
+      stream.ws?.terminate();
+    }
+    activeStreams.clear();
+    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+  });
 }
