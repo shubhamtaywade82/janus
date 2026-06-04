@@ -262,16 +262,16 @@ export default function Portfolio() {
     if (initialPortfolio && !portfolioRef.current) {
       setPortfolio(initialPortfolio);
       portfolioRef.current = initialPortfolio;
+      prevPositionCount.current = initialPortfolio.openPositionsCount ?? 0;
     }
   }, [initialPortfolio]);
 
   // Stable callback ref — prevents re-subscription on every render
   const prevPositionCount = useRef<number | null>(null);
   const onPortfolioData = useRef((data: any) => {
-    const prev = prevPositionCount.current;
     const next = data?.openPositionsCount ?? 0;
-    if (prev !== null && next !== prev) {
-      if (next > prev) {
+    if (prevPositionCount.current !== null && next !== prevPositionCount.current) {
+      if (next > prevPositionCount.current) {
         toast.success(`Position opened`, { description: `${next} open position${next !== 1 ? "s" : ""}` });
       } else {
         toast.info(`Position closed`, { description: `${next} open position${next !== 1 ? "s" : ""}` });
