@@ -21,6 +21,7 @@ import { OrderBlockPrimitive } from "@/lib/chart/primitives/OrderBlockPrimitive"
 import { FVGPrimitive } from "@/lib/chart/primitives/FVGPrimitive";
 import { StructurePrimitive } from "@/lib/chart/primitives/StructurePrimitive";
 import { VolumeProfilePrimitive } from "@/lib/chart/primitives/VolumeProfilePrimitive";
+import { SessionShadingPrimitive } from "@/lib/chart/primitives/SessionShadingPrimitive";
 import { ChartOverlayPanel } from "@/components/ChartOverlayPanel";
 import type { OverlayToggles } from "@/components/ChartOverlayPanel";
 import { IndicatorPanel } from "@/components/IndicatorPanel";
@@ -158,9 +159,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const isLoadingMoreRef = useRef(false);
   const onLoadMoreRef = useRef(onLoadMore);
   // SMC primitives
-  const obPrimRef   = useRef<OrderBlockPrimitive | null>(null);
-  const fvgPrimRef  = useRef<FVGPrimitive | null>(null);
-  const strPrimRef  = useRef<StructurePrimitive | null>(null);
+  const obPrimRef      = useRef<OrderBlockPrimitive | null>(null);
+  const fvgPrimRef     = useRef<FVGPrimitive | null>(null);
+  const strPrimRef     = useRef<StructurePrimitive | null>(null);
+  const sessionPrimRef = useRef<SessionShadingPrimitive | null>(null);
   const markersPluginRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
   // OBV series
   const obvSeriesRef = useRef<any>(null);
@@ -516,21 +518,25 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const obPrim  = new OrderBlockPrimitive();
       const fvgPrim = new FVGPrimitive();
       const strPrim = new StructurePrimitive();
+      const sessionPrim = new SessionShadingPrimitive();
       candlestickSeriesRef.current.attachPrimitive(obPrim);
       candlestickSeriesRef.current.attachPrimitive(fvgPrim);
       candlestickSeriesRef.current.attachPrimitive(strPrim);
-      obPrimRef.current  = obPrim;
-      fvgPrimRef.current = fvgPrim;
-      strPrimRef.current = strPrim;
+      candlestickSeriesRef.current.attachPrimitive(sessionPrim);
+      obPrimRef.current      = obPrim;
+      fvgPrimRef.current     = fvgPrim;
+      strPrimRef.current     = strPrim;
+      sessionPrimRef.current = sessionPrim;
       // createSeriesMarkers replaces the old .setMarkers() — create lazily only when needed
       // to avoid interfering with auto-scroll and chart rendering pipeline
     } catch (err) {
       console.warn("[chart] SMC primitive attach failed:", err);
     }
     return () => {
-      obPrimRef.current  = null;
-      fvgPrimRef.current = null;
-      strPrimRef.current = null;
+      obPrimRef.current      = null;
+      fvgPrimRef.current     = null;
+      strPrimRef.current     = null;
+      sessionPrimRef.current = null;
       markersPluginRef.current = null;
     };
   }, [chartInitialized]);
@@ -758,6 +764,11 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     if (!candlestickSeriesRef.current || !obPrimRef.current || !fvgPrimRef.current || !strPrimRef.current) return;
     const tog = overlayToggles;
     const pa  = overlayData;
+
+    // Session shading
+    if (sessionPrimRef.current) {
+      sessionPrimRef.current.setEnabled(tog?.sessions ?? true);
+    }
 
     // Order Blocks
     obPrimRef.current.setBlocks(tog?.orderBlocks && pa?.orderBlocks ? pa.orderBlocks : []);
