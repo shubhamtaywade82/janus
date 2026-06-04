@@ -388,60 +388,6 @@ sizeMult: 0.5 (reduce) | 1.0 (normal) | 1.5 (increase, only if very high convict
       healthy: !this.unhealthyUntil.has(k.id) || now > this.unhealthyUntil.get(k.id)!,
     }));
   }
-
-  async analyzePositionManagement(
-    prompt: string
-  ): Promise<import("./position-manager/types").AiRecommendation | null> {
-    const key = this.pickHealthyKey();
-    if (!key) return null;
-
-    const t0 = Date.now();
-    try {
-      const raw = await this.callLlm(key, prompt);
-      const jsonMatch = raw.match(/\{[\s\S]*?\}/);
-      if (!jsonMatch) return null;
-
-      const parsed = JSON.parse(jsonMatch[0]) as {
-        action?: string;
-        confidence?: number;
-        reasoning?: string;
-        newStopLoss?: number | null;
-        newTakeProfit?: number | null;
-        exitSizePct?: number | null;
-      };
-
-      const validActions = [
-        "KEEP_OPEN", "MOVE_TO_BREAKEVEN", "TRAIL_SL", "PARTIAL_EXIT",
-        "FULL_EXIT", "REDUCE_SIZE", "SCALE_IN", "EXTEND_TP", "TIGHTEN_TP",
-      ];
-      const action = validActions.includes(parsed.action ?? "")
-        ? (parsed.action as import("./position-manager/types").PositionAction)
-        : "KEEP_OPEN" as import("./position-manager/types").PositionAction;
-
-      await this.updateKeyStats(key.id, true);
-
-      return {
-        action,
-        confidence: Math.min(1, Math.max(0, (parsed.confidence ?? 0.5))),
-        reasoning: String(parsed.reasoning ?? "").slice(0, 300),
-        newStopLoss: parsed.newStopLoss ?? undefined,
-        newTakeProfit: parsed.newTakeProfit ?? undefined,
-        exitSizePct: parsed.exitSizePct ?? undefined,
-        source: "AI",
-        provider: key.provider,
-        latencyMs: Date.now() - t0,
-      };
-    } catch (err: any) {
-      const status = err?.status ?? 0;
-      if (status === 429) this.markUnhealthy(key.id, 5 * 60_000);
-      else if (status === 503) this.markUnhealthy(key.id, 2 * 60_000);
-      else this.markUnhealthy(key.id, 30_000);
-      await this.updateKeyStats(key.id, false);
-      return null;
-    }
-  }
 }
 
 export const globalLlmAdvisor = new LlmAdvisor();
-// Alias used by position-manager
-export const llmAdvisor = globalLlmAdvisor;

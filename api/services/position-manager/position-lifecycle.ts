@@ -15,12 +15,8 @@ import type {
 } from "./types";
 import { PositionAction as PA } from "./types";
 import { getDb } from "../../queries/connection";
-import {
-  positions,
-  futuresWallets,
-  signals,
-  aiAssessments,
-} from "@db/schema";
+import { positions, futuresWallets, signals } from "@db/schema";
+import { aiAssessments } from "@db/position-manager-schema";
 import { eq, and, desc, gte as _gte } from "drizzle-orm";
 import { userPositionsCache, markPriceCache } from "../coindcx-ws";
 import { latestTickerCache } from "../streaming";

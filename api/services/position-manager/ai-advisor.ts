@@ -201,38 +201,6 @@ Respond ONLY with valid JSON (no markdown):
 }`;
 }
 
-// ── LLM call with timeout ─────────────────────────────────────────────────
-async function callLlmWithTimeout(
-  prompt: string,
-  timeoutMs: number
-): Promise<AiRecommendation | null> {
-  try {
-    // Lazy import to avoid circular deps
-    const { globalLlmAdvisor: llmAdvisor } = await import("../llm-advisor");
-    if (!llmAdvisor) return null;
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), timeoutMs);
-
-    try {
-      // Build a lightweight SignalContext-compatible wrapper
-      const decision = await Promise.race([
-        llmAdvisor.analyzePositionManagement(prompt),
-        new Promise<null>((_, reject) =>
-          setTimeout(() => reject(new Error("LLM timeout")), timeoutMs)
-        ),
-      ]);
-      clearTimeout(timer);
-      return decision;
-    } catch {
-      clearTimeout(timer);
-      return null;
-    }
-  } catch {
-    return null;
-  }
-}
-
 // ── Main advisor entry point ───────────────────────────────────────────────
 export async function getPositionRecommendation(
   position: ManagedPosition,
@@ -244,8 +212,14 @@ export async function getPositionRecommendation(
 ): Promise<AiRecommendation> {
   if (useAi) {
     try {
+      const { callPositionManagementLlm } = await import("./llm-client");
       const prompt = buildPositionPrompt(position, ctx, bias, portfolio);
-      const aiResult = await callLlmWithTimeout(prompt, aiTimeoutMs);
+      const aiResult = await Promise.race([
+        callPositionManagementLlm(prompt),
+        new Promise<null>((_, reject) =>
+          setTimeout(() => reject(new Error("LLM timeout")), aiTimeoutMs)
+        ),
+      ]);
       if (aiResult) return aiResult;
     } catch {
       // AI unavailable — fall through to code-based

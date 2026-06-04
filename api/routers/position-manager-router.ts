@@ -5,7 +5,7 @@ import { positionLifecycleManager, positionStore } from "../services/position-ma
 import { DEFAULT_POSITION_MANAGER_CONFIG } from "../services/position-manager/types";
 import { positionManagerBus } from "../services/position-manager/event-bus";
 import { getDb } from "../queries/connection";
-import { aiAssessments } from "@db/schema";
+import { aiAssessments } from "@db/position-manager-schema";
 import { eq, desc, gte, and } from "drizzle-orm";
 import { observable } from "@trpc/server/observable";
 import type { AssessmentRecord } from "../services/position-manager/types";
