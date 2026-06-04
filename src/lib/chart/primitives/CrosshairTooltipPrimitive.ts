@@ -66,7 +66,7 @@ export class CrosshairTooltipPrimitive implements ISeriesPrimitive<Time> {
                 // Position: right of crosshair, clamp to canvas edges
                 let bx = Math.round(barX * horizontalPixelRatio) + 14 * horizontalPixelRatio;
                 if (bx + bBOXW > bitmapSize.width) {
-                  bx = Math.round(barX * horizontalPixelRatio) - bBOXW - 14 * horizontalPixelRatio;
+                  bx = Math.max(0, Math.round(barX * horizontalPixelRatio) - bBOXW - 14 * horizontalPixelRatio);
                 }
                 const by = Math.max(bPAD, Math.min(bitmapSize.height - bBOXH - bPAD, bitmapSize.height * 0.08));
 
