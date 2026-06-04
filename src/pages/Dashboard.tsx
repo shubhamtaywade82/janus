@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
 import { ExitSignalToast } from "@/components/ExitSignalToast";
@@ -1611,13 +1611,61 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   );
 }
 
+function aggregateOrderBook(levels: [string, string][], step: number, isBid: boolean): [string, string][] {
+  const groups: Record<string, number> = {};
+  for (const [pStr, qStr] of levels) {
+    const p = parseFloat(pStr);
+    const q = parseFloat(qStr);
+    if (isNaN(p) || isNaN(q)) continue;
+
+    // Group price
+    let groupedPrice: number;
+    if (isBid) {
+      groupedPrice = Math.floor(p / step) * step;
+    } else {
+      groupedPrice = Math.ceil(p / step) * step;
+    }
+
+    // Formatting key to avoid precision floating point issues
+    const decimals = step < 1 ? Math.round(-Math.log10(step)) : 0;
+    const key = groupedPrice.toFixed(decimals);
+    groups[key] = (groups[key] || 0) + q;
+  }
+
+  return Object.entries(groups)
+    .map(([p, q]) => [p, String(q)] as [string, string])
+    .sort((a, b) => isBid ? parseFloat(b[0]) - parseFloat(a[0]) : parseFloat(a[0]) - parseFloat(b[0]));
+}
+
 // ─── Order Book Component ───
 const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerData: any; markPrice?: number }) => {
   const [activeTab, setActiveTab] = useState<"book" | "telemetry">("book");
   const [depth, setDepth] = useState<any>(null);
 
+  const decimals = getPriceDecimals(symbol);
+  const defaultStep = parseFloat(Math.pow(10, -decimals).toFixed(decimals));
+  const [priceStep, setPriceStep] = useState<number>(defaultStep);
+
+  // Sync priceStep when symbol changes
+  useEffect(() => {
+    const dec = getPriceDecimals(symbol);
+    setPriceStep(parseFloat(Math.pow(10, -dec).toFixed(dec)));
+  }, [symbol]);
+
+  // Generate selector options
+  const aggregationOptions = useMemo(() => {
+    const dec = getPriceDecimals(symbol);
+    const options: number[] = [];
+    let step = Math.pow(10, -dec);
+    for (let i = 0; i < 5; i++) {
+      options.push(parseFloat(step.toFixed(dec)));
+      step *= 10;
+    }
+    return options;
+  }, [symbol]);
+
   const { data: initialDepth } = trpc.market.orderBook.useQuery(
-    { symbol, limit: 20 },
+    { symbol, limit: 100 }, // Fetch more levels for quality aggregation
     { staleTime: Infinity }
   );
 
@@ -1645,16 +1693,25 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
   );
 
   // Pair bids[i] with asks[i] side-by-side — both sorted best first
-  const rawBids = (depth && Array.isArray(depth.bids) ? depth.bids.slice(0, 10) : []) as [string, string][];
-  const rawAsks = (depth && Array.isArray(depth.asks) ? depth.asks.slice(0, 10) : []) as [string, string][];
+  const rawBids = (depth && Array.isArray(depth.bids) ? depth.bids : []) as [string, string][];
+  const rawAsks = (depth && Array.isArray(depth.asks) ? depth.asks : []) as [string, string][];
 
-  const maxBidSize = Math.max(...rawBids.map(([, q]) => parseFloat(q)), 1);
-  const maxAskSize = Math.max(...rawAsks.map(([, q]) => parseFloat(q)), 1);
+  // Aggregate dynamically
+  const bids = useMemo(() => {
+    return aggregateOrderBook(rawBids, priceStep, true).slice(0, 10);
+  }, [rawBids, priceStep]);
 
-  const spread = rawBids[0] && rawAsks[0]
-    ? parseFloat(rawAsks[0][0]) - parseFloat(rawBids[0][0])
+  const asks = useMemo(() => {
+    return aggregateOrderBook(rawAsks, priceStep, false).slice(0, 10);
+  }, [rawAsks, priceStep]);
+
+  const maxBidSize = Math.max(...bids.map(([, q]) => parseFloat(q)), 1);
+  const maxAskSize = Math.max(...asks.map(([, q]) => parseFloat(q)), 1);
+
+  const spread = bids[0] && asks[0]
+    ? parseFloat(asks[0][0]) - parseFloat(bids[0][0])
     : 0;
-  const spreadPct = rawBids[0] ? (spread / parseFloat(rawBids[0][0])) * 100 : 0;
+  const spreadPct = bids[0] ? (spread / parseFloat(bids[0][0])) * 100 : 0;
 
   const lastPrice = tickerData ? parseFloat(tickerData.lastPrice) : 0;
   const lastPriceColor = tickerData && parseFloat(tickerData.priceChange) >= 0 ? "hsl(var(--janus-up-bright))" : "hsl(var(--janus-down-bright))";
@@ -1664,7 +1721,20 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
       {/* Price header: Futures + Mark */}
       <div className="px-3 py-2 border-b border-[#27272a]">
         <div className="flex items-center justify-between mb-1">
-          <span className="text-[#71717a]">Order Book</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-[#71717a]">Order Book</span>
+            <select
+              value={priceStep}
+              onChange={(e) => setPriceStep(parseFloat(e.target.value))}
+              className="bg-[#18181b] border border-[#27272a] rounded px-1 py-0.5 text-[9px] text-[#f4f4f5] outline-none cursor-pointer focus:border-[#f59e0b] h-5"
+            >
+              {aggregationOptions.map((opt) => (
+                <option key={opt} value={opt}>
+                  {opt}
+                </option>
+              ))}
+            </select>
+          </div>
           {spread > 0 && (
             <span className="text-[#52525b]">Spread {formatPrice(spread, symbol)} ({spreadPct.toFixed(3)}%)</span>
           )}
@@ -1734,13 +1804,15 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
 
           {/* Rows: bid | price | ask */}
           <div className="flex-1 overflow-auto scrollbar-thin">
-            {Array.from({ length: Math.max(rawBids.length, rawAsks.length) }).map((_, i) => {
-              const bid = rawBids[i];
-              const ask = rawAsks[i];
+            {Array.from({ length: Math.max(bids.length, asks.length) }).map((_, i) => {
+              const bid = bids[i];
+              const ask = asks[i];
               const bidSize = bid ? parseFloat(bid[1]) : 0;
               const askSize = ask ? parseFloat(ask[1]) : 0;
               const bidW = bid ? (bidSize / maxBidSize) * 100 : 0;
               const askW = ask ? (askSize / maxAskSize) * 100 : 0;
+
+              const priceDecForStep = priceStep < 1 ? Math.round(-Math.log10(priceStep)) : 0;
 
               return (
                 <div key={i} className="grid grid-cols-3 items-center py-0.5 px-2 hover:bg-[#27272a]/30">
@@ -1755,9 +1827,9 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                   {/* Price */}
                   <div className="text-center tabular-nums">
                     {bid ? (
-                      <span className="text-j-up-bright font-medium">{formatPrice(bid[0], symbol)}</span>
+                      <span className="text-j-up-bright font-medium">{formatPrice(bid[0], symbol, priceDecForStep)}</span>
                     ) : ask ? (
-                      <span className="text-j-down-bright font-medium">{formatPrice(ask[0], symbol)}</span>
+                      <span className="text-j-down-bright font-medium">{formatPrice(ask[0], symbol, priceDecForStep)}</span>
                     ) : ""}
                   </div>
 
