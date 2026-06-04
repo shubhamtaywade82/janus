@@ -442,6 +442,59 @@ export class MarketStateManager {
     state.updatedAt = timestamp;
     state.sequenceNo++;
   }
+
+  /**
+   * Analyze CVD for a symbol: detect divergences between price and cumulative volume delta.
+   */
+  analyzeCvd(symbol: string): {
+    trend: "BULLISH_DIVERGENCE" | "BEARISH_DIVERGENCE" | "CONFIRMING" | "NEUTRAL";
+    signalStrength: "STRONG" | "MODERATE" | "WEAK";
+    current: number;
+    sessionDelta: number;
+  } {
+    const state = this.instruments.get(symbol);
+    if (!state || state.cvdWindow.size() < 10) {
+      return { trend: "NEUTRAL", signalStrength: "WEAK", current: 0, sessionDelta: 0 };
+    }
+
+    const points = state.cvdWindow.values();
+    const recent = points.slice(-20);
+    const sessionStart = points.length > 100 ? points[points.length - 100] : points[0];
+
+    const priceValues = recent.map((p) => p.price);
+    const cvdValues = recent.map((p) => p.cumulative);
+
+    const half = Math.floor(recent.length / 2);
+    const priceLow1 = Math.min(...priceValues.slice(0, half));
+    const priceLow2 = Math.min(...priceValues.slice(half));
+    const cvdLow1 = Math.min(...cvdValues.slice(0, half));
+    const cvdLow2 = Math.min(...cvdValues.slice(half));
+    const priceHigh1 = Math.max(...priceValues.slice(0, half));
+    const priceHigh2 = Math.max(...priceValues.slice(half));
+    const cvdHigh1 = Math.max(...cvdValues.slice(0, half));
+    const cvdHigh2 = Math.max(...cvdValues.slice(half));
+
+    let trend: "BULLISH_DIVERGENCE" | "BEARISH_DIVERGENCE" | "CONFIRMING" | "NEUTRAL" = "NEUTRAL";
+    let signalStrength: "STRONG" | "MODERATE" | "WEAK" = "WEAK";
+
+    if (priceLow2 < priceLow1 && cvdLow2 > cvdLow1) {
+      trend = "BULLISH_DIVERGENCE";
+      signalStrength = "STRONG";
+    } else if (priceHigh2 > priceHigh1 && cvdHigh2 < cvdHigh1) {
+      trend = "BEARISH_DIVERGENCE";
+      signalStrength = "STRONG";
+    } else if (state.cumulativeCvd > (sessionStart.cumulative ?? 0)) {
+      trend = "CONFIRMING";
+      signalStrength = "MODERATE";
+    }
+
+    return {
+      trend,
+      signalStrength,
+      current: state.cumulativeCvd,
+      sessionDelta: state.cumulativeCvd - (sessionStart.cumulative ?? 0),
+    };
+  }
 }
 
 // Export a singleton instance
