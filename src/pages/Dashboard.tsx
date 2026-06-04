@@ -206,8 +206,11 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const t = animTarget.current;
       const closeDiff = t.close - animCurrent.current.close;
       const volDiff = t.vol - animCurrent.current.vol;
-      const closeSettled = Math.abs(closeDiff) < 0.00001;
-      const volSettled = Math.abs(volDiff) < 0.001;
+      
+      // Calculate tolerance dynamically as a percentage of close price (0.002%) to prevent micro-fluctuation vibration
+      const closeTol = Math.max(0.00001, t.close * 0.00002);
+      const closeSettled = Math.abs(closeDiff) < closeTol;
+      const volSettled = Math.abs(volDiff) < 0.1 || (t.vol > 0 && Math.abs(volDiff) / t.vol < 0.005);
 
       if (closeSettled && volSettled) {
         // Snap to exact target
@@ -253,12 +256,16 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const c = animCurrent.current.close;
       const v = animCurrent.current.vol;
 
-      // Animated candle update
+      // Animated candle update: clamp intermediate high/low to target high/low.
+      // Doing this prevents range fluctuations (where the canvas scale shifts up and down 
+      // dynamically during animation frames, causing the chart to visually vibrate).
+      const finalHigh = Math.max(t.open, t.close, t.high);
+      const finalLow = Math.min(t.open, t.close, t.low);
       candlestickSeriesRef.current.update({
         time: t.time as UTCTimestamp,
         open: t.open,
-        high: Math.max(t.high, c),
-        low: Math.min(t.low, c),
+        high: Math.min(finalHigh, Math.max(t.open, c)),
+        low: Math.max(finalLow, Math.min(t.open, c)),
         close: c,
       });
 
