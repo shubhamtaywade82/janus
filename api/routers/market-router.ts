@@ -3,6 +3,8 @@ import { observable } from "@trpc/server/observable";
 import { createRouter, publicQuery } from "../middleware";
 import { analyzeAll, klinesFromBinance } from "../services/price-action";
 import { subscribeToSymbol, unsubscribeFromSymbol, marketEvents } from "../services/streaming";
+import type { LiquidityEvent } from "../services/liquidity-engine";
+import { liquidityEngine } from "../services/liquidity-engine";
 import { marketStateManager } from "../services/market-state";
 import {
   fetchKlines,
@@ -381,6 +383,21 @@ export const marketRouter = createRouter({
           marketEvents.off(`${symbol}:kline`, onData);
           unsubscribeFromSymbol(symbol);
         };
+      });
+    }),
+
+  // ─── Liquidity Event Stream ───
+  liquidityEventStream: publicQuery
+    .input(z.object({ symbol: z.string().default("BTCUSDT") }))
+    .subscription(({ input }) => {
+      return observable<LiquidityEvent>((emit) => {
+        const handler = (event: LiquidityEvent) => {
+          if (event.symbol === input.symbol) {
+            emit.next(event);
+          }
+        };
+        liquidityEngine.on("liquidity_event", handler);
+        return () => liquidityEngine.off("liquidity_event", handler);
       });
     }),
 

@@ -21,6 +21,19 @@ export interface OrderBookSnapshot {
   timestamp: number;
 }
 
+export interface LiquidationTick {
+  side: "BUY" | "SELL";
+  price: number;
+  quantity: number;
+  timestamp: number;
+}
+
+export interface FundingTick {
+  fundingRate: number;
+  markPrice: number;
+  timestamp: number;
+}
+
 export interface LiquidityDelta {
   level: number;
   bidRemoved: number;
@@ -60,6 +73,8 @@ export interface InstrumentState {
   tradeWindow: RingBuffer<TradeTick>;
   bookWindow: RingBuffer<OrderBookSnapshot>;
   deltaWindow: RingBuffer<LiquidityDelta>;
+  liquidationWindow: RingBuffer<LiquidationTick>;
+  latestFunding: FundingTick | null;
 
   metrics: MarketMetrics;
   updatedAt: number;
@@ -162,6 +177,8 @@ export class MarketStateManager {
         tradeWindow: new RingBuffer<TradeTick>(1000),
         bookWindow: new RingBuffer<OrderBookSnapshot>(50),
         deltaWindow: new RingBuffer<LiquidityDelta>(500),
+        liquidationWindow: new RingBuffer<LiquidationTick>(1000),
+        latestFunding: null,
         metrics: {
           spread: 0,
           spreadPercent: 0,
@@ -200,6 +217,36 @@ export class MarketStateManager {
     state.ltp = price;
     state.ltpWindow.push({ price, timestamp });
     state.updatedAt = timestamp;
+    state.sequenceNo++;
+  }
+
+  /**
+   * Update Funding Rate and Mark Price
+   */
+  updateFunding(symbol: string, fundingInput: { fundingRate: string; markPrice: string; nextFundingTime: number }): void {
+    const state = this.getOrInitializeState(symbol);
+    state.latestFunding = {
+      fundingRate: parseFloat(fundingInput.fundingRate),
+      markPrice: parseFloat(fundingInput.markPrice),
+      timestamp: fundingInput.nextFundingTime
+    };
+    state.updatedAt = Date.now();
+    state.sequenceNo++;
+  }
+
+  /**
+   * Update Liquidations
+   */
+  updateLiquidation(symbol: string, liqInput: { side: string; price: number; originalQuantity: string; orderTradeTime: number }): void {
+    const state = this.getOrInitializeState(symbol);
+    const liq: LiquidationTick = {
+      side: liqInput.side as "BUY" | "SELL",
+      price: liqInput.price,
+      quantity: parseFloat(liqInput.originalQuantity),
+      timestamp: liqInput.orderTradeTime
+    };
+    state.liquidationWindow.push(liq);
+    state.updatedAt = Date.now();
     state.sequenceNo++;
   }
 

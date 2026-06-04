@@ -4,6 +4,7 @@ import { getDb } from "../queries/connection";
 import { marketData, orderBookSnapshots, recentTicks } from "@db/schema";
 import { marketStateManager } from "./market-state";
 import { getOrCreateFeedHealth, feedHealthRegistry } from "./feed-health";
+import { liquidityEngine } from "./liquidity-engine";
 
 export const marketEvents = new EventEmitter();
 marketEvents.setMaxListeners(100);
@@ -29,8 +30,8 @@ function ensureHeartbeat() {
 
 function getBinanceWsUrl(symbol: string): string {
   const s = symbol.toLowerCase();
-  // Using globally accessible Binance Spot streams to avoid futures geo-blocking restrictions
-  return `wss://stream.binance.com:9443/stream?streams=${s}@depth20@100ms/${s}@trade/${s}@ticker/${s}@kline_1m`;
+  // Using Binance Futures stream to get liquidations (@forceOrder) and funding (@markPrice)
+  return `wss://fstream.binance.com/stream?streams=${s}@depth20@100ms/${s}@trade/${s}@ticker/${s}@kline_1m/${s}@forceOrder/${s}@markPrice`;
 }
 
 export function subscribeToSymbol(symbol: string) {
@@ -210,6 +211,48 @@ export function subscribeToSymbol(symbol: string) {
           });
         }
       }
+      else if (stream.endsWith("@forceOrder")) {
+        const o = data.o;
+        const formattedLiquidation = {
+          symbol: o.s,
+          side: o.S, // "SELL" = Long liquidation, "BUY" = Short liquidation
+          orderType: o.o,
+          timeInForce: o.f,
+          originalQuantity: o.q,
+          price: o.p,
+          averagePrice: o.ap,
+          orderStatus: o.X,
+          lastFilledQuantity: o.l,
+          orderFilledAccumulatedQuantity: o.z,
+          orderTradeTime: o.T
+        };
+        marketEvents.emit(`${symbol}:liquidation`, formattedLiquidation);
+        
+        // Pass to Market State
+        if (typeof marketStateManager !== "undefined" && typeof (marketStateManager as any).updateLiquidation === "function") {
+          (marketStateManager as any).updateLiquidation(symbol, formattedLiquidation);
+        }
+      }
+      else if (stream.endsWith("@markPrice")) {
+        const formattedFunding = {
+          symbol: data.s,
+          markPrice: data.p,
+          indexPrice: data.i,
+          estimatedSettlePrice: data.P,
+          fundingRate: data.r,
+          nextFundingTime: data.T
+        };
+        marketEvents.emit(`${symbol}:funding`, formattedFunding);
+
+        // Pass to Market State
+        if (typeof marketStateManager !== "undefined" && typeof (marketStateManager as any).updateFunding === "function") {
+          (marketStateManager as any).updateFunding(symbol, formattedFunding);
+        }
+      }
+
+      // Run Liquidity Engine Analysis
+      liquidityEngine.processTick(symbol);
+
     } catch (err) {
       console.error(`[streaming] Error parsing message for ${symbol}:`, err);
     }

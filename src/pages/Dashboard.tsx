@@ -1919,6 +1919,18 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
     { refetchInterval: 1000, enabled: activeTab === "telemetry" }
   );
 
+  const [liquidityEvents, setLiquidityEvents] = useState<any[]>([]);
+  trpc.market.liquidityEventStream.useSubscription(
+    { symbol },
+    {
+      onData: (event: any) => {
+        if (activeTab === "telemetry") {
+          setLiquidityEvents((prev) => [event, ...prev].slice(0, 10));
+        }
+      },
+    }
+  );
+
   useEffect(() => {
     if (initialDepth) setDepth(initialDepth);
   }, [initialDepth, symbol]);
@@ -2164,7 +2176,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
           </div>
         </>
       ) : (
-        <div className="flex-1 overflow-hidden p-2 flex flex-col justify-between gap-2 bg-[#09090b]">
+        <div className="flex-1 overflow-hidden p-1.5 flex flex-col justify-between gap-1 bg-[#09090b]">
           {!liveState ? (
             <div className="flex flex-col items-center justify-center h-full gap-2 text-[#71717a] py-8">
               <RefreshCw size={16} className="animate-spin text-[#f59e0b]" />
@@ -2195,12 +2207,12 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
             return (
               <>
                 {/* Volatility & Net Delta Row */}
-                <div className="grid grid-cols-2 gap-2">
-                  <div className={cn("flex flex-col justify-center items-center py-2.5 px-2 rounded-md border text-center transition-all", regimeColor)}>
+                <div className="grid grid-cols-2 gap-1">
+                  <div className={cn("flex flex-col justify-center items-center py-1.5 px-2 rounded-md border text-center transition-all", regimeColor)}>
                     <span className="text-[7.5px] uppercase tracking-wider text-[#71717a] font-bold mb-0.5">Volatility Regime</span>
                     <span className="text-sm font-black tracking-widest">{regime}</span>
                   </div>
-                  <div className="flex flex-col justify-center items-center py-2.5 px-2 rounded-md border border-[#27272a] bg-[#18181b]/30 text-center">
+                  <div className="flex flex-col justify-center items-center py-1.5 px-2 rounded-md border border-[#27272a] bg-[#18181b]/30 text-center">
                     <span className="text-[7.5px] uppercase tracking-wider text-[#71717a] font-bold mb-0.5">Net Liquidity Delta</span>
                     <span className={cn("text-sm font-bold tabular-nums", netDelta >= 0 ? "text-j-up-bright" : "text-j-down-bright")}>
                       {netDelta >= 0 ? "+" : ""}{netDelta.toFixed(1)}
@@ -2209,7 +2221,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 </div>
 
                 {/* Imbalance scale */}
-                <div className="p-2 rounded-md border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
+                <div className="p-1.5 rounded-md border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
                   <div className="flex justify-between items-center text-[7.5px] uppercase text-[#71717a] font-bold">
                     <span>Seller Pressure</span>
                     <span className={cn("font-bold text-[8.5px] tabular-nums", imb >= 0 ? "text-j-up-bright" : "text-j-down-bright")}>
@@ -2217,11 +2229,11 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                     </span>
                     <span>Buyer Pressure</span>
                   </div>
-                  <div className="relative h-2 rounded bg-gradient-to-r from-red-950 via-zinc-900 to-emerald-950 border border-[#27272a] overflow-hidden flex">
+                  <div className="relative h-1.5 rounded bg-gradient-to-r from-red-950 via-zinc-900 to-emerald-950 border border-[#27272a] overflow-hidden flex">
                     {/* Imbalance Marker */}
                     <div className="absolute top-0 bottom-0 w-1.5 bg-white shadow-[0_0_6px_#fff] transition-all duration-300" style={{ left: `${imbPct}%`, transform: 'translateX(-50%)' }} />
                   </div>
-                  <div className="flex justify-between text-[7px] text-[#52525b] font-bold">
+                  <div className="flex justify-between text-[7px] text-[#52525b] font-bold mt-0.5">
                     <span>100% ASKS</span>
                     <span>MID</span>
                     <span>100% BIDS</span>
@@ -2229,7 +2241,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 </div>
 
                 {/* Sweep Indicator */}
-                <div className="p-2 rounded-md border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
+                <div className="p-1.5 rounded-md border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
                   <div className="flex justify-between items-center text-[7.5px] uppercase text-[#71717a] font-bold">
                     <span className="flex items-center gap-1">
                       <Zap size={8} className="text-[#ef4444]" />
@@ -2239,13 +2251,13 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                       {sweep.toFixed(0)}/100
                     </span>
                   </div>
-                  <div className="h-2 rounded bg-[#27272a]/50 overflow-hidden border border-[#27272a]">
+                  <div className="h-1.5 rounded bg-[#27272a]/50 overflow-hidden border border-[#27272a]">
                     <div
                       className="h-full bg-[#ef4444] transition-all duration-500"
                       style={{ width: `${sweep}%` }}
                     />
                   </div>
-                  <div className="flex justify-between text-[7px] text-[#52525b] font-bold">
+                  <div className="flex justify-between text-[7px] text-[#52525b] font-bold mt-0.5">
                     <span>STABLE</span>
                     <span className="text-[#ef4444] font-bold uppercase">
                       Aggressive Breakout
@@ -2254,7 +2266,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 </div>
 
                 {/* Absorption Indicator */}
-                <div className="p-2 rounded-md border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
+                <div className="p-1.5 rounded-md border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
                   <div className="flex justify-between items-center text-[7.5px] uppercase text-[#71717a] font-bold">
                     <span className="flex items-center gap-1">
                       {/* Custom grid/absorption icon */}
@@ -2270,13 +2282,13 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                       {absorb.toFixed(0)}/100
                     </span>
                   </div>
-                  <div className="h-2 rounded bg-[#27272a]/50 overflow-hidden border border-[#27272a]">
+                  <div className="h-1.5 rounded bg-[#27272a]/50 overflow-hidden border border-[#27272a]">
                     <div
                       className="h-full bg-[#10b981] transition-all duration-500"
                       style={{ width: `${absorb}%` }}
                     />
                   </div>
-                  <div className="flex justify-between text-[7px] text-[#52525b] font-bold">
+                  <div className="flex justify-between text-[7px] text-[#52525b] font-bold mt-0.5">
                     <span>NO WALL</span>
                     <span className="text-[#10b981] font-bold uppercase">
                       Heavy Block Absorption
@@ -2285,18 +2297,49 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 </div>
 
                 {/* Liquidity Added & Removed Stats */}
-                <div className="grid grid-cols-2 gap-2 text-[7.5px] text-[#71717a] font-bold">
-                  <div className="p-2 rounded-md border border-[#27272a] bg-[#18181b]/30">
+                <div className="grid grid-cols-2 gap-1 text-[7.5px] text-[#71717a] font-bold">
+                  <div className="p-1.5 rounded-md border border-[#27272a] bg-[#18181b]/30">
                     <div className="mb-0.5 uppercase text-[#71717a]">Liquidity Added</div>
-                    <div className="text-xs text-j-up-bright font-bold tabular-nums">
+                    <div className="text-[11px] text-j-up-bright font-bold tabular-nums">
                       +{(metrics.liquidityAdded || 0).toFixed(1)}
                     </div>
                   </div>
-                  <div className="p-2 rounded-md border border-[#27272a] bg-[#18181b]/30">
+                  <div className="p-1.5 rounded-md border border-[#27272a] bg-[#18181b]/30">
                     <div className="mb-0.5 uppercase text-[#71717a]">Liquidity Removed</div>
-                    <div className="text-xs text-j-down-bright font-bold tabular-nums">
+                    <div className="text-[11px] text-j-down-bright font-bold tabular-nums">
                       -{(metrics.liquidityRemoved || 0).toFixed(1)}
                     </div>
+                  </div>
+                </div>
+
+                {/* Liquidity Event Tape */}
+                <div className="flex-1 mt-1 flex flex-col min-h-[60px] rounded-md border border-[#27272a] bg-[#09090b] overflow-hidden">
+                  <div className="px-2 py-1 text-[8px] uppercase tracking-wider text-[#71717a] font-bold border-b border-[#27272a] bg-[#18181b]">
+                    Live Event Tape
+                  </div>
+                  <div className="flex-1 overflow-y-auto overflow-x-hidden p-1 space-y-0.5">
+                    {liquidityEvents.length === 0 && (
+                      <div className="text-center text-[#52525b] text-[9px] py-4">No recent events</div>
+                    )}
+                    {liquidityEvents.map((ev, i) => {
+                      let color = "text-[#a1a1aa]";
+                      let bg = "bg-[#27272a]/20";
+                      if (ev.priority === "SSS") {
+                        color = "text-[#f59e0b] font-bold";
+                        bg = "bg-[#f59e0b]/10 border border-[#f59e0b]/30 shadow-[inset_0_0_4px_rgba(245,158,11,0.2)]";
+                      } else if (ev.priority === "SS") {
+                        color = "text-[#a855f7]";
+                        bg = "bg-[#a855f7]/10";
+                      } else if (ev.priority === "S") {
+                        color = "text-[#3b82f6]";
+                      }
+                      return (
+                        <div key={ev.id || i} className={cn("px-1.5 py-1 rounded text-[9px] flex justify-between items-center", bg)}>
+                          <span className={cn("truncate mr-2 uppercase tracking-wide", color)}>{ev.type.replace(/_/g, " ")}</span>
+                          <span className="text-[#52525b] whitespace-nowrap tabular-nums">{ev.message}</span>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               </>
