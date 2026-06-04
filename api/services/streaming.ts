@@ -7,11 +7,20 @@ import { getOrCreateFeedHealth, feedHealthRegistry } from "./feed-health";
 import { liquidityEngine } from "./liquidity-engine";
 import { fetchOpenInterest } from "./binance";
 
-export const marketEvents = new EventEmitter();
-marketEvents.setMaxListeners(100);
+// Survive Vite HMR: store singletons on globalThis so hot-reloads don't orphan listeners
+const _g = globalThis as Record<string, unknown>;
+
+if (!(_g.__marketEvents instanceof EventEmitter)) {
+  _g.__marketEvents = new EventEmitter();
+  (_g.__marketEvents as EventEmitter).setMaxListeners(100);
+}
+export const marketEvents = _g.__marketEvents as EventEmitter;
 
 // Latest ticker per symbol — populated by streaming WS, read by portfolio/signal logic
-export const latestTickerCache = new Map<string, { lastPrice: number; symbol: string }>();
+if (!(_g.__latestTickerCache instanceof Map)) {
+  _g.__latestTickerCache = new Map<string, { lastPrice: number; symbol: string }>();
+}
+export const latestTickerCache = _g.__latestTickerCache as Map<string, { lastPrice: number; symbol: string }>;
 
 interface ActiveSymbolStream {
   ws: WebSocket | null;
@@ -19,7 +28,10 @@ interface ActiveSymbolStream {
   openInterestTimer: ReturnType<typeof setInterval> | null;
 }
 
-export const activeStreams = new Map<string, ActiveSymbolStream>();
+if (!(_g.__activeStreams instanceof Map)) {
+  _g.__activeStreams = new Map<string, ActiveSymbolStream>();
+}
+export const activeStreams = _g.__activeStreams as Map<string, ActiveSymbolStream>;
 const OPEN_INTEREST_POLL_MS = 30_000;
 
 // Global heartbeat — ticks all FeedHealth instances every 5s
