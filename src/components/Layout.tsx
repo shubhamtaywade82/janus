@@ -15,6 +15,7 @@ import {
   Settings,
   Shield,
   Bell,
+  Brain,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import SettingsModal from "./SettingsModal";
@@ -24,6 +25,7 @@ import type { AlertRule, AlertLog } from "./AlertsModal";
 const navItems = [
   { path: "/", label: "Dashboard", icon: TrendingUp },
   { path: "/signals", label: "Signals", icon: Signal },
+  { path: "/ai-analysis", label: "AI Analysis", icon: Brain },
   { path: "/portfolio", label: "Portfolio", icon: Wallet },
   { path: "/risk", label: "Risk", icon: Shield },
   { path: "/logs", label: "Logs", icon: ScrollText },

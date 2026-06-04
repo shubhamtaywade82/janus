@@ -1730,6 +1730,29 @@ export const signalRouter = createRouter({
       return { success: true, strategy: activeStrategyType, autoRegime: autoRegimeDetect };
     }),
 
+  analyze: publicQuery
+    .input(z.object({ symbol: z.string() }))
+    .query(async ({ input }) => {
+      const binanceSymbol = input.symbol.toUpperCase();
+      const { obMetrics, tapeMetrics, prices, volumes, extraMetrics } = await getConfluenceInput(binanceSymbol);
+      const analysis = analyzeConfluence(binanceSymbol, obMetrics, tapeMetrics, prices, volumes, extraMetrics);
+
+      const db = getDb();
+      await db.insert(signals).values({
+        symbol: binanceSymbol,
+        microScore: String(analysis.microScore),
+        intraScore: String(analysis.intraScore),
+        swingScore: String(analysis.swingScore),
+        compositeScore: String(analysis.compositeScore),
+        threshold: String(analysis.threshold),
+        isGated: analysis.isGated,
+        direction: analysis.direction,
+        metadata: analysis.indicators,
+      }).catch(() => {});
+
+      return analysis;
+    }),
+
   analyzeAll: publicQuery.query(async () => {
     const results = [];
     for (const pair of SUPPORTED_PAIRS) {
