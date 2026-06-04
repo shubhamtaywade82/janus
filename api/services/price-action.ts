@@ -27,7 +27,7 @@ export function klinesFromBinance(
 // ─── Private Helpers ───
 
 /** Sliding-window ATR using simple avg of (high − low). Index < period−1 is 0. */
-function computeAtrArray(klines: Kline[], period: number): number[] {
+export function computeAtrArray(klines: Kline[], period: number): number[] {
   const len  = klines.length;
   const atrs = new Array<number>(len).fill(0);
   if (len < period) return atrs;
