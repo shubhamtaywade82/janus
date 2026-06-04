@@ -19,7 +19,17 @@ import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { formatPrice, formatQty } from "@/utils/precision";
 
 // ─── Position Row ───
-const PositionRow = ({ position, livePrice }: { position: any; livePrice?: number }) => {
+const PositionRow = ({
+  position,
+  livePrice,
+  onClose,
+  isClosing,
+}: {
+  position: any;
+  livePrice?: number;
+  onClose: (pos: any, currentPrice: number, pnl: number) => void;
+  isClosing: boolean;
+}) => {
   const currentPrice = livePrice ?? parseFloat(position.currentPrice || "0");
   const entryPrice = parseFloat(position.entryPrice || "0");
   const size = parseFloat(position.size || "0");
@@ -144,22 +154,33 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
         </span>
       </td>
       <td className="px-3 py-2">
-        <span
-          className={cn(
-            "text-xs px-1.5 py-0.5 rounded",
-            position.status === "open"
-              ? "bg-j-up/10 text-j-up"
-              : position.status === "closed"
-              ? "bg-[#27272a] text-[#71717a]"
-              : "bg-j-down/10 text-j-down"
+        <div className="flex items-center gap-2">
+          <span
+            className={cn(
+              "text-xs px-1.5 py-0.5 rounded",
+              position.status === "open"
+                ? "bg-j-up/10 text-j-up"
+                : position.status === "closed"
+                ? "bg-[#27272a] text-[#71717a]"
+                : "bg-j-down/10 text-j-down"
+            )}
+          >
+            {position.status.toUpperCase()}
+          </span>
+          {position.status === "open" && (
+            <button
+              onClick={() => onClose(position, currentPrice, pnl)}
+              disabled={isClosing}
+              className="text-[10px] px-1.5 py-0.5 rounded bg-j-down/10 border border-j-down/20 text-j-down hover:bg-j-down/25 hover:text-white active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
+            >
+              {isClosing ? "Closing..." : "Exit"}
+            </button>
           )}
-        >
-          {position.status.toUpperCase()}
-        </span>
+        </div>
       </td>
     </tr>
   );
-}
+};
 
 // ─── Flash on value change ───
 function useFlash(value: number, duration = 600): "flash-up" | "flash-down" | "" {
@@ -418,8 +439,30 @@ export default function Portfolio() {
 
   const pnlFlash = useFlash(liveTotalUnrealizedPnl);
   const marginFlash = useFlash(parseFloat(portfolio?.totalMargin || "0"));
-  const equityFlash = useFlash(totalEquityUsdt
-  );
+  const equityFlash = useFlash(totalEquityUsdt);
+
+  const closePosition = trpc.trading.closePosition.useMutation();
+  const utils = trpc.useUtils();
+
+  const handleClosePosition = useCallback((pos: any, currentPrice: number, pnl: number) => {
+    closePosition.mutate(
+      {
+        id: pos.id,
+        closePrice: String(currentPrice),
+        realizedPnl: String(pnl),
+      },
+      {
+        onSuccess: () => {
+          utils.trading.portfolio.invalidate();
+          utils.trading.positions.invalidate();
+          toast.success(`Position ${pos.symbol} closed`);
+        },
+        onError: (err) => {
+          toast.error("Close failed", { description: err.message });
+        },
+      }
+    );
+  }, [closePosition, utils]);
 
   return (
     <div className="flex flex-col h-full p-4 gap-4">
@@ -743,7 +786,13 @@ export default function Portfolio() {
                 </thead>
                 <tbody>
                   {allPositions?.map((pos: any) => (
-                    <PositionRow key={pos.id} position={pos} livePrice={livePrices[pos.symbol]} />
+                    <PositionRow
+                      key={pos.id}
+                      position={pos}
+                      livePrice={livePrices[pos.symbol]}
+                      onClose={handleClosePosition}
+                      isClosing={closePosition.isLoading && closePosition.variables?.id === pos.id}
+                    />
                   ))}
                   {(!allPositions || allPositions.length === 0) && (
                     <tr>

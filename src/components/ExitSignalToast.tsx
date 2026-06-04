@@ -78,6 +78,7 @@ export function ExitSignalToast({ userId }: Props) {
                 {
                   onSuccess: () => {
                     utils.trading.portfolio.invalidate();
+                    utils.trading.positions.invalidate();
                     shownRef.current.delete(positionId);
                     toast.success(`Position ${symbol} closed`);
                   },
