@@ -22,6 +22,7 @@ import { FVGPrimitive } from "@/lib/chart/primitives/FVGPrimitive";
 import { StructurePrimitive } from "@/lib/chart/primitives/StructurePrimitive";
 import { VolumeProfilePrimitive } from "@/lib/chart/primitives/VolumeProfilePrimitive";
 import { SessionShadingPrimitive } from "@/lib/chart/primitives/SessionShadingPrimitive";
+import { CrosshairTooltipPrimitive } from "@/lib/chart/primitives/CrosshairTooltipPrimitive";
 import { ChartOverlayPanel } from "@/components/ChartOverlayPanel";
 import type { OverlayToggles } from "@/components/ChartOverlayPanel";
 import { IndicatorPanel } from "@/components/IndicatorPanel";
@@ -58,7 +59,7 @@ const resolveCSSColor = (varName: string, fallback: string): string => {
 };
 
 // ─── TradingView Lightweight Chart Component ───
-const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice }: {
+const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice, cvdBars }: {
   data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string;
   onLoadMore?: (beforeTime: number) => void;
   overlayData?: PriceActionData | null;
@@ -66,6 +67,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   indicatorCfg?: IndicatorConfig | null;
   bidPrice?: number;
   askPrice?: number;
+  cvdBars?: { ts: number; delta: number; cumulative: number }[];
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
@@ -163,6 +165,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const fvgPrimRef     = useRef<FVGPrimitive | null>(null);
   const strPrimRef     = useRef<StructurePrimitive | null>(null);
   const sessionPrimRef = useRef<SessionShadingPrimitive | null>(null);
+  const tooltipPrimRef = useRef<CrosshairTooltipPrimitive | null>(null);
   const markersPluginRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
   // OBV series
   const obvSeriesRef = useRef<any>(null);
@@ -432,6 +435,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
             isGreen: c >= o,
           });
         }
+        tooltipPrimRef.current?.setBar(null);
         return;
       }
 
@@ -452,6 +456,25 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
           pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
           isGreen: c >= o,
         });
+      }
+
+      // Update crosshair tooltip primitive
+      if (tooltipPrimRef.current) {
+        const ohlc = param.seriesData.get(candlestickSeries) as any;
+        if (ohlc && ohlc.open !== undefined) {
+          const t = param.time as number;
+          const kline = dataRef.current.find((k) => Math.round(k.openTime / 1000) === t);
+          tooltipPrimRef.current.setBar({
+            time: t,
+            open: ohlc.open,
+            high: ohlc.high,
+            low: ohlc.low,
+            close: ohlc.close,
+            volume: kline ? parseFloat(kline.volume) : 0,
+          });
+        } else {
+          tooltipPrimRef.current.setBar(null);
+        }
       }
     });
 
@@ -519,14 +542,17 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const fvgPrim = new FVGPrimitive();
       const strPrim = new StructurePrimitive();
       const sessionPrim = new SessionShadingPrimitive();
+      const tooltipPrim = new CrosshairTooltipPrimitive();
       candlestickSeriesRef.current.attachPrimitive(obPrim);
       candlestickSeriesRef.current.attachPrimitive(fvgPrim);
       candlestickSeriesRef.current.attachPrimitive(strPrim);
       candlestickSeriesRef.current.attachPrimitive(sessionPrim);
+      candlestickSeriesRef.current.attachPrimitive(tooltipPrim);
       obPrimRef.current      = obPrim;
       fvgPrimRef.current     = fvgPrim;
       strPrimRef.current     = strPrim;
       sessionPrimRef.current = sessionPrim;
+      tooltipPrimRef.current = tooltipPrim;
       // createSeriesMarkers replaces the old .setMarkers() — create lazily only when needed
       // to avoid interfering with auto-scroll and chart rendering pipeline
     } catch (err) {
@@ -537,6 +563,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       fvgPrimRef.current     = null;
       strPrimRef.current     = null;
       sessionPrimRef.current = null;
+      tooltipPrimRef.current = null;
       markersPluginRef.current = null;
     };
   }, [chartInitialized]);
@@ -768,6 +795,11 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     // Session shading
     if (sessionPrimRef.current) {
       sessionPrimRef.current.setEnabled(tog?.sessions ?? true);
+    }
+
+    // Crosshair tooltip
+    if (tooltipPrimRef.current) {
+      tooltipPrimRef.current.setEnabled(tog?.crosshairTooltip ?? true);
     }
 
     // Order Blocks
@@ -1090,7 +1122,33 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
 
     // CVD — per-bar delta histogram + cumulative CVD line, both on "cvd" sub-pane
     if (indicatorCfg.cvd) {
-      const { delta, cvd } = calcCVD(highs, lows, closes, volumes);
+      let delta: (number | null)[];
+      let cvd: (number | null)[];
+
+      if (cvdBars && cvdBars.length >= 10 && data.length > 0) {
+        // Aggregate tick-level CVD into per-bar buckets
+        const barMs = data.length > 1
+          ? (data[1].openTime - data[0].openTime)
+          : 60_000;
+
+        let lastCum = 0;
+        delta = data.map((bar) => {
+          const barEnd = bar.openTime + barMs;
+          const ticks = cvdBars.filter((t) => t.ts >= bar.openTime && t.ts < barEnd);
+          return ticks.length > 0 ? ticks.reduce((sum, t) => sum + t.delta, 0) : null;
+        });
+        cvd = data.map((bar) => {
+          const barEnd = bar.openTime + barMs;
+          const ticks = cvdBars.filter((t) => t.ts >= bar.openTime && t.ts < barEnd);
+          if (ticks.length > 0) lastCum = ticks[ticks.length - 1].cumulative;
+          return lastCum;
+        });
+      } else {
+        // Fallback: OHLCV approximation
+        const result = calcCVD(highs, lows, closes, volumes);
+        delta = result.delta;
+        cvd = result.cvd;
+      }
       const upColor   = "rgba(14,203,129,0.65)";
       const downColor = "rgba(246,70,93,0.65)";
       const cvdScaleOpts = { scaleMargins: { top: 0.78, bottom: 0 }, borderVisible: false };
@@ -1417,8 +1475,21 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         signals.push(...detectRSIDivergence(closes, rsiVals, times));
       }
       if (indicatorCfg.cvd) {
-        const { cvd } = calcCVD(highs, lows, closes, volumes);
-        signals.push(...detectCVDDivergence(closes, cvd, times));
+        let cvdForSignals: (number | null)[];
+        if (cvdBars && cvdBars.length >= 10 && data.length > 0) {
+          const barMs = data.length > 1 ? (data[1].openTime - data[0].openTime) : 60_000;
+          let lastCum = 0;
+          cvdForSignals = data.map((bar) => {
+            const barEnd = bar.openTime + barMs;
+            const ticks = cvdBars.filter((t) => t.ts >= bar.openTime && t.ts < barEnd);
+            if (ticks.length > 0) lastCum = ticks[ticks.length - 1].cumulative;
+            return lastCum;
+          });
+        } else {
+          const result = calcCVD(highs, lows, closes, volumes);
+          cvdForSignals = result.cvd;
+        }
+        signals.push(...detectCVDDivergence(closes, cvdForSignals, times));
       }
 
       if (indicatorMarkersRef.current) {
@@ -2779,6 +2850,33 @@ const Dashboard = () => {
     depthStreamOpts.current
   );
 
+  // ─── CVD tick-level data from backend ───
+  const { data: cvdHistoryData } = trpc.market.cvdHistory.useQuery(
+    { symbol: selectedSymbol },
+    { staleTime: 0, refetchOnWindowFocus: false }
+  );
+
+  const [cvdBars, setCvdBars] = useState<{ ts: number; delta: number; cumulative: number }[]>([]);
+
+  useEffect(() => {
+    setCvdBars([]); // reset on symbol change
+  }, [selectedSymbol]);
+
+  useEffect(() => {
+    if (cvdHistoryData?.points && cvdHistoryData.points.length > 0) {
+      setCvdBars(cvdHistoryData.points);
+    }
+  }, [cvdHistoryData]);
+
+  trpc.market.cvdStream.useSubscription(
+    { symbol: selectedSymbol },
+    {
+      onData: (tick) => {
+        setCvdBars((prev) => [...prev, tick].slice(-5000));
+      },
+    }
+  );
+
   // Fetch portfolio for open positions
   const [portfolio, setPortfolio] = useState<any>(null);
   const { data: initialPortfolio } = trpc.trading.portfolio.useQuery(
@@ -3004,6 +3102,7 @@ const Dashboard = () => {
                 indicatorCfg={indicatorCfg}
                 bidPrice={bestBid ?? undefined}
                 askPrice={bestAsk ?? undefined}
+                cvdBars={cvdBars}
               />
             ) : initialKlines === null || initialKlines === undefined ? (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
