@@ -189,6 +189,18 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const volumeHistoryRef = useRef<{ time: number; value: number }[]>([]);
 
   // ─── Tick animation: persistent lerp loop chasing target ───
+  //
+  // INVARIANTS (do not violate — each caused a hard-to-debug bug):
+  //  1. animTarget.high/low must ONLY expand within a candle — never shrink.
+  //     Shrinking makes the wick clamp in the anim loop jump backward → flicker.
+  //     Use liveHighRef / liveLowRef to accumulate the running max/min.
+  //  2. Do NOT clamp rendered high/low to the animated close (`c`).
+  //     The old pattern `Math.min(finalHigh, Math.max(open, c))` made wick length
+  //     depend on lerp position → different value every frame → flicker.
+  //     Just pass t.high / t.low directly to series.update().
+  //  3. Effect 3 (lastPrice) must merge kline high/low from `last` into liveHighRef/liveLowRef.
+  //     If it ignores kline data, real wicks from klineStream get overwritten with lower values.
+  //
   const animFrameRef = useRef<number | null>(null);
   const animTarget = useRef({ time: 0, open: 0, high: 0, low: 0, close: 0, vol: 0 });
   const animCurrent = useRef({ close: 0, vol: 0 });
