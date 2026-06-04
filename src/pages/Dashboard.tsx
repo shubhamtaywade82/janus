@@ -34,6 +34,7 @@ import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, c
 import { detectMACDSignals, detectADXSignals, detectDirectionFlips, detectStochCross, detectZScoreSignals, detectIchimokuSignals, detectDonchianBreakout, detectNWBandTag, detectVWAPSignals, detectRSIDivergence, detectCVDDivergence } from "@/lib/chart/indicator-signals";
 import type { PriceActionData } from "@/lib/chart/pa-types";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
+import { formatPrice, formatQty, getPriceDecimals } from "@/utils/precision";
 
 // ─── Types ───
 interface KlineData {
@@ -92,7 +93,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     const price = series.coordinateToPrice(y);
     if (price) {
       setHoveredCrosshair({
-        price: parseFloat(price.toFixed(2)),
+        price: parseFloat(price.toFixed(getPriceDecimals(symbol))),
         y,
       });
     } else {
@@ -401,6 +402,19 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       markersPluginRef.current = null;
     };
   }, [chartInitialized]);
+
+  // 1c. Update price scale precision based on selected symbol
+  useEffect(() => {
+    if (!candlestickSeriesRef.current) return;
+    const dec = getPriceDecimals(symbol);
+    candlestickSeriesRef.current.applyOptions({
+      priceFormat: {
+        type: "price",
+        precision: dec,
+        minMove: parseFloat(Math.pow(10, -dec).toFixed(dec)),
+      },
+    });
+  }, [symbol, chartInitialized]);
 
   // 2. Update chart data — setData on full reload, update() on live tick
   useEffect(() => {
@@ -1652,21 +1666,21 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
         <div className="flex items-center justify-between mb-1">
           <span className="text-[#71717a]">Order Book</span>
           {spread > 0 && (
-            <span className="text-[#52525b]">Spread {spread.toFixed(2)} ({spreadPct.toFixed(3)}%)</span>
+            <span className="text-[#52525b]">Spread {formatPrice(spread, symbol)} ({spreadPct.toFixed(3)}%)</span>
           )}
         </div>
         <div className="flex items-center gap-4">
           <div>
             <div className="text-[9px] text-[#71717a]">Futures</div>
             <div className="text-sm font-bold tabular-nums" style={{ color: lastPriceColor }}>
-              {lastPrice > 0 ? <AnimatedNumber value={lastPrice} decimals={2} duration={150} /> : "--"}
+              {lastPrice > 0 ? <AnimatedNumber value={lastPrice} decimals={getPriceDecimals(symbol)} duration={150} /> : "--"}
             </div>
           </div>
           {markPrice && (
             <div>
               <div className="text-[9px] text-[#71717a]">Mark</div>
               <div className="text-sm font-bold tabular-nums text-[#f59e0b]">
-                {markPrice.toFixed(2)}
+                {formatPrice(markPrice, symbol)}
               </div>
             </div>
           )}
@@ -1741,9 +1755,9 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                   {/* Price */}
                   <div className="text-center tabular-nums">
                     {bid ? (
-                      <span className="text-j-up-bright font-medium">{parseFloat(bid[0]).toFixed(2)}</span>
+                      <span className="text-j-up-bright font-medium">{formatPrice(bid[0], symbol)}</span>
                     ) : ask ? (
-                      <span className="text-j-down-bright font-medium">{parseFloat(ask[0]).toFixed(2)}</span>
+                      <span className="text-j-down-bright font-medium">{formatPrice(ask[0], symbol)}</span>
                     ) : ""}
                   </div>
 
@@ -1951,10 +1965,10 @@ const RecentTrades = ({ symbol }: { symbol: string }) => {
                 trade.isBuyerMaker ? "text-j-down" : "text-j-up"
               )}
             >
-              {parseFloat(trade.price).toFixed(2)}
+              {formatPrice(trade.price, symbol, (trade as any).basePrecision)}
             </span>
             <span className="text-[#71717a] tabular-nums">
-              {parseFloat(trade.qty).toFixed(4)}
+              {formatQty(trade.qty, symbol, (trade as any).targetPrecision)}
             </span>
             <span className="text-[#52525b] text-[10px]">
               {new Date(trade.time).toLocaleTimeString()}
@@ -2028,7 +2042,7 @@ const TickerStrip = () => {
         <div key={t.symbol} className="flex items-center gap-2 flex-shrink-0">
           <span className="text-[10px] text-[#71717a] font-medium">{t.symbol}</span>
           <span className="text-[10px] tabular-nums text-[#f4f4f5]">
-            <AnimatedNumber value={parseFloat(t.lastPrice)} decimals={2} duration={150} />
+            <AnimatedNumber value={parseFloat(t.lastPrice)} decimals={getPriceDecimals(t.symbol)} duration={150} />
           </span>
           <span
             className={cn(
@@ -2389,7 +2403,7 @@ const Dashboard = () => {
                     priceChange >= 0 ? "text-j-up" : "text-j-down"
                   )}
                 >
-                  <AnimatedNumber value={lastPrice} decimals={2} duration={150} />
+                  <AnimatedNumber value={lastPrice} decimals={getPriceDecimals(selectedSymbol)} duration={150} />
                 </span>
                 <span
                   className={cn(

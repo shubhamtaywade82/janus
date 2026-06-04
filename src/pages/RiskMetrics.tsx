@@ -15,6 +15,7 @@ import {
   Gauge,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { formatPrice, formatQty } from "@/utils/precision";
 
 const RiskMetrics = () => {
   const [portfolio, setPortfolio] = useState<any>(null);
@@ -466,7 +467,7 @@ const RiskMetrics = () => {
                       </span>
                     </td>
                     <td className="px-3 py-2 text-xs text-[#f4f4f5] tabular-nums">
-                      {parseFloat(pos.size || "0").toFixed(4)}
+                      {formatQty(pos.size, pos.symbol, pos.targetPrecision)}
                     </td>
                     <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
                       {pos.leverage}x
@@ -479,7 +480,7 @@ const RiskMetrics = () => {
                     </td>
                     <td className="px-3 py-2 text-xs text-[#f4f4f5] tabular-nums">
                       {pos.liquidationPrice
-                        ? parseFloat(pos.liquidationPrice).toFixed(2)
+                        ? formatPrice(pos.liquidationPrice, pos.symbol, pos.basePrecision)
                         : "—"}
                     </td>
                     <td className="px-3 py-2">

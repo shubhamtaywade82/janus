@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
+import { formatPrice, formatQty } from "@/utils/precision";
 
 // ─── Position Row ───
 const PositionRow = ({ position, livePrice }: { position: any; livePrice?: number }) => {
@@ -74,13 +75,13 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
         </span>
       </td>
       <td className="px-3 py-2 text-xs text-[#f4f4f5] tabular-nums">
-        {parseFloat(position.entryPrice).toFixed(2)}
+        {formatPrice(position.entryPrice, position.symbol, position.basePrecision)}
       </td>
       <td className={cn("px-3 py-2 text-xs text-[#f4f4f5] tabular-nums rounded", priceFlash)}>
-        <AnimatedNumber value={currentPrice} decimals={2} duration={200} />
+        <AnimatedNumber value={currentPrice} decimals={position.basePrecision ?? 2} duration={200} />
       </td>
       <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
-        {parseFloat(position.size).toFixed(4)}
+        {formatQty(position.size, position.symbol, position.targetPrecision)}
       </td>
       <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
         {position.leverage}x
@@ -136,7 +137,7 @@ const PositionRow = ({ position, livePrice }: { position: any; livePrice?: numbe
               ? "bg-[#f59e0b]/10 text-[#f59e0b]"
               : "bg-j-up/10 text-j-up"
           )}
-          title={`Liq: ${position.liquidationPrice || "--"}`}
+          title={`Liq: ${formatPrice(position.liquidationPrice, position.symbol, position.basePrecision)}`}
         >
           <Shield size={10} className="inline mr-0.5" />
           {liqPercent.toFixed(1)}%
@@ -791,10 +792,10 @@ export default function Portfolio() {
                           </span>
                         </td>
                         <td className="px-3 py-1 text-[10px] text-[#f4f4f5] tabular-nums">
-                          {parseFloat(trade.price).toFixed(2)}
+                          {formatPrice(trade.price, trade.symbol, trade.basePrecision)}
                         </td>
                         <td className="px-3 py-1 text-[10px] text-[#71717a] tabular-nums">
-                          {parseFloat(trade.size).toFixed(4)}
+                          {formatQty(trade.size, trade.symbol, trade.targetPrecision)}
                         </td>
                         <td className="px-3 py-1 text-[10px] text-[#71717a] tabular-nums">
                           {parseFloat(trade.total).toFixed(2)}

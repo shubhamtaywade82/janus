@@ -15,6 +15,7 @@ import {
   getFuturesOrders,
   getUsdtInrRate,
   getCurrencyConversions,
+  getMarketsDetails,
 } from "../services/coindcx";
 import { TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
@@ -24,7 +25,7 @@ import { latestTickerCache, subscribeToSymbol } from "../services/streaming";
 import { globalRiskEngine, getOrCreateSession, sessions, riskEvents } from "../services/risk-engine";
 import { registerPositionForTrailing, unregisterPosition } from "../services/trailing-stop";
 import { globalKillSwitch } from "../services/kill-switch";
-import { releasePaperMargin, lockPaperMargin as lockPaperMarginAsync } from "../services/paper-wallet";
+import { releasePaperMargin } from "../services/paper-wallet";
 import { env } from "../lib/env";
 
 // Wire risk events → tradingEvents so frontend streams pick them up
@@ -67,12 +68,22 @@ export async function fetchPortfolioData(userId: number) {
     try {
       // WS cache is fresher — use it if populated, else REST
       const wsPositions = userPositionsCache.get(userId);
-      const [livePositions, usdtInrRate] = await Promise.all([
+      const [livePositions, usdtInrRate, markets] = await Promise.all([
         wsPositions && wsPositions.length > 0
           ? Promise.resolve(wsPositions)
           : getFuturesPositions({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret }),
         getUsdtInrRate(),
+        getMarketsDetails().catch(() => []),
       ]);
+
+      const getPrecisions = (symbol: string) => {
+        const cdxPair = `B-${symbol.replace("USDT", "_USDT")}`;
+        const m = markets.find((x: any) => x.pair === cdxPair || x.symbol === symbol || x.coindcx_name === symbol);
+        return {
+          basePrecision: m?.base_currency_precision ?? 2,
+          targetPrecision: m?.target_currency_precision ?? 4,
+        };
+      };
 
       // Price priority: CoinDCX mark price (exact) > Binance last price (fast fallback)
       // tickerMap keyed by Binance symbol (ETHUSDT)
@@ -191,6 +202,8 @@ export async function fetchPortfolioData(userId: number) {
             priceChangePct: String(priceChangePct),
             liqDistance: String(liqDistance),
             liqDistancePct: String(liqDistancePct),
+            basePrecision: getPrecisions(symbol).basePrecision,
+            targetPrecision: getPrecisions(symbol).targetPrecision,
           };
         });
 
@@ -199,18 +212,23 @@ export async function fetchPortfolioData(userId: number) {
           { apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret },
           { status: "filled" }
         );
-        recentTrades = filledOrders.slice(0, 20).map((o: any) => ({
-          id: o.id,
-          symbol: o.pair ? o.pair.replace("B-", "").replace("_", "") : o.market,
-          side: o.side,
-          price: o.price_per_unit || o.avg_price || "0",
-          size: o.total_quantity || o.quantity || "0",
-          total: o.total_quantity && o.price_per_unit
-            ? String(parseFloat(o.total_quantity) * parseFloat(o.price_per_unit))
-            : "0",
-          fee: o.fee || "0",
-          createdAt: o.created_at ? new Date(o.created_at) : new Date(),
-        }));
+         recentTrades = filledOrders.slice(0, 20).map((o: any) => {
+          const symbol = o.pair ? o.pair.replace("B-", "").replace("_", "") : o.market;
+          return {
+            id: o.id,
+            symbol,
+            side: o.side,
+            price: o.price_per_unit || o.avg_price || "0",
+            size: o.total_quantity || o.quantity || "0",
+            total: o.total_quantity && o.price_per_unit
+              ? String(parseFloat(o.total_quantity) * parseFloat(o.price_per_unit))
+              : "0",
+            fee: o.fee || "0",
+            createdAt: o.created_at ? new Date(o.created_at) : new Date(),
+            basePrecision: getPrecisions(symbol).basePrecision,
+            targetPrecision: getPrecisions(symbol).targetPrecision,
+          };
+        });
         totalRealizedPnl = filledOrders.reduce(
           (sum: number, o: any) => sum + parseFloat(o.fee || "0") * -1,
           0
@@ -291,6 +309,8 @@ export async function fetchPortfolioData(userId: number) {
         currentPrice: latestTickerCache.get(p.symbol)?.lastPrice?.toString() ?? p.currentPrice,
         unrealizedPnl: p.unrealizedPnl,
         margin: p.margin,
+        basePrecision: getPrecisions(p.symbol).basePrecision,
+        targetPrecision: getPrecisions(p.symbol).targetPrecision,
       }));
 
       const allPositions = [
@@ -349,14 +369,48 @@ export async function fetchPortfolioData(userId: number) {
     0
   );
 
+  const getLocalPrecisions = (symbol: string) => {
+    const defaults: Record<string, { base: number, target: number }> = {
+      BTCUSDT: { base: 2, target: 4 },
+      ETHUSDT: { base: 2, target: 4 },
+      SOLUSDT: { base: 2, target: 3 },
+      BNBUSDT: { base: 2, target: 3 },
+      XRPUSDT: { base: 4, target: 1 },
+      ADAUSDT: { base: 4, target: 1 },
+      DOGEUSDT: { base: 5, target: 0 },
+      AVAXUSDT: { base: 2, target: 2 },
+    };
+    const cleanSym = symbol.replace("B-", "").replace("_", "");
+    const d = defaults[cleanSym] ?? { base: 2, target: 4 };
+    return { basePrecision: d.base, targetPrecision: d.target };
+  };
+
+  const positionsMapped = localPositions.map((p) => {
+    const prec = getLocalPrecisions(p.symbol);
+    return {
+      ...p,
+      basePrecision: prec.basePrecision,
+      targetPrecision: prec.targetPrecision,
+    };
+  });
+
+  const tradesMapped = allTrades.slice(0, 20).map((t) => {
+    const prec = getLocalPrecisions(t.symbol);
+    return {
+      ...t,
+      basePrecision: prec.basePrecision,
+      targetPrecision: prec.targetPrecision,
+    };
+  });
+
   return {
     openPositionsCount: localPositions.length,
     totalUnrealizedPnl: localUnrealizedPnl.toFixed(4),
     totalRealizedPnl: localRealizedPnl.toFixed(4),
     totalMargin: localMargin.toFixed(4),
     totalEquity: localMargin + localUnrealizedPnl,
-    positions: localPositions,
-    recentTrades: allTrades.slice(0, 20),
+    positions: positionsMapped,
+    recentTrades: tradesMapped,
   };
 }
 
@@ -1067,9 +1121,6 @@ export const tradingRouter = createRouter({
       const balance = parseFloat(w.balance);
       const lockedBalance = parseFloat(w.lockedBalance);
       const unrealizedPnl = parseFloat(w.unrealizedPnl);
-      const realizedPnl = parseFloat(w.realizedPnl);
-      const totalAccountEquity = parseFloat(w.totalAccountEquity);
-      const availableBalanceCross = parseFloat(w.availableBalanceCross);
       const crossUserMargin = parseFloat(w.crossUserMargin);
       const crossOrderMargin = parseFloat(w.crossOrderMargin);
 

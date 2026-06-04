@@ -29,7 +29,7 @@ import { registerPositionForTrailing, unregisterPosition } from "./trailing-stop
 import { knnSnapshotCache } from "./knn-supertrend";
 import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
-import { ExitDecision } from "./exit-manager";
+import type { ExitDecision } from "./exit-manager";
 import { snapshotEquity } from "./performance-tracker";
 import { getPaperWallet, lockPaperMargin, releasePaperMargin, getPaperEquity } from "./paper-wallet";
 import { env } from "../lib/env";
@@ -281,7 +281,8 @@ export class AutoExecutor {
       const knnMinConf = 60;
       const knnBias = knnSnap.knn.bias;
       const knnConf = knnSnap.knn.confidence;
-      if (knnBias !== "neutral" && knnConf >= knnMinConf && knnBias !== side) {
+      const biasSide = knnBias === "bullish" ? "long" : knnBias === "bearish" ? "short" : "neutral";
+      if (knnBias !== "neutral" && knnConf >= knnMinConf && biasSide !== side) {
         return this.skip(signal, `KNN: bias=${knnBias} (${knnConf}%) conflicts with signal ${side}`);
       }
       if (knnConf < 40) {
@@ -355,25 +356,32 @@ export class AutoExecutor {
       ? strategyMaxLev
       : Math.min(config.defaultLeverage ?? 3, strategyMaxLev);
 
-    // Validate size against instrument minimums
+    // Validate size and precision against instrument specifications
     let rawSize = notional / currentPrice;
-    if (!isPaperMode && creds[0]) {
-      try {
-        const instrInfo = await getFuturesInstrumentInfo(symbol);
-        if (instrInfo) {
-          const minQty   = parseFloat(instrInfo.min_quantity ?? instrInfo.min_qty ?? "0");
-          const stepSize = parseFloat(instrInfo.step ?? instrInfo.quantity_step ?? "0");
-          if (minQty > 0 && rawSize < minQty) {
-            return this.skip(signal,
-              `size ${rawSize.toFixed(6)} < min qty ${minQty} for ${symbol} — increase defaultSizeUsdt`
-            );
-          }
-          // Round down to nearest step
-          if (stepSize > 0) {
-            rawSize = Math.floor(rawSize / stepSize) * stepSize;
-          }
+    let targetPrecision = 4;
+    let basePrecision = 2;
+    try {
+      const instrInfo = await getFuturesInstrumentInfo(symbol);
+      if (instrInfo) {
+        const minQty   = parseFloat(instrInfo.min_quantity ?? instrInfo.min_qty ?? "0");
+        const stepSize = parseFloat(instrInfo.step ?? instrInfo.quantity_step ?? "0");
+        targetPrecision = instrInfo.target_currency_precision ?? 4;
+        basePrecision = instrInfo.base_currency_precision ?? 2;
+
+        if (minQty > 0 && rawSize < minQty) {
+          return this.skip(signal,
+            `size ${rawSize.toFixed(6)} < min qty ${minQty} for ${symbol} — increase defaultSizeUsdt`
+          );
         }
-      } catch { /* non-fatal — proceed with raw size */ }
+        // Round down to nearest step
+        if (stepSize > 0) {
+          rawSize = Math.floor(rawSize / stepSize) * stepSize;
+        } else {
+          rawSize = parseFloat(rawSize.toFixed(targetPrecision));
+        }
+      }
+    } catch (err) {
+      console.warn(`[auto-executor] Failed to fetch instrument info for precision mapping:`, err);
     }
     const size = rawSize;
     const slPct = parseFloat(config.stopLossPct ?? "0.015");
@@ -392,11 +400,11 @@ export class AutoExecutor {
       symbol,
       side,
       currentPrice,
-      size: parseFloat(size.toFixed(4)),
+      size,
       leverage,
       notional,
-      stopLoss,
-      takeProfit,
+      stopLoss: parseFloat(stopLoss.toFixed(basePrecision)),
+      takeProfit: parseFloat(takeProfit.toFixed(basePrecision)),
       signalId: signal.id ?? undefined,
       strategyType: (regimeData?.strategy ?? "intraday") as StrategyType,
       creds: creds[0],
@@ -483,8 +491,8 @@ export class AutoExecutor {
       size: String(params.size),
       leverage: params.leverage,
       margin: String((params.notional / params.leverage).toFixed(4)),
-      stopLoss: String(params.stopLoss.toFixed(2)),
-      takeProfit: String(params.takeProfit.toFixed(2)),
+      stopLoss: String(params.stopLoss),
+      takeProfit: String(params.takeProfit),
       unrealizedPnl: "0",
       realizedPnl: "0",
       status: "open",
