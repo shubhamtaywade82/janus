@@ -1,9 +1,10 @@
 import { tradingEvents, markPriceCache } from "./coindcx-ws";
-import { latestTickerCache } from "./streaming";
+import { latestTickerCache, marketEvents } from "./streaming";
 import { type StrategyType } from "./strategy-config";
 import { getDb } from "../queries/connection";
 import { positions } from "@db/schema";
 import { eq, and } from "drizzle-orm";
+import { detectSwings, computeAtrArray, type SwingPoint, type Kline } from "./price-action";
 
 // Default trail % per strategy type
 export const TRAIL_PCT: Record<StrategyType, number> = {
@@ -17,28 +18,7 @@ export const TRAIL_PCT: Record<StrategyType, number> = {
   ml_sizing:      0.015,  // 1.5%
 };
 
-export function calcNewTrailingStop(
-  side: "long" | "short",
-  currentStop: number,
-  currentPrice: number,
-  trailPct: number
-): number {
-  if (side === "long") {
-    // Ratchet up: new stop = max(current stop, price * (1 - trail%))
-    return Math.max(currentStop, currentPrice * (1 - trailPct));
-  } else {
-    // Ratchet down: new stop = min(current stop, price * (1 + trail%))
-    return Math.min(currentStop, currentPrice * (1 + trailPct));
-  }
-}
-
-export function shouldStopOut(
-  side: "long" | "short",
-  currentPrice: number,
-  stopLevel: number
-): boolean {
-  return side === "long" ? currentPrice <= stopLevel : currentPrice >= stopLevel;
-}
+const TAKER_FEE = 0.0005;
 
 export interface TrackedPosition {
   id: number;
@@ -52,6 +32,108 @@ export interface TrackedPosition {
 
 const trackedPositions = new Map<number, TrackedPosition>();
 let trailingTimer: ReturnType<typeof setInterval> | null = null;
+
+// In-memory Kline buffer per symbol (keeps last 100 1m klines)
+const klineBufferCache = new Map<string, Kline[]>();
+
+// Listen to global kline updates to build the buffer
+marketEvents.on("kline-update", (symbol: string, kline: any) => {
+  if (!klineBufferCache.has(symbol)) klineBufferCache.set(symbol, []);
+  const buffer = klineBufferCache.get(symbol)!;
+  // If the new kline is the same closeTime as the last one, update it.
+  if (buffer.length > 0 && buffer[buffer.length - 1].time === kline.openTime) {
+    buffer[buffer.length - 1] = {
+      time: kline.openTime,
+      open: parseFloat(kline.open),
+      high: parseFloat(kline.high),
+      low: parseFloat(kline.low),
+      close: parseFloat(kline.close),
+      volume: parseFloat(kline.volume),
+    };
+  } else {
+    buffer.push({
+      time: kline.openTime,
+      open: parseFloat(kline.open),
+      high: parseFloat(kline.high),
+      low: parseFloat(kline.low),
+      close: parseFloat(kline.close),
+      volume: parseFloat(kline.volume),
+    });
+    if (buffer.length > 100) buffer.shift();
+  }
+});
+
+export function calcNewTrailingStop(
+  side: "long" | "short",
+  currentStop: number,
+  currentPrice: number,
+  trailPct: number,
+  klines: Kline[],
+  entryPrice: number
+): number {
+  let newStop = currentStop;
+  
+  if (klines.length >= 20) {
+    // 1. Market Structure Exit
+    const swings = detectSwings(klines, 5);
+    if (side === "long") {
+      // Find the most recent Swing Low that is > entryPrice
+      const recentLows = swings.filter(s => s.type === "low" && s.price > entryPrice).sort((a, b) => b.time - a.time);
+      if (recentLows.length > 0) {
+        newStop = Math.max(currentStop, recentLows[0].price);
+      } else {
+        // Fallback to Chandelier Exit (ATR)
+        const atrs = computeAtrArray(klines, 14);
+        const atr = atrs[atrs.length - 1];
+        const highestHigh = Math.max(...klines.slice(-14).map(k => k.high));
+        const chandelierStop = highestHigh - (atr * 2.5);
+        newStop = Math.max(currentStop, chandelierStop, currentPrice * (1 - trailPct));
+      }
+    } else {
+      // Find the most recent Swing High that is < entryPrice
+      const recentHighs = swings.filter(s => s.type === "high" && s.price < entryPrice).sort((a, b) => b.time - a.time);
+      if (recentHighs.length > 0) {
+        newStop = Math.min(currentStop, recentHighs[0].price);
+      } else {
+        // Fallback to Chandelier Exit (ATR)
+        const atrs = computeAtrArray(klines, 14);
+        const atr = atrs[atrs.length - 1];
+        const lowestLow = Math.min(...klines.slice(-14).map(k => k.low));
+        const chandelierStop = lowestLow + (atr * 2.5);
+        newStop = Math.min(currentStop, chandelierStop, currentPrice * (1 + trailPct));
+      }
+    }
+  } else {
+    // Basic Ratchet
+    if (side === "long") {
+      newStop = Math.max(currentStop, currentPrice * (1 - trailPct));
+    } else {
+      newStop = Math.min(currentStop, currentPrice * (1 + trailPct));
+    }
+  }
+
+  // 2. Fee-Aware Breakeven Logic (1:1 RR based on static trailPct risk)
+  const initialRiskLevel = side === "long" ? entryPrice * (1 - trailPct) : entryPrice * (1 + trailPct);
+  const initialRisk = Math.abs(entryPrice - initialRiskLevel);
+  
+  if (side === "long" && currentPrice >= entryPrice + initialRisk) {
+    const breakeven = entryPrice * (1 + TAKER_FEE * 2);
+    newStop = Math.max(newStop, breakeven);
+  } else if (side === "short" && currentPrice <= entryPrice - initialRisk) {
+    const breakeven = entryPrice * (1 - TAKER_FEE * 2);
+    newStop = Math.min(newStop, breakeven);
+  }
+
+  return newStop;
+}
+
+export function shouldStopOut(
+  side: "long" | "short",
+  currentPrice: number,
+  stopLevel: number
+): boolean {
+  return side === "long" ? currentPrice <= stopLevel : currentPrice >= stopLevel;
+}
 
 export function registerPositionForTrailing(pos: TrackedPosition) {
   trackedPositions.set(pos.id, { ...pos });
@@ -78,7 +160,7 @@ function ensureTrailingEngine() {
       if (!currentPrice || currentPrice <= 0) continue;
 
       const trailPct = TRAIL_PCT[pos.strategyType];
-
+      
       // Check stop-out first
       if (shouldStopOut(pos.side, currentPrice, pos.stopLoss)) {
         tradingEvents.emit(`exit-signal:${pos.userId}`, {
@@ -100,7 +182,9 @@ function ensureTrailingEngine() {
       }
 
       // Ratchet stop
-      const newStop = calcNewTrailingStop(pos.side, pos.stopLoss, currentPrice, trailPct);
+      const klines = klineBufferCache.get(pos.symbol) || [];
+      const newStop = calcNewTrailingStop(pos.side, pos.stopLoss, currentPrice, trailPct, klines, pos.entryPrice);
+      
       if (Math.abs(newStop - pos.stopLoss) > 1e-8) {
         pos.stopLoss = newStop;
         db.update(positions)

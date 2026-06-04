@@ -241,8 +241,8 @@ export function subscribeToSymbol(symbol: string) {
           quoteVolume: k.q,
           trades: k.n,
         };
-
         marketEvents.emit(`${symbol}:kline`, formattedKline);
+        marketEvents.emit(`kline-update`, symbol, formattedKline);
 
         // Throttle kline updates in DB
         const now = Date.now();
