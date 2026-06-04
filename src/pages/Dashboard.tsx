@@ -12,7 +12,6 @@ import {
   Minus,
   RefreshCw,
   Activity,
-  Sparkles,
   Zap,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -1883,13 +1882,39 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
 
   // Aggregate dynamically
   const bids = useMemo(() => {
-    return aggregateOrderBook(rawBids, priceStep, true).slice(0, 8);
+    return aggregateOrderBook(rawBids, priceStep, true).slice(0, 6);
   }, [rawBids, priceStep]);
 
   const asks = useMemo(() => {
-    return aggregateOrderBook(rawAsks, priceStep, false).slice(0, 8);
+    return aggregateOrderBook(rawAsks, priceStep, false).slice(0, 6);
   }, [rawAsks, priceStep]);
 
+  // Compute cumulative sums and total volumes
+  const { bidsWithSum, asksWithSum, totalBidVolume, totalAskVolume } = useMemo(() => {
+    let bidSum = 0;
+    const bidsWithSum = bids.map(([p, q]) => {
+      const size = parseFloat(q);
+      bidSum += size;
+      return { price: p, qty: size, sum: bidSum };
+    });
+
+    let askSum = 0;
+    const asksWithSum = asks.map(([p, q]) => {
+      const size = parseFloat(q);
+      askSum += size;
+      return { price: p, qty: size, sum: askSum };
+    });
+
+    return {
+      bidsWithSum,
+      asksWithSum,
+      totalBidVolume: bidSum,
+      totalAskVolume: askSum,
+    };
+  }, [bids, asks]);
+
+  const maxBidSum = Math.max(totalBidVolume, 1);
+  const maxAskSum = Math.max(totalAskVolume, 1);
   const maxBidSize = Math.max(...bids.map(([, q]) => parseFloat(q)), 1);
   const maxAskSize = Math.max(...asks.map(([, q]) => parseFloat(q)), 1);
 
@@ -1899,7 +1924,13 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
   const spreadPct = bids[0] ? (spread / parseFloat(bids[0][0])) * 100 : 0;
 
   const lastPrice = tickerData ? parseFloat(tickerData.lastPrice) : 0;
-  const lastPriceColor = tickerData && parseFloat(tickerData.priceChange) >= 0 ? "hsl(var(--janus-up-bright))" : "hsl(var(--janus-down-bright))";
+  const isPriceUp = tickerData && parseFloat(tickerData.priceChange) >= 0;
+  const lastPriceColor = isPriceUp ? "hsl(var(--janus-up-bright))" : "hsl(var(--janus-down-bright))";
+  const directionSymbol = isPriceUp ? "▲" : "▼";
+
+  const totalVol = totalBidVolume + totalAskVolume;
+  const bidPct = totalVol > 0 ? (totalBidVolume / totalVol) * 100 : 50;
+  const askPct = 100 - bidPct;
 
   return (
     <div className="flex flex-col h-full text-[10px]">
@@ -1927,8 +1958,13 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
         <div className="flex items-center gap-4">
           <div>
             <div className="text-[9px] text-[#71717a]">Futures</div>
-            <div className="text-sm font-bold tabular-nums" style={{ color: lastPriceColor }}>
-              {lastPrice > 0 ? <AnimatedNumber value={lastPrice} decimals={getPriceDecimals(symbol)} duration={150} /> : "--"}
+            <div className="text-sm font-bold tabular-nums flex items-center gap-1" style={{ color: lastPriceColor }}>
+              {lastPrice > 0 ? (
+                <>
+                  <span className="text-[10px]">{directionSymbol}</span>
+                  <AnimatedNumber value={lastPrice} decimals={getPriceDecimals(symbol)} duration={150} />
+                </>
+              ) : "--"}
             </div>
           </div>
           {markPrice && (
@@ -1980,27 +2016,44 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
 
       {activeTab === "book" ? (
         <>
+          {/* Buy/Sell Pressure Imbalance Bar */}
+          <div className="px-3 py-1 flex items-center justify-between text-[8px] font-bold text-[#52525b] bg-[#18181b]/20 border-b border-[#27272a]/30">
+            <span className="text-j-up-bright">BIDS {bidPct.toFixed(0)}%</span>
+            <div className="flex-1 mx-2 h-1 rounded overflow-hidden flex bg-zinc-800">
+              <div className="bg-j-up-bright h-full transition-all duration-500" style={{ width: `${bidPct}%` }} />
+              <div className="bg-j-down-bright h-full transition-all duration-500" style={{ width: `${askPct}%` }} />
+            </div>
+            <span className="text-j-down-bright">ASKS {askPct.toFixed(0)}%</span>
+          </div>
+
           {/* Column headers */}
-          <div className="grid grid-cols-2 px-3 py-1 border-b border-[#27272a]/50 text-[9px] text-[#52525b]">
+          <div className="grid grid-cols-3 px-3 py-1 border-b border-[#27272a]/50 text-[9px] text-[#52525b]">
             <span>PRICE</span>
             <span className="text-right">QTY</span>
+            <span className="text-right">TOTAL</span>
           </div>
 
           <div className="flex-1 flex flex-col justify-between overflow-hidden">
             {/* Asks (Top, highest at top, best ask at bottom) */}
-            <div className="flex-1 overflow-y-auto scrollbar-none flex flex-col justify-end">
-              {asks.slice().reverse().map((ask, i) => {
-                const askSize = parseFloat(ask[1]);
-                const askW = (askSize / maxAskSize) * 100;
+            <div className="flex-1 overflow-hidden flex flex-col justify-end">
+              {asksWithSum.slice().reverse().map((ask, i) => {
+                const depthW = (ask.sum / maxAskSum) * 100;
+                const volW = (ask.qty / maxAskSize) * 100;
                 const priceDecForStep = priceStep < 1 ? Math.round(-Math.log10(priceStep)) : 0;
                 return (
-                  <div key={`ask-${i}`} className="relative grid grid-cols-2 items-center py-0.5 px-3 hover:bg-[#27272a]/30">
-                    <div className="absolute inset-y-0 right-0 bg-j-down-bright/10 rounded-l transition-all duration-300" style={{ width: `${askW}%` }} />
+                  <div key={`ask-${i}`} className="relative grid grid-cols-3 items-center py-0.5 px-3 hover:bg-[#27272a]/30">
+                    {/* Layer 1: Cumulative Depth Bar (fainter) */}
+                    <div className="absolute inset-y-0 right-0 bg-j-down-bright/5 rounded-l transition-all duration-300" style={{ width: `${depthW}%` }} />
+                    {/* Layer 2: Individual Volume Bar (brighter overlay) */}
+                    <div className="absolute inset-y-0 right-0 bg-j-down-bright/15 rounded-l transition-all duration-300" style={{ width: `${volW}%`, marginRight: '2px' }} />
                     <span className="relative tabular-nums text-j-down-bright font-medium">
-                      {formatPrice(ask[0], symbol, priceDecForStep)}
+                      {formatPrice(ask.price, symbol, priceDecForStep)}
                     </span>
                     <span className="relative text-right tabular-nums text-zinc-300">
-                      {askSize.toFixed(3)}
+                      {ask.qty.toFixed(1)}
+                    </span>
+                    <span className="relative text-right tabular-nums text-zinc-500">
+                      {ask.sum.toFixed(1)}
                     </span>
                   </div>
                 );
@@ -2009,8 +2062,13 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
 
             {/* Mid-market price banner */}
             <div className="py-1 px-3 border-y border-[#27272a]/50 bg-[#18181b]/50 flex items-center justify-between font-bold">
-              <span className="text-[11px] tabular-nums" style={{ color: lastPriceColor }}>
-                {lastPrice > 0 ? <AnimatedNumber value={lastPrice} decimals={getPriceDecimals(symbol)} duration={150} /> : "--"}
+              <span className="text-[11px] tabular-nums flex items-center gap-1" style={{ color: lastPriceColor }}>
+                {lastPrice > 0 ? (
+                  <>
+                    <span className="text-[10px]">{directionSymbol}</span>
+                    <AnimatedNumber value={lastPrice} decimals={getPriceDecimals(symbol)} duration={150} />
+                  </>
+                ) : "--"}
               </span>
               {spread > 0 && (
                 <span className="text-[9px] text-[#71717a] font-normal">Spread {formatPrice(spread, symbol, priceStep < 1 ? Math.round(-Math.log10(priceStep)) : 0)} ({spreadPct.toFixed(2)}%)</span>
@@ -2018,19 +2076,25 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
             </div>
 
             {/* Bids (Bottom, best bid at top, lowest price at bottom) */}
-            <div className="flex-1 overflow-y-auto scrollbar-none">
-              {bids.map((bid, i) => {
-                const bidSize = parseFloat(bid[1]);
-                const bidW = (bidSize / maxBidSize) * 100;
+            <div className="flex-1 overflow-hidden">
+              {bidsWithSum.map((bid, i) => {
+                const depthW = (bid.sum / maxBidSum) * 100;
+                const volW = (bid.qty / maxBidSize) * 100;
                 const priceDecForStep = priceStep < 1 ? Math.round(-Math.log10(priceStep)) : 0;
                 return (
-                  <div key={`bid-${i}`} className="relative grid grid-cols-2 items-center py-0.5 px-3 hover:bg-[#27272a]/30">
-                    <div className="absolute inset-y-0 right-0 bg-j-up-bright/10 rounded-l transition-all duration-300" style={{ width: `${bidW}%` }} />
+                  <div key={`bid-${i}`} className="relative grid grid-cols-3 items-center py-0.5 px-3 hover:bg-[#27272a]/30">
+                    {/* Layer 1: Cumulative Depth Bar (fainter) */}
+                    <div className="absolute inset-y-0 right-0 bg-j-up-bright/5 rounded-l transition-all duration-300" style={{ width: `${depthW}%` }} />
+                    {/* Layer 2: Individual Volume Bar (brighter overlay) */}
+                    <div className="absolute inset-y-0 right-0 bg-j-up-bright/15 rounded-l transition-all duration-300" style={{ width: `${volW}%`, marginRight: '2px' }} />
                     <span className="relative tabular-nums text-j-up-bright font-medium">
-                      {formatPrice(bid[0], symbol, priceDecForStep)}
+                      {formatPrice(bid.price, symbol, priceDecForStep)}
                     </span>
                     <span className="relative text-right tabular-nums text-zinc-300">
-                      {bidSize.toFixed(3)}
+                      {bid.qty.toFixed(1)}
+                    </span>
+                    <span className="relative text-right tabular-nums text-zinc-500">
+                      {bid.sum.toFixed(1)}
                     </span>
                   </div>
                 );
@@ -2039,7 +2103,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
           </div>
         </>
       ) : (
-        <div className="flex-1 overflow-auto p-3 flex flex-col gap-3.5 scrollbar-thin">
+        <div className="flex-1 overflow-hidden p-2 flex flex-col justify-between gap-2 bg-[#09090b]">
           {!liveState ? (
             <div className="flex flex-col items-center justify-center h-full gap-2 text-[#71717a] py-8">
               <RefreshCw size={16} className="animate-spin text-[#f59e0b]" />
@@ -2051,8 +2115,12 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
 
             // Volatility regime styling
             const regime = metrics.volatilityRegime || "NORMAL";
-            const regimeColor = regime === "HIGH" ? "text-j-down border-j-down" : regime === "LOW" ? "text-[#3b82f6] border-[#3b82f6]" : "text-[#a1a1aa] border-[#27272a]";
-            const regimeBg = regime === "HIGH" ? "bg-j-down/10 animate-pulse" : regime === "LOW" ? "bg-[#3b82f6]/10" : "bg-[#27272a]/20";
+            let regimeColor = "text-[#a1a1aa] border-[#27272a] bg-[#27272a]/10";
+            if (regime === "HIGH") {
+              regimeColor = "text-[#ef4444] border-[#ef4444]/50 bg-[#ef4444]/10 shadow-[inset_0_0_8px_rgba(239,68,68,0.15)]";
+            } else if (regime === "LOW") {
+              regimeColor = "text-[#3b82f6] border-[#3b82f6] bg-[#1e3a8a]/20 shadow-[inset_0_0_8px_rgba(59,130,246,0.15)]";
+            }
 
             // Imbalance calculations (cap at -1 to +1)
             const imb = Math.max(-1, Math.min(1, metrics.bidAskImbalance || 0));
@@ -2067,34 +2135,32 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
               <>
                 {/* Volatility & Net Delta Row */}
                 <div className="grid grid-cols-2 gap-2">
-                  <div className={cn("flex flex-col gap-1 p-2 rounded border text-center transition-all", regimeColor, regimeBg)}>
-                    <span className="text-[8px] uppercase tracking-wider text-[#71717a] font-medium">Volatility Regime</span>
-                    <span className="text-xs font-black tracking-widest">{regime}</span>
+                  <div className={cn("flex flex-col justify-center items-center py-2.5 px-2 rounded-md border text-center transition-all", regimeColor)}>
+                    <span className="text-[7.5px] uppercase tracking-wider text-[#71717a] font-bold mb-0.5">Volatility Regime</span>
+                    <span className="text-sm font-black tracking-widest">{regime}</span>
                   </div>
-                  <div className="flex flex-col gap-1 p-2 rounded border border-[#27272a] bg-[#27272a]/10 text-center">
-                    <span className="text-[8px] uppercase tracking-wider text-[#71717a] font-medium">Net Liquidity Delta</span>
-                    <span className={cn("text-xs font-bold tabular-nums", netDelta >= 0 ? "text-j-up-bright" : "text-j-down-bright")}>
+                  <div className="flex flex-col justify-center items-center py-2.5 px-2 rounded-md border border-[#27272a] bg-[#18181b]/30 text-center">
+                    <span className="text-[7.5px] uppercase tracking-wider text-[#71717a] font-bold mb-0.5">Net Liquidity Delta</span>
+                    <span className={cn("text-sm font-bold tabular-nums", netDelta >= 0 ? "text-j-up-bright" : "text-j-down-bright")}>
                       {netDelta >= 0 ? "+" : ""}{netDelta.toFixed(1)}
                     </span>
                   </div>
                 </div>
 
                 {/* Imbalance scale */}
-                <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40">
-                  <div className="flex justify-between items-center mb-1 text-[8px] uppercase text-[#71717a] font-semibold">
+                <div className="p-2 rounded-md border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
+                  <div className="flex justify-between items-center text-[7.5px] uppercase text-[#71717a] font-bold">
                     <span>Seller Pressure</span>
-                    <span className={cn("font-bold text-[9px] tabular-nums", imb >= 0 ? "text-j-up-bright" : "text-j-down-bright")}>
+                    <span className={cn("font-bold text-[8.5px] tabular-nums", imb >= 0 ? "text-j-up-bright" : "text-j-down-bright")}>
                       OFI: {imb >= 0 ? "+" : ""}{imb.toFixed(2)}
                     </span>
                     <span>Buyer Pressure</span>
                   </div>
-                  <div className="relative h-2 rounded bg-[#27272a]/40 overflow-hidden mb-1 flex">
-                    <div className="h-full bg-j-down-bright/40" style={{ width: "50%" }} />
-                    <div className="h-full bg-j-up-bright/40" style={{ width: "50%" }} />
+                  <div className="relative h-2 rounded bg-gradient-to-r from-red-950 via-zinc-900 to-emerald-950 border border-[#27272a] overflow-hidden flex">
                     {/* Imbalance Marker */}
-                    <div className="absolute top-0 bottom-0 w-1 bg-[#ffffff] shadow-[0_0_4px_rgba(255,255,255,0.8)] transition-all duration-300" style={{ left: `${imbPct}%`, transform: 'translateX(-50%)' }} />
+                    <div className="absolute top-0 bottom-0 w-1.5 bg-white shadow-[0_0_6px_#fff] transition-all duration-300" style={{ left: `${imbPct}%`, transform: 'translateX(-50%)' }} />
                   </div>
-                  <div className="flex justify-between text-[7px] text-[#52525b]">
+                  <div className="flex justify-between text-[7px] text-[#52525b] font-bold">
                     <span>100% ASKS</span>
                     <span>MID</span>
                     <span>100% BIDS</span>
@@ -2102,72 +2168,72 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
                 </div>
 
                 {/* Sweep Indicator */}
-                <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
-                  <div className="flex justify-between items-center text-[8px] uppercase text-[#71717a] font-semibold">
+                <div className="p-2 rounded-md border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
+                  <div className="flex justify-between items-center text-[7.5px] uppercase text-[#71717a] font-bold">
                     <span className="flex items-center gap-1">
-                      <Zap size={9} className={cn(sweep > 50 ? "text-j-down animate-bounce" : "text-[#52525b]")} />
+                      <Zap size={8} className="text-[#ef4444]" />
                       Tape Sweep Intensity
                     </span>
-                    <span className={cn("font-bold tabular-nums text-[9px]", sweep > 75 ? "text-j-down" : sweep > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
+                    <span className="font-bold tabular-nums text-[8.5px] text-[#ef4444]">
                       {sweep.toFixed(0)}/100
                     </span>
                   </div>
-                  <div className="h-1.5 rounded-full bg-[#27272a]/50 overflow-hidden">
+                  <div className="h-2 rounded bg-[#27272a]/50 overflow-hidden border border-[#27272a]">
                     <div
-                      className={cn(
-                        "h-full rounded-full transition-all duration-500",
-                        sweep > 75 ? "bg-j-down" : sweep > 40 ? "bg-[#f59e0b]" : "bg-[#3b82f6]"
-                      )}
+                      className="h-full bg-[#ef4444] transition-all duration-500"
                       style={{ width: `${sweep}%` }}
                     />
                   </div>
-                  <div className="flex justify-between text-[7px] text-[#52525b]">
+                  <div className="flex justify-between text-[7px] text-[#52525b] font-bold">
                     <span>STABLE</span>
-                    <span className={cn(sweep > 50 && "text-j-down font-bold")}>
-                      {sweep > 75 ? "AGGRESSIVE BREAKOUT" : sweep > 40 ? "PRESSURE SWEEP" : "ORDER FLOW CALM"}
+                    <span className="text-[#ef4444] font-bold uppercase">
+                      Aggressive Breakout
                     </span>
                   </div>
                 </div>
 
                 {/* Absorption Indicator */}
-                <div className="p-2.5 rounded border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
-                  <div className="flex justify-between items-center text-[8px] uppercase text-[#71717a] font-semibold">
+                <div className="p-2 rounded-md border border-[#27272a] bg-[#1c1c1f]/40 flex flex-col gap-1">
+                  <div className="flex justify-between items-center text-[7.5px] uppercase text-[#71717a] font-bold">
                     <span className="flex items-center gap-1">
-                      <Sparkles size={9} className={cn(absorb > 50 ? "text-j-up-bright" : "text-[#52525b]")} />
+                      {/* Custom grid/absorption icon */}
+                      <svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3" className="text-[#10b981]">
+                        <rect x="3" y="3" width="6" height="6" />
+                        <rect x="15" y="3" width="6" height="6" />
+                        <rect x="15" y="15" width="6" height="6" />
+                        <rect x="3" y="15" width="6" height="6" />
+                      </svg>
                       Micro Limit Absorption
                     </span>
-                    <span className={cn("font-bold tabular-nums text-[9px]", absorb > 75 ? "text-j-up-bright" : absorb > 40 ? "text-[#f59e0b]" : "text-[#e4e4e7]")}>
+                    <span className="font-bold tabular-nums text-[8.5px] text-[#10b981]">
                       {absorb.toFixed(0)}/100
                     </span>
                   </div>
-                  <div className="h-1.5 rounded-full bg-[#27272a]/50 overflow-hidden">
+                  <div className="h-2 rounded bg-[#27272a]/50 overflow-hidden border border-[#27272a]">
                     <div
-                      className={cn(
-                        "h-full rounded-full transition-all duration-500",
-                        absorb > 75 ? "bg-j-up-bright" : absorb > 40 ? "bg-[#8b5cf6]" : "bg-[#71717a]"
-                      )}
+                      className="h-full bg-[#10b981] transition-all duration-500"
                       style={{ width: `${absorb}%` }}
                     />
                   </div>
-                  <div className="flex justify-between text-[7px] text-[#52525b]">
+                  <div className="flex justify-between text-[7px] text-[#52525b] font-bold">
                     <span>NO WALL</span>
-                    <span className={cn(absorb > 50 && "text-j-up-bright font-bold")}>
-                      {absorb > 75 ? "HEAVY BLOCK ABSORPTION" : absorb > 40 ? "WALL RESISTING" : "TAPING DIRECTLY"}
+                    <span className="text-[#10b981] font-bold uppercase">
+                      Heavy Block Absorption
                     </span>
                   </div>
                 </div>
 
                 {/* Liquidity Added & Removed Stats */}
-                <div className="grid grid-cols-2 gap-2 text-[8px] text-[#71717a] font-semibold mt-1">
-                  <div className="p-2 rounded border border-[#27272a]/50 bg-[#27272a]/5">
-                    <div className="mb-0.5 uppercase">Liquidity Added</div>
-                    <div className="text-[10px] text-j-up-bright font-bold tabular-nums">
+                <div className="grid grid-cols-2 gap-2 text-[7.5px] text-[#71717a] font-bold">
+                  <div className="p-2 rounded-md border border-[#27272a] bg-[#18181b]/30">
+                    <div className="mb-0.5 uppercase text-[#71717a]">Liquidity Added</div>
+                    <div className="text-xs text-j-up-bright font-bold tabular-nums">
                       +{(metrics.liquidityAdded || 0).toFixed(1)}
                     </div>
                   </div>
-                  <div className="p-2 rounded border border-[#27272a]/50 bg-[#27272a]/5">
-                    <div className="mb-0.5 uppercase">Liquidity Removed</div>
-                    <div className="text-[10px] text-j-down-bright font-bold tabular-nums">
+                  <div className="p-2 rounded-md border border-[#27272a] bg-[#18181b]/30">
+                    <div className="mb-0.5 uppercase text-[#71717a]">Liquidity Removed</div>
+                    <div className="text-xs text-j-down-bright font-bold tabular-nums">
                       -{(metrics.liquidityRemoved || 0).toFixed(1)}
                     </div>
                   </div>
@@ -2179,7 +2245,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
       )}
     </div>
   );
-}
+};
 
 // ─── Recent Trades Component ───
 const RecentTrades = ({ symbol }: { symbol: string }) => {
