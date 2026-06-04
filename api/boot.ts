@@ -126,3 +126,7 @@ globalLlmAdvisor.init().catch((err) => {
 });
 
 console.log(`[auto-executor] AUTO_EXECUTE=${env.autoExecute} | PLACE_ORDERS=${env.placeOrders}`);
+
+// Start AI position lifecycle manager (after LLM advisor is initialized)
+import { positionLifecycleManager } from "./services/position-manager/index";
+setTimeout(() => positionLifecycleManager.start().catch(console.error), 5_000);
