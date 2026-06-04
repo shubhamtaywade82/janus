@@ -125,4 +125,13 @@ globalLlmAdvisor.init().catch((err) => {
   console.error("[llm-advisor] Init failed:", err);
 });
 
+// Start AI-based position lifecycle manager
+import { positionLifecycleManager } from "./services/position-manager/index";
+// Delay start by 5s to let WS connections stabilize
+setTimeout(() => {
+  positionLifecycleManager.start().catch((err) => {
+    console.error("[position-lifecycle] Failed to start:", err);
+  });
+}, 5_000);
+
 console.log(`[auto-executor] AUTO_EXECUTE=${env.autoExecute} | PLACE_ORDERS=${env.placeOrders}`);

@@ -7,6 +7,7 @@ import { telegramRouter } from "./routers/telegram-router";
 import { botRouter } from "./routers/bot-router";
 import { autoExecutorRouter } from "./routers/auto-executor-router";
 import { llmRouter } from "./routers/llm-router";
+import { positionManagerRouter } from "./routers/position-manager-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -20,6 +21,7 @@ export const appRouter = createRouter({
   bot: botRouter,
   autoExecutor: autoExecutorRouter,
   llm: llmRouter,
+  positionManager: positionManagerRouter,
 });
 
 export type AppRouter = typeof appRouter;
