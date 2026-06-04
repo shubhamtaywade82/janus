@@ -453,7 +453,8 @@ export class LiquidityEngine extends EventEmitter {
       
       // Broadcast extreme high-priority events to Telegram
       if (ev.priority === "SSS" || ev.priority === "SS") {
-        const text = `🚨 <b>[${ev.priority}] ${ev.symbol} Liquidity Alert</b>\n\n<b>Type:</b> ${ev.type.replace(/_/g, " ")}\n<b>Message:</b> ${ev.message}`;
+        const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const text = `🚨 <b>[${ev.priority}] ${esc(ev.symbol)} Liquidity Alert</b>\n\n<b>Type:</b> ${esc(ev.type.replace(/_/g, " "))}\n<b>Message:</b> ${esc(ev.message)}`;
         broadcastTelegramAlert(text).catch(err => console.error("Failed to broadcast telegram alert", err));
       }
     }

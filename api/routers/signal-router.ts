@@ -1044,7 +1044,10 @@ function scoreSignalsForAnalysis(params: {
   if (params.volume.climax_volume) reversalConfidence += 8;
   if (params.liquidations.longNotional > params.liquidations.shortNotional * 1.5 || params.liquidations.shortNotional > params.liquidations.longNotional * 1.5) reversalConfidence += 8;
 
-  const alignedTfs = Object.values(params.mtf).filter((tf) => tf.trend === params.overallBias).length;
+  // Gate continuation scoring: neutral bias means no directional conviction
+  const alignedTfs = params.overallBias !== "NEUTRAL"
+    ? Object.values(params.mtf).filter((tf) => tf.trend === params.overallBias).length
+    : 0;
   let continuationConfidence = alignedTfs * 12;
   if (params.cvd.trend === "CONTINUATION") continuationConfidence += 18;
   if (params.volume.relative_volume > 1.5) continuationConfidence += 10;
@@ -1456,7 +1459,12 @@ export const signalRouter = createRouter({
       const h1Candles = candlesByTf.get("1h") ?? [];
       const primaryCandles = oneMinCandles.length >= 20 ? oneMinCandles : (h1Candles.length >= 20 ? h1Candles : (candlesByTf.get("5m") ?? []));
       const currentPrice = state?.ltp || primaryCandles[primaryCandles.length - 1]?.close || 0;
-      const previousPrice = h1Candles[0]?.close || primaryCandles[0]?.close || currentPrice;
+      // For OI interpretation: compare price against 24h ago, not oldest candle in buffer
+      const oneDayAgoMs = Date.now() - 24 * 60 * 60 * 1000;
+      const h1Candle24h = h1Candles.length > 0
+        ? h1Candles.reduce((best, c) => Math.abs(c.timestamp - oneDayAgoMs) < Math.abs(best.timestamp - oneDayAgoMs) ? c : best)
+        : null;
+      const previousPrice = h1Candle24h?.close || primaryCandles[0]?.close || currentPrice;
 
       const structureByTf = new Map<AnalysisTimeframe, TimeframeStructure>();
       const mtf: AnalysisResult["multi_timeframe"] = {};
