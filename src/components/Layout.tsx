@@ -199,12 +199,19 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
     { staleTime: 0 }
   );
 
-  // Subscribe to signal stream via WebSockets
-  trpc.signal.stream.useSubscription(undefined, {
-    onData: () => {
+  const onDataRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    onDataRef.current = () => {
       refetch();
-    },
+    };
+  }, [refetch]);
+
+  const streamOpts = useRef({
+    onData: () => onDataRef.current(),
   });
+
+  // Subscribe to signal stream via WebSockets
+  trpc.signal.stream.useSubscription(undefined, streamOpts.current);
 
   useEffect(() => {
     if (!signals || !Array.isArray(signals)) return;
