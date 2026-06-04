@@ -450,6 +450,15 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     // Lazy load older candles when user scrolls to the left edge
     chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (!range) return;
+
+      // Save visible range (zoom level & scroll position) to localStorage
+      try {
+        localStorage.setItem("janus_chart_logical_range", JSON.stringify({
+          from: range.from,
+          to: range.to
+        }));
+      } catch (err) {}
+
       // When left edge approaches the first bar (< 5 bars left of data start)
       if (range.from > 5) return;
       if (isLoadingMoreRef.current) return;
@@ -610,8 +619,23 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
 
       const isSymbolOrIntervalChange = prevSymbolRef.current !== symbol || prevIntervalRef.current !== interval;
       if (chartRef.current && isSymbolOrIntervalChange) {
-        chartRef.current.timeScale().fitContent();
-        chartRef.current.timeScale().scrollToPosition(8, false);
+        const storedRange = localStorage.getItem("janus_chart_logical_range");
+        let restored = false;
+        if (storedRange) {
+          try {
+            const parsed = JSON.parse(storedRange);
+            if (typeof parsed.from === "number" && typeof parsed.to === "number") {
+              chartRef.current.timeScale().setVisibleLogicalRange(parsed);
+              restored = true;
+            }
+          } catch (err) {
+            console.warn("[chart] Failed to restore chart logical range:", err);
+          }
+        }
+        if (!restored) {
+          chartRef.current.timeScale().fitContent();
+          chartRef.current.timeScale().scrollToPosition(8, false);
+        }
       }
       // Reset animation state on full reload
       animCurrent.current.close = 0;
