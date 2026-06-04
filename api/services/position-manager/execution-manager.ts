@@ -3,6 +3,7 @@ import { PositionAction as PA } from "./types";
 import { positionStore } from "./position-store";
 import { positionManagerBus } from "./event-bus";
 import { createFuturesOrder } from "../coindcx";
+import { env } from "../../lib/env";
 import { getDb } from "../../queries/connection";
 import { positions, exchangeCredentials } from "@db/schema";
 import { eq, and } from "drizzle-orm";
@@ -96,7 +97,7 @@ export async function executeAction(
         const exitPct = recommendation.exitSizePct ?? 0.5;
         const exitQty = position.quantity * exitPct;
 
-        if (!position.isPaper) {
+        if (!position.isPaper && env.placeOrders) {
           try {
             const creds = await fetchCredentials(userId);
             const coindcxSide = position.side === "LONG" ? "sell" : "buy";
@@ -134,15 +135,15 @@ export async function executeAction(
 
       // ── Full exit ───────────────────────────────────────────────────────
       case PA.FULL_EXIT: {
-        if (!position.isPaper) {
+        if (!position.isPaper && env.placeOrders) {
           try {
             const creds = await fetchCredentials(userId);
             const coindcxSide = position.side === "LONG" ? "sell" : "buy";
             await createFuturesOrder(creds, {
-              pair: position.symbol,
+              market: position.symbol,
               side: coindcxSide,
-              order_type: "market_order",
-              quantity: position.quantity,
+              order_type: "market",
+              total_quantity: position.quantity,
               leverage: position.leverage,
             });
           } catch (exchangeErr) {
