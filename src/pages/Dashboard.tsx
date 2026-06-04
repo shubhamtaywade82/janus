@@ -2068,13 +2068,22 @@ const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLiquidity
     { refetchInterval: 1000, enabled: activeTab === "telemetry" }
   );
 
+  const depthInput = useMemo(() => ({ symbol }), [symbol]);
+
+  const onLiquidityEventRef = useRef<(event: any) => void>(() => {});
+  useEffect(() => {
+    onLiquidityEventRef.current = (event: any) => {
+      onLiquidityEvent(event);
+    };
+  }, [onLiquidityEvent]);
+
+  const liquidityOpts = useRef({
+    onData: (event: any) => onLiquidityEventRef.current(event),
+  });
+
   trpc.market.liquidityEventStream.useSubscription(
-    { symbol },
-    {
-      onData: (event: any) => {
-        onLiquidityEvent(event);
-      },
-    }
+    depthInput,
+    liquidityOpts.current
   );
 
   useEffect(() => {
@@ -2091,7 +2100,7 @@ const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLiquidity
   });
 
   trpc.market.orderBookStream.useSubscription(
-    { symbol },
+    depthInput,
     streamOpts.current
   );
 
@@ -2523,8 +2532,10 @@ const RecentTrades = ({ symbol }: { symbol: string }) => {
     onData: (trade: any) => onDataRef.current(trade),
   });
 
+  const recentTradesInput = useMemo(() => ({ symbol }), [symbol]);
+
   trpc.market.recentTradesStream.useSubscription(
-    { symbol },
+    recentTradesInput,
     streamOpts.current
   );
 
@@ -2580,7 +2591,8 @@ const TickerStreamSubscriber = ({
     onData: (data: any) => onDataRef.current(data),
   });
 
-  trpc.market.tickerStream.useSubscription({ symbol }, opts.current);
+  const tickerInput = useMemo(() => ({ symbol }), [symbol]);
+  trpc.market.tickerStream.useSubscription(tickerInput, opts.current);
   return null;
 };
 
@@ -2828,12 +2840,14 @@ const Dashboard = () => {
     };
   }, [interval]);
 
+  const symbolInput = useMemo(() => ({ symbol: selectedSymbol }), [selectedSymbol]);
+
   const klineStreamOpts = useRef({
     onData: (data: any) => klineCallbackRef.current(data),
   });
 
   trpc.market.klineStream.useSubscription(
-    { symbol: selectedSymbol },
+    symbolInput,
     klineStreamOpts.current
   );
 
@@ -2849,7 +2863,7 @@ const Dashboard = () => {
   });
 
   trpc.market.tickerStream.useSubscription(
-    { symbol: selectedSymbol },
+    symbolInput,
     tickerStreamOpts.current
   );
 
@@ -2870,13 +2884,13 @@ const Dashboard = () => {
   });
 
   trpc.market.orderBookStream.useSubscription(
-    { symbol: selectedSymbol },
+    symbolInput,
     depthStreamOpts.current
   );
 
   // ─── CVD tick-level data from backend ───
   const { data: cvdHistoryData } = trpc.market.cvdHistory.useQuery(
-    { symbol: selectedSymbol },
+    symbolInput,
     { staleTime: 0, refetchOnWindowFocus: false }
   );
 
@@ -2892,13 +2906,20 @@ const Dashboard = () => {
     }
   }, [cvdHistoryData]);
 
+  const cvdOnDataRef = useRef<(tick: any) => void>(() => {});
+  useEffect(() => {
+    cvdOnDataRef.current = (tick) => {
+      setCvdBars((prev) => [...prev, tick].slice(-5000));
+    };
+  }, []);
+
+  const cvdStreamOpts = useRef({
+    onData: (tick: any) => cvdOnDataRef.current(tick),
+  });
+
   trpc.market.cvdStream.useSubscription(
-    { symbol: selectedSymbol },
-    {
-      onData: (tick) => {
-        setCvdBars((prev) => [...prev, tick].slice(-5000));
-      },
-    }
+    symbolInput,
+    cvdStreamOpts.current
   );
 
   // Fetch portfolio for open positions
@@ -2924,8 +2945,10 @@ const Dashboard = () => {
     onData: (data: any) => portfolioCallbackRef.current(data),
   });
 
+  const portfolioStreamInput = useMemo(() => ({ userId: 1 }), []);
+
   trpc.trading.portfolioStream.useSubscription(
-    { userId: 1 },
+    portfolioStreamInput,
     portfolioStreamOpts.current
   );
 
