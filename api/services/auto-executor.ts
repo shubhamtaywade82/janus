@@ -261,7 +261,10 @@ export class AutoExecutor {
           walletFree += parseFloat(w.balance ?? "0");
           walletLocked += parseFloat(w.locked_balance ?? "0");
         }
-      } catch { /* fallback to 0 */ }
+      } catch {
+        // Live wallet fetch failed — do not trade on phantom balance
+        return this.skip(signal, "wallet balance unavailable — skipping to prevent oversizing");
+      }
     }
 
     const session = getOrCreateSession(1, walletFree || 10_000);
@@ -581,6 +584,11 @@ export class AutoExecutor {
     if (position.isPaper) {
       await releasePaperMargin(position.userId, parseFloat(position.margin), realizedPnl, position.id);
     }
+
+    // Update risk session so cooldown and drawdown circuit breakers fire correctly
+    const session = getOrCreateSession(position.userId, 0);
+    const updatedSession = globalRiskEngine.recordTrade(session, { pnl: realizedPnl });
+    updateSession(updatedSession);
 
     // Clean up trailing‑stop monitoring
     unregisterPosition(position.id);

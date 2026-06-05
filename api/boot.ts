@@ -15,14 +15,18 @@ import path from "path";
 const app = new Hono<{ Bindings: HttpBindings }>();
 
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
-app.get("/api/oauth/authorize", (c) => {
-  const redirectUri = c.req.query("redirect_uri");
-  const state = c.req.query("state");
-  if (!redirectUri || !state) {
-    return c.text("Missing redirect_uri or state", 400);
-  }
-  return c.redirect(`${redirectUri}?code=mock-code-123&state=${state}`, 302);
-});
+
+// Dev-only mock OAuth — never active in production
+if (!env.isProduction) {
+  app.get("/api/oauth/authorize", (c) => {
+    const redirectUri = c.req.query("redirect_uri");
+    const state = c.req.query("state");
+    if (!redirectUri || !state) {
+      return c.text("Missing redirect_uri or state", 400);
+    }
+    return c.redirect(`${redirectUri}?code=mock-code-123&state=${state}`, 302);
+  });
+}
 app.get(Paths.oauthCallback, createOAuthCallbackHandler());
 
 // tRPC handler - allow method override for batch POST requests
@@ -126,3 +130,7 @@ globalLlmAdvisor.init().catch((err) => {
 });
 
 console.log(`[auto-executor] AUTO_EXECUTE=${env.autoExecute} | PLACE_ORDERS=${env.placeOrders}`);
+
+// Start AI position lifecycle manager (after LLM advisor is initialized)
+import { positionLifecycleManager } from "./services/position-manager/index";
+setTimeout(() => positionLifecycleManager.start().catch(console.error), 5_000);
