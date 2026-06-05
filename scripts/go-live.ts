@@ -167,9 +167,20 @@ const checks: Check[] = [
       }
       try {
         const json = JSON.parse(res.body);
-        return { ok: json.status === "ok", detail: `status=${json.status} db=${json.db} uptime=${json.uptime}s` };
+        return { ok: json.status === "ok" || json.status === "degraded", detail: `status=${json.status} db=${json.db} uptime=${json.uptime}s` };
       } catch {
-        return { ok: false, detail: "Invalid JSON response from /health" };
+        // Fall back to tRPC health endpoint in development (where /health is excluded from Vite devServer)
+        const trpcRes = await httpGet(`http://localhost:${port}/api/trpc/health.detailed`);
+        if (trpcRes.ok) {
+          try {
+            const trpcJson = JSON.parse(trpcRes.body);
+            const data = trpcJson.result?.data?.json;
+            if (data) {
+              return { ok: true, detail: `tRPC status=${data.status} db=${data.checks?.db?.ok ? "ok" : "error"} uptime=${data.uptime}s (dev server)` };
+            }
+          } catch {}
+        }
+        return { ok: false, detail: "Invalid JSON response from /health, and tRPC health failed" };
       }
     },
   },

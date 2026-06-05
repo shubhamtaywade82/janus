@@ -24,37 +24,34 @@ mkdir -p "$BACKUP_DIR"
 info()  { echo "[$(date '+%H:%M:%S')] [INFO]  $*"; }
 die()   { echo "[$(date '+%H:%M:%S')] [ERROR] $*" >&2; exit 1; }
 
-# Load .env if DATABASE_URL not already set
-if [[ -z "${DATABASE_URL:-}" ]] && [[ -f "$PROJECT_ROOT/.env" ]]; then
-  set -a
-  # shellcheck disable=SC1091
-  source "$PROJECT_ROOT/.env"
-  set +a
+# Load .env and .env.secret if DATABASE_URL not already set
+if [[ -z "${DATABASE_URL:-}" ]]; then
+  if [[ -f "$PROJECT_ROOT/.env" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$PROJECT_ROOT/.env"
+    set +a
+  fi
+  if [[ -f "$PROJECT_ROOT/.env.secret" ]]; then
+    set -a
+    # shellcheck disable=SC1091
+    source "$PROJECT_ROOT/.env.secret"
+    set +a
+  fi
 fi
 
 [[ -z "${DATABASE_URL:-}" ]] && die "DATABASE_URL not set — add it to .env or export it"
 
-# Parse DATABASE_URL: postgres://user:pass@host:port/dbname
-DB_USER=$(echo "$DATABASE_URL" | sed -E 's|postgres://([^:]+):.*|\1|')
-DB_PASS=$(echo "$DATABASE_URL" | sed -E 's|postgres://[^:]+:([^@]+)@.*|\1|')
-DB_HOST=$(echo "$DATABASE_URL" | sed -E 's|.*@([^:/]+).*|\1|')
-DB_PORT=$(echo "$DATABASE_URL" | sed -E 's|.*:([0-9]+)/.*|\1|')
-DB_NAME=$(echo "$DATABASE_URL" | sed -E 's|.*/([^?]+).*|\1|')
-
 info "=== Janus DB Backup $(date '+%Y-%m-%d %H:%M:%S') ==="
-info "Database: ${DB_NAME} @ ${DB_HOST}:${DB_PORT}"
+info "Database URI: ${DATABASE_URL}"
 info "Output: ${BACKUP_DIR}/${FILENAME}"
 
-# Create backup
-PGPASSWORD="$DB_PASS" pg_dump \
-  -h "$DB_HOST" \
-  -p "$DB_PORT" \
-  -U "$DB_USER" \
-  --no-password \
+# Create backup by passing connection string directly
+pg_dump \
   --format=plain \
   --no-acl \
   --no-owner \
-  "$DB_NAME" \
+  -d "$DATABASE_URL" \
   | gzip -9 \
   > "${BACKUP_DIR}/${FILENAME}"
 
