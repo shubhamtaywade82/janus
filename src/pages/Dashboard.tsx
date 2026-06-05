@@ -2830,7 +2830,7 @@ const Dashboard = () => {
         if (last.openTime === kline.openTime) {
           return [...prev.slice(0, -1), kline];
         } else if (kline.openTime > last.openTime) {
-          return [...prev, kline].slice(-150);
+          return [...prev, kline].slice(-2000);
         }
         return prev;
       });
@@ -2848,12 +2848,81 @@ const Dashboard = () => {
     klineStreamOpts.current
   );
 
+  const formingCandleRef = useRef<{ openTime: number; high: number; low: number; close: number } | null>(null);
+
   const tickerCallbackRef = useRef<(data: any) => void>(() => {});
   useEffect(() => {
     tickerCallbackRef.current = (data: any) => {
       setTicker((prev: any) => (prev ? { ...prev, ...data } : data));
+      
+      // Auto-rollover candle based on real-time ticks for all timeframes
+      const price = parseFloat(data.lastPrice);
+      if (!isNaN(price) && price > 0) {
+        setKlines((prev) => {
+          if (prev.length === 0) return prev;
+          
+          const match = interval.match(/^(\d+)([smhd])$/);
+          let intervalMs = 60000;
+          if (match) {
+            const val = parseInt(match[1], 10);
+            const unit = match[2];
+            if (unit === 'm') intervalMs = val * 60000;
+            else if (unit === 'h') intervalMs = val * 3600000;
+            else if (unit === 'd') intervalMs = val * 86400000;
+            else if (unit === 's') intervalMs = val * 1000;
+          }
+          
+          const currentTime = data.eventTime || Date.now();
+          const currentPeriodStart = Math.floor(currentTime / intervalMs) * intervalMs;
+          
+          const last = prev[prev.length - 1];
+          
+          // Accumulate highest high and lowest low of the currently forming candle
+          if (!formingCandleRef.current || formingCandleRef.current.openTime !== last.openTime) {
+            formingCandleRef.current = {
+              openTime: last.openTime,
+              high: Math.max(parseFloat(last.high), price),
+              low: Math.min(parseFloat(last.low), price),
+              close: price,
+            };
+          } else {
+            formingCandleRef.current.high = Math.max(formingCandleRef.current.high, price);
+            formingCandleRef.current.low = Math.min(formingCandleRef.current.low, price);
+            formingCandleRef.current.close = price;
+          }
+
+          // If we crossed into a new timeframe period, finalize the old candle and manually inject a new one
+          if (currentPeriodStart > last.openTime) {
+            const finalizedOldKline: KlineData = {
+              ...last,
+              high: String(formingCandleRef.current.high),
+              low: String(formingCandleRef.current.low),
+              close: String(formingCandleRef.current.close),
+            };
+
+            const newKline: KlineData = {
+              openTime: currentPeriodStart,
+              open: String(price),
+              high: String(price),
+              low: String(price),
+              close: String(price),
+              volume: "0",
+            };
+
+            formingCandleRef.current = {
+              openTime: currentPeriodStart,
+              high: price,
+              low: price,
+              close: price,
+            };
+
+            return [...prev.slice(0, -1), finalizedOldKline, newKline].slice(-2000);
+          }
+          return prev;
+        });
+      }
     };
-  }, []);
+  }, [interval]);
 
   const tickerStreamOpts = useRef({
     onData: (data: any) => tickerCallbackRef.current(data),
