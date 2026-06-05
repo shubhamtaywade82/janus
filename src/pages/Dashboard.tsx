@@ -432,15 +432,16 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         // Show latest data if cursor is out of bounds
         const last = currentData[currentData.length - 1];
         if (last) {
+          const dec = getPriceDecimals(symbol);
           const o = parseFloat(last.open);
           const c = parseFloat(last.close);
           const pct = ((c - o) / o) * 100;
           setHudData({
             time: new Date(last.openTime).toLocaleString(),
-            open: o.toFixed(2),
-            high: parseFloat(last.high).toFixed(2),
-            low: parseFloat(last.low).toFixed(2),
-            close: c.toFixed(2),
+            open: o.toFixed(dec),
+            high: parseFloat(last.high).toFixed(dec),
+            low: parseFloat(last.low).toFixed(dec),
+            close: c.toFixed(dec),
             volume: parseFloat(last.volume).toFixed(2),
             pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
             isGreen: c >= o,
@@ -454,15 +455,16 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const volume = param.seriesData.get(volumeSeries) as any;
 
       if (candle) {
+        const dec = getPriceDecimals(symbol);
         const o = candle.open;
         const c = candle.close;
         const pct = ((c - o) / o) * 100;
         setHudData({
           time: new Date((param.time as number) * 1000).toLocaleString(),
-          open: o.toFixed(2),
-          high: candle.high.toFixed(2),
-          low: candle.low.toFixed(2),
-          close: c.toFixed(2),
+          open: o.toFixed(dec),
+          high: candle.high.toFixed(dec),
+          low: candle.low.toFixed(dec),
+          close: c.toFixed(dec),
           volume: volume ? volume.value.toFixed(2) : "0.00",
           pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
           isGreen: c >= o,
@@ -737,15 +739,16 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     isLoadingMoreRef.current = false; // allow next lazy load after chart updated
 
     // Update HUD with live last candle
+    const dec = getPriceDecimals(symbol);
     const o = parseFloat(last.open);
     const c = parseFloat(last.close);
     const pct = ((c - o) / o) * 100;
     setHudData({
       time: new Date(last.openTime).toLocaleString(),
-      open: o.toFixed(2),
-      high: parseFloat(last.high).toFixed(2),
-      low: parseFloat(last.low).toFixed(2),
-      close: c.toFixed(2),
+      open: o.toFixed(dec),
+      high: parseFloat(last.high).toFixed(dec),
+      low: parseFloat(last.low).toFixed(dec),
+      close: c.toFixed(dec),
       volume: parseFloat(last.volume).toFixed(2),
       pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
       isGreen: c >= o,
@@ -788,13 +791,14 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     animTarget.current = { time: lastTime, open: o, high: h, low: l, close: targetClose, vol };
     startAnimLoop();
 
+    const dec = getPriceDecimals(symbol);
     const pct = ((targetClose - o) / o) * 100;
     setHudData({
       time: new Date(last.openTime).toLocaleString(),
-      open: o.toFixed(2),
-      high: h.toFixed(2),
-      low: l.toFixed(2),
-      close: targetClose.toFixed(2),
+      open: o.toFixed(dec),
+      high: h.toFixed(dec),
+      low: l.toFixed(dec),
+      close: targetClose.toFixed(dec),
       volume: vol.toFixed(2),
       pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
       isGreen: targetClose >= o,
@@ -1444,12 +1448,12 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     }
 
     // Order Book Depth — canvas primitive attached to candlestick series
-    if (indicatorCfg.orderBookDepth && candlestickSeriesRef.current) {
+    if (interval === "1m" && candlestickSeriesRef.current) {
       if (!obDepthPrimRef.current) {
         obDepthPrimRef.current = new OrderBookDepthPrimitive();
         try { candlestickSeriesRef.current.attachPrimitive(obDepthPrimRef.current); } catch { /* safe */ }
       }
-    } else if (!indicatorCfg.orderBookDepth && obDepthPrimRef.current) {
+    } else if (interval !== "1m" && obDepthPrimRef.current) {
       obDepthPrimRef.current.setData(null);
       try { candlestickSeriesRef.current?.detachPrimitive(obDepthPrimRef.current); } catch { /* safe */ }
       obDepthPrimRef.current = null;
@@ -2130,11 +2134,11 @@ const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLiquidity
 
   // Aggregate dynamically
   const bids = useMemo(() => {
-    return aggregateOrderBook(rawBids, priceStep, true).slice(0, 6);
+    return aggregateOrderBook(rawBids, priceStep, true).slice(0, 20);
   }, [rawBids, priceStep]);
 
   const asks = useMemo(() => {
-    return aggregateOrderBook(rawAsks, priceStep, false).slice(0, 6);
+    return aggregateOrderBook(rawAsks, priceStep, false).slice(0, 20);
   }, [rawAsks, priceStep]);
 
   // Compute cumulative sums and total volumes
@@ -2967,14 +2971,14 @@ const Dashboard = () => {
         setBestAsk(parseFloat(data.asks[0][0]));
       }
 
-      if (indicatorCfg?.orderBookDepth) {
+      if (interval === "1m") {
         setOrderBook({
           bids: data.bids ? data.bids.map((b: string[]) => [parseFloat(b[0]), parseFloat(b[1])]) : [],
           asks: data.asks ? data.asks.map((a: string[]) => [parseFloat(a[0]), parseFloat(a[1])]) : []
         });
       }
     };
-  }, [indicatorCfg?.orderBookDepth]);
+  }, [interval]);
 
   const depthStreamOpts = useRef({
     onData: (data: any) => depthCallbackRef.current(data),
@@ -3568,7 +3572,7 @@ const Dashboard = () => {
               <OrderBook symbol={selectedSymbol} tickerData={tickerData} liquidityEvents={liquidityEvents} onLiquidityEvent={handleLiquidityEvent} />
             </div>
             {/* Recent Trades */}
-            <div className="h-64 border-t border-[#27272a] flex flex-col overflow-hidden bg-[#09090b]">
+            <div className="shrink-0 h-36 border-t border-[#27272a] flex flex-col overflow-hidden bg-[#09090b]">
               <RecentTrades symbol={selectedSymbol} />
             </div>
           </div>

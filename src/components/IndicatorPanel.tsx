@@ -370,15 +370,7 @@ export function IndicatorPanel({ onChange }: Props) {
             {cfg.volumeProfile && <span className="text-[9px] text-[#52525b]">{cfg.volumeProfileBuckets}B</span>}
           </div>
 
-          {/* Order Book Depth */}
-          <div className="flex items-center justify-between mb-1.5">
-            <div className="flex items-center gap-1.5">
-              <button onClick={() => setCfg((c) => ({ ...c, orderBookDepth: !c.orderBookDepth }))}
-                className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
-                  cfg.orderBookDepth ? "bg-[#06b6d4]/20 border-[#06b6d4]/50" : "border-[#27272a]")} />
-              <span className="text-[10px] text-[#a1a1aa]">OB Depth</span>
-            </div>
-          </div>
+
 
           {/* Keltner Channels */}
           <div className="flex items-center justify-between mb-1.5">
