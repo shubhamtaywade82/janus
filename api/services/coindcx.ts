@@ -76,10 +76,12 @@ function getTimestamp(): number {
 }
 
 // ─── Authenticated Request Helper (POST) ───
+// Retries on 429 (rate limit) with exponential back-off: 2s → 4s → 8s (max 3 attempts).
 async function authenticatedRequest<T>(
   credentials: CoinDCXCredentials,
   path: string,
-  body: Record<string, any> = {}
+  body: Record<string, any> = {},
+  attempt = 1
 ): Promise<T> {
   const timestamp = getTimestamp();
   const payload = { ...body, timestamp };
@@ -98,6 +100,13 @@ async function authenticatedRequest<T>(
     },
     body: compactJson,
   });
+
+  if (res.status === 429 && attempt <= 3) {
+    const delay = Math.pow(2, attempt) * 1000; // 2s, 4s, 8s
+    console.warn(`[coindcx] Rate limited on ${path} (attempt ${attempt}) — retrying in ${delay}ms`);
+    await new Promise((r) => setTimeout(r, delay));
+    return authenticatedRequest<T>(credentials, path, body, attempt + 1);
+  }
 
   if (!res.ok) {
     const error = await res.text();
@@ -284,6 +293,7 @@ export async function createFuturesOrder(
     total_quantity: number;
     price?: number;
     leverage?: number;
+    client_order_id?: string;
   }
 ): Promise<any> {
   return authenticatedRequest<any>(

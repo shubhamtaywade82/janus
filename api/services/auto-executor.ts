@@ -35,6 +35,7 @@ import type { ExitDecision } from "./exit-manager";
 import { snapshotEquity } from "./performance-tracker";
 import { getPaperWallet, lockPaperMargin, releasePaperMargin, getPaperEquity } from "./paper-wallet";
 import { env } from "../lib/env";
+import { decryptCreds } from "../lib/crypto";
 import type { Signal, AutoExecutorConfig } from "@db/schema";
 import type { StrategyType } from "./strategy-config";
 
@@ -237,6 +238,13 @@ export class AutoExecutor {
     const corrCheck = await checkCorrelation(symbol, side, 1);
     if (!corrCheck.allowed) return this.skip(signal, corrCheck.reason);
 
+    // Gate 6b: spread filter — reject wide-spread / low-liquidity conditions
+    const metadata = signal.metadata as Record<string, unknown> | null;
+    const spreadPct = metadata?.spread as number | undefined;
+    if (spreadPct !== undefined && spreadPct > 0.01) {
+      return this.skip(signal, `spread ${(spreadPct * 100).toFixed(3)}% > 1% — low liquidity`);
+    }
+
     // Gate 7: risk engine
     let walletFree = 0;
     let walletLocked = 0;
@@ -256,7 +264,7 @@ export class AutoExecutor {
       walletLocked = pw.lockedMargin;
     } else if (creds[0]) {
       try {
-        const liveWallets = await getFuturesWallet({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret });
+        const liveWallets = await getFuturesWallet(decryptCreds(creds[0]));
         for (const w of liveWallets) {
           walletFree += parseFloat(w.balance ?? "0");
           walletLocked += parseFloat(w.locked_balance ?? "0");
@@ -373,10 +381,12 @@ export class AutoExecutor {
     const notional = Math.min(sizeUsdt * sizeMult, balanceCap);
 
     // Leverage: if useStrategyLeverage=true, use strategy's maxLeverage; else use defaultLeverage
+    // Hard cap at 10× regardless of strategy config to prevent over-leveraged positions
     const strategyMaxLev = STRATEGY_CONFIGS[regimeData?.strategy ?? "intraday"]?.maxLeverage ?? 5;
-    const leverage = config.useStrategyLeverage
+    const rawLeverage = config.useStrategyLeverage
       ? strategyMaxLev
       : Math.min(config.defaultLeverage ?? 3, strategyMaxLev);
+    const leverage = Math.min(rawLeverage, 10);
 
     // Validate size and precision against instrument specifications
     let rawSize = notional / currentPrice;
@@ -429,7 +439,7 @@ export class AutoExecutor {
       takeProfit: parseFloat(takeProfit.toFixed(basePrecision)),
       signalId: signal.id ?? undefined,
       strategyType: (regimeData?.strategy ?? "intraday") as StrategyType,
-      creds: creds[0],
+      creds: creds[0] ? decryptCreds(creds[0]) : undefined,
       isPaper: isPaperMode,
     });
 
@@ -483,6 +493,7 @@ export class AutoExecutor {
     let exchangeOrderId: string | undefined;
 
     if (params.creds && env.placeOrders) {
+      const clientOrderId = `AE-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       try {
         const coindcxSym = `B-${params.symbol.replace("USDT", "_USDT")}`;
         const order = await createFuturesOrder(
@@ -494,37 +505,50 @@ export class AutoExecutor {
             total_quantity: params.size,
             price: params.currentPrice,
             leverage: params.leverage,
+            client_order_id: clientOrderId,
           }
         );
         exchangeOrderId = order?.id;
-        console.log(`[auto-executor] Exchange order placed: ${exchangeOrderId}`);
+        console.log(`[auto-executor] Exchange order placed: ${exchangeOrderId} (client=${clientOrderId})`);
+
+        // Verify order was fully filled (remaining_quantity should be "0" for market orders)
+        const remaining = parseFloat(order?.remaining_quantity ?? "0");
+        if (remaining > 0) {
+          console.warn(
+            `[auto-executor] Order ${exchangeOrderId} partially filled — remaining=${remaining}. ` +
+            `Position will reflect actual fill.`
+          );
+        }
       } catch (err: any) {
         console.error(`[auto-executor] Exchange order failed: ${err.message}`);
         throw err; // re-throw so processSignal catches it
       }
     }
 
-    const result = await db.insert(positions).values({
-      userId: params.userId,
-      symbol: params.symbol,
-      side: params.side,
-      entryPrice: String(params.currentPrice),
-      currentPrice: String(params.currentPrice),
-      size: String(params.size),
-      leverage: params.leverage,
-      margin: String((params.notional / params.leverage).toFixed(4)),
-      stopLoss: String(params.stopLoss),
-      takeProfit: String(params.takeProfit),
-      unrealizedPnl: "0",
-      realizedPnl: "0",
-      status: "open",
-      exchangeOrderId,
-      signalId: params.signalId,
-      strategyType: params.strategyType,
-      isPaper: params.isPaper,
-    }).returning({ id: positions.id });
+    // Wrap DB write in a transaction so a DB failure after order placement is detectable
+    const posId = await db.transaction(async (tx) => {
+      const result = await tx.insert(positions).values({
+        userId: params.userId,
+        symbol: params.symbol,
+        side: params.side,
+        entryPrice: String(params.currentPrice),
+        currentPrice: String(params.currentPrice),
+        size: String(params.size),
+        leverage: params.leverage,
+        margin: String((params.notional / params.leverage).toFixed(4)),
+        stopLoss: String(params.stopLoss),
+        takeProfit: String(params.takeProfit),
+        unrealizedPnl: "0",
+        realizedPnl: "0",
+        status: "open",
+        exchangeOrderId,
+        signalId: params.signalId,
+        strategyType: params.strategyType,
+        isPaper: params.isPaper,
+      }).returning({ id: positions.id });
+      return result[0].id;
+    });
 
-    const posId = result[0].id;
     registerPositionForTrailing({
       id: posId,
       symbol: params.symbol,

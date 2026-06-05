@@ -8,6 +8,7 @@ import { env } from "../../lib/env";
 import { getDb } from "../../queries/connection";
 import { positions, exchangeCredentials } from "@db/schema";
 import { eq, and } from "drizzle-orm";
+import { decryptCreds } from "../../lib/crypto";
 
 // ─── Execution Manager ───────────────────────────────────────────────────────
 // Maps approved PositionActions to actual exchange calls + DB updates.
@@ -20,7 +21,7 @@ async function fetchCredentials(userId: number) {
     .where(and(eq(exchangeCredentials.userId, userId), eq(exchangeCredentials.isActive, true)))
     .limit(1);
   if (!cred) throw new Error(`No active credentials for user ${userId}`);
-  return { apiKey: cred.apiKey, apiSecret: cred.apiSecret };
+  return decryptCreds(cred);
 }
 
 export async function executeAction(

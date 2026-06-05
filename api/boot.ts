@@ -11,10 +11,35 @@ import { createOAuthCallbackHandler } from "./oauth/auth";
 import { Paths } from "@contracts/constants";
 import fs from "fs";
 import path from "path";
+import { getDb } from "./queries/connection";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
+
+// ─── Health endpoint ───────────────────────────────────────────────────────────
+// Used by Docker HEALTHCHECK, load balancers, and uptime monitors.
+const _bootTime = Date.now();
+app.get("/health", async (c) => {
+  let dbOk = false;
+  try {
+    const db = getDb();
+    await db.execute("SELECT 1" as any);
+    dbOk = true;
+  } catch {
+    dbOk = false;
+  }
+  const status = dbOk ? 200 : 503;
+  return c.json(
+    {
+      status: dbOk ? "ok" : "degraded",
+      uptime: Math.floor((Date.now() - _bootTime) / 1000),
+      db: dbOk ? "ok" : "error",
+      ts: new Date().toISOString(),
+    },
+    status
+  );
+});
 
 // Dev-only mock OAuth — never active in production
 if (!env.isProduction) {
@@ -117,6 +142,14 @@ if (env.isProduction) {
 import { initCoinDCXPrivateWs } from "./services/coindcx-ws";
 initCoinDCXPrivateWs().catch((err) => {
   console.error("[coindcx-ws] Failed to initialize private WS:", err);
+});
+
+// Reconcile DB open positions against live exchange on startup.
+// Any DB-open position with no corresponding live exchange position gets marked closed
+// so stale rows don't block the auto-executor's duplicate-position check.
+import { reconcilePositionsOnBoot } from "./services/position-reconciler";
+reconcilePositionsOnBoot().catch((err) => {
+  console.error("[reconciler] Boot reconciliation failed:", err);
 });
 
 // Start auto signal analysis loop with regime detection enabled

@@ -6,6 +6,7 @@ import { eq, and } from "drizzle-orm";
 import { EventEmitter } from "events";
 import { latestTickerCache, marketEvents, activeStreams } from "./streaming";
 import { syncLiveAccountFromCoinDCX } from "./trading-account";
+import { decryptCreds } from "../lib/crypto";
 
 export const tradingEvents = new EventEmitter();
 tradingEvents.setMaxListeners(100);
@@ -59,7 +60,7 @@ export async function initCoinDCXPrivateWs() {
     return;
   }
 
-  const { apiKey, apiSecret } = creds[0];
+  const { apiKey, apiSecret } = decryptCreds(creds[0]);
   const wsUrl = "wss://stream.coindcx.com"; // CoinDCX Socket.io stream endpoint
 
   if (socket) {

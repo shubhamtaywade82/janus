@@ -27,6 +27,7 @@ import { registerPositionForTrailing, unregisterPosition } from "../services/tra
 import { globalKillSwitch } from "../services/kill-switch";
 import { releasePaperMargin } from "../services/paper-wallet";
 import { env } from "../lib/env";
+import { encrypt, decryptCreds } from "../lib/crypto";
 
 // Wire risk events → tradingEvents so frontend streams pick them up
 riskEvents.on("drawdown-limit-hit", ({ userId, drawdownPct }: { userId: number; drawdownPct: number }) => {
@@ -71,7 +72,7 @@ export async function fetchPortfolioData(userId: number) {
       const [livePositions, usdtInrRate, markets] = await Promise.all([
         wsPositions && wsPositions.length > 0
           ? Promise.resolve(wsPositions)
-          : getFuturesPositions({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret }),
+          : getFuturesPositions(decryptCreds(creds[0])),
         getUsdtInrRate(),
         getMarketsDetails().catch(() => []),
       ]);
@@ -209,7 +210,7 @@ export async function fetchPortfolioData(userId: number) {
 
       try {
         const filledOrders = await getFuturesOrders(
-          { apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret },
+          decryptCreds(creds[0]),
           { status: "filled" }
         );
          recentTrades = filledOrders.slice(0, 20).map((o: any) => {
@@ -244,7 +245,7 @@ export async function fetchPortfolioData(userId: number) {
       let walletCurrency = "USDT";
 
       try {
-        const wallets = await getFuturesWallet({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret });
+        const wallets = await getFuturesWallet(decryptCreds(creds[0]));
         for (const w of wallets) {
           const currency = w.currency_short_name || "";
           const free = parseFloat(w.balance || "0");
@@ -444,10 +445,7 @@ export const tradingRouter = createRouter({
         try {
           // Fetch live CoinDCX futures positions
           const [livePositions, usdtInrRate] = await Promise.all([
-            getFuturesPositions({
-              apiKey: creds[0].apiKey,
-              apiSecret: creds[0].apiSecret,
-            }),
+            getFuturesPositions(decryptCreds(creds[0])),
             getUsdtInrRate(),
           ]);
 
@@ -693,10 +691,7 @@ export const tradingRouter = createRouter({
 
           console.log(`[coindcx-execution] Attempting live order for ${coindcxSymbol} (${input.side})`);
           const orderRes = await createFuturesOrder(
-            {
-              apiKey: creds[0].apiKey,
-              apiSecret: creds[0].apiSecret,
-            },
+            decryptCreds(creds[0]),
             {
               market: coindcxSymbol,
               side: input.side === "long" ? "buy" : "sell",
@@ -1090,8 +1085,8 @@ export const tradingRouter = createRouter({
       await db.insert(exchangeCredentials).values({
         userId,
         exchange: input.exchange,
-        apiKey: input.apiKey,
-        apiSecret: input.apiSecret,
+        apiKey: encrypt(input.apiKey),
+        apiSecret: encrypt(input.apiSecret),
       });
       if (input.exchange === "coindcx") {
         initCoinDCXPrivateWs().catch((err) => {
@@ -1180,7 +1175,7 @@ export const tradingRouter = createRouter({
         )
         .limit(1);
       if (!creds || !creds[0]) return null;
-      return getCrossMarginDetails({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret });
+      return getCrossMarginDetails(decryptCreds(creds[0]));
     }),
 
   // ─── Wallet transfer (Spot <-> Futures) ───
@@ -1205,7 +1200,7 @@ export const tradingRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "CoinDCX credentials not found" });
       }
       const result = await walletTransfer(
-        { apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret },
+        decryptCreds(creds[0]),
         {
           currency_short_name: input.currencyShortName,
           amount: input.amount,
@@ -1238,7 +1233,7 @@ export const tradingRouter = createRouter({
         throw new TRPCError({ code: "NOT_FOUND", message: "CoinDCX credentials not found" });
       }
       const result = await addRemoveMargin(
-        { apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret },
+        decryptCreds(creds[0]),
         {
           position_id: input.positionId,
           amount: input.amount,
@@ -1273,7 +1268,7 @@ export const tradingRouter = createRouter({
         .limit(1);
       if (!creds || !creds[0]) return [];
       return getFuturesOrders(
-        { apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret },
+        decryptCreds(creds[0]),
         {
           status: input.status,
           margin_currency_short_name: input.marginCurrency ? [input.marginCurrency] : undefined,
@@ -1301,7 +1296,7 @@ export const tradingRouter = createRouter({
       if (creds[0]) {
         try {
           const [wallets, rate] = await Promise.all([
-            getFuturesWallet({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret }),
+            getFuturesWallet(decryptCreds(creds[0])),
             getUsdtInrRate(),
           ]);
           usdtInrRate = rate;
@@ -1317,7 +1312,7 @@ export const tradingRouter = createRouter({
       let currentLeverage: number | null = null;
       if (creds[0]) {
         try {
-          const positions = await getFuturesPositions({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret });
+          const positions = await getFuturesPositions(decryptCreds(creds[0]));
           const coindcxPair = `B-${input.symbol.replace("USDT", "_USDT")}`;
           const pos = positions.find((p: any) => p.pair === coindcxPair && parseFloat(p.active_pos) !== 0);
           if (pos) currentLeverage = pos.leverage;

@@ -36,4 +36,13 @@ export const env = {
   botAutoStart: process.env.BOT_AUTO_START === "true",
   // Auto-executor master switch — set AUTO_EXECUTE=true to enable autonomous trading
   autoExecute: process.env.AUTO_EXECUTE === "true",
+
+  // ─── Observability ───
+  // LOG_LEVEL — controls verbosity: debug | info | warn | error (default: info)
+  logLevel: (process.env.LOG_LEVEL ?? "info") as "debug" | "info" | "warn" | "error",
+
+  // ─── Security ───
+  // ENCRYPTION_KEY — 32-byte hex key for AES-256-GCM field-level encryption of API credentials
+  // Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+  encryptionKey: process.env.ENCRYPTION_KEY ?? "",
 };
