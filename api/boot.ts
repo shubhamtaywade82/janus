@@ -11,18 +11,47 @@ import { createOAuthCallbackHandler } from "./oauth/auth";
 import { Paths } from "@contracts/constants";
 import fs from "fs";
 import path from "path";
+import { getDb } from "./queries/connection";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
 app.use(bodyLimit({ maxSize: 50 * 1024 * 1024 }));
-app.get("/api/oauth/authorize", (c) => {
-  const redirectUri = c.req.query("redirect_uri");
-  const state = c.req.query("state");
-  if (!redirectUri || !state) {
-    return c.text("Missing redirect_uri or state", 400);
+
+// ─── Health endpoint ───────────────────────────────────────────────────────────
+// Used by Docker HEALTHCHECK, load balancers, and uptime monitors.
+const _bootTime = Date.now();
+app.get("/health", async (c) => {
+  let dbOk = false;
+  try {
+    const db = getDb();
+    await db.execute("SELECT 1" as any);
+    dbOk = true;
+  } catch {
+    dbOk = false;
   }
-  return c.redirect(`${redirectUri}?code=mock-code-123&state=${state}`, 302);
+  const status = dbOk ? 200 : 503;
+  return c.json(
+    {
+      status: dbOk ? "ok" : "degraded",
+      uptime: Math.floor((Date.now() - _bootTime) / 1000),
+      db: dbOk ? "ok" : "error",
+      ts: new Date().toISOString(),
+    },
+    status
+  );
 });
+
+// Dev-only mock OAuth — never active in production
+if (!env.isProduction) {
+  app.get("/api/oauth/authorize", (c) => {
+    const redirectUri = c.req.query("redirect_uri");
+    const state = c.req.query("state");
+    if (!redirectUri || !state) {
+      return c.text("Missing redirect_uri or state", 400);
+    }
+    return c.redirect(`${redirectUri}?code=mock-code-123&state=${state}`, 302);
+  });
+}
 app.get(Paths.oauthCallback, createOAuthCallbackHandler());
 
 // tRPC handler - allow method override for batch POST requests
@@ -115,6 +144,11 @@ initCoinDCXPrivateWs().catch((err) => {
   console.error("[coindcx-ws] Failed to initialize private WS:", err);
 });
 
+// Continuous position reconciliation: runs immediately on boot, then every 5 min.
+// Marks stale DB positions closed, corrects size mismatches, and alerts on orphans.
+import { positionReconciler } from "./services/position-reconciler";
+positionReconciler.start();
+
 // Start auto signal analysis loop with regime detection enabled
 import { startAutoAnalysis } from "./routers/signal-router";
 startAutoAnalysis("intraday", true); // true = regime auto-switch on
@@ -126,3 +160,63 @@ globalLlmAdvisor.init().catch((err) => {
 });
 
 console.log(`[auto-executor] AUTO_EXECUTE=${env.autoExecute} | PLACE_ORDERS=${env.placeOrders}`);
+
+// Start AI position lifecycle manager (after LLM advisor is initialized)
+import { positionLifecycleManager } from "./services/position-manager/index";
+setTimeout(() => positionLifecycleManager.start().catch(console.error), 5_000);
+
+// Start backend alert engine (headless alert evaluation for user rules + system events)
+import { alertEngine } from "./services/alert-engine";
+alertEngine.start(5_000);
+
+// Start Telegram command bot (polling-based — receives /status, /pause, /resume, etc.)
+import { startTelegramCommandBot } from "./services/telegram-bot";
+startTelegramCommandBot();
+
+// Start liquidation proximity monitor (alerts + auto-reduce when within 5%/2% of liq price)
+import { startLiquidationMonitor, stopLiquidationMonitor } from "./services/liquidation-monitor";
+startLiquidationMonitor(10_000);
+
+// ─── Graceful shutdown ────────────────────────────────────────────────────────
+// Called on SIGTERM, SIGINT, uncaughtException, and unhandledRejection.
+// Stops all background services before exit so PM2/Docker can restart cleanly.
+import { stopTelegramCommandBot } from "./services/telegram-bot";
+import { globalKillSwitch } from "./services/kill-switch";
+
+let _shutdownInProgress = false;
+
+async function shutdown(signal: string, exitCode = 0): Promise<void> {
+  if (_shutdownInProgress) return;
+  _shutdownInProgress = true;
+
+  console.log(`[boot] ${signal} received — shutting down gracefully`);
+
+  // 1. Halt new orders immediately
+  globalKillSwitch.trigger("manual", `shutdown_${signal}`);
+
+  // 2. Stop all background services
+  alertEngine.stop();
+  positionReconciler.stop();
+  stopTelegramCommandBot();
+  stopLiquidationMonitor();
+  positionLifecycleManager.stop?.().catch?.(() => {});
+
+  // 3. Brief pause for in-flight DB writes to complete
+  await new Promise((r) => setTimeout(r, 500));
+
+  process.exit(exitCode);
+}
+
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT",  () => shutdown("SIGINT"));
+
+// Crash handlers — log the error and exit so PM2/Docker restarts the process
+process.on("uncaughtException", (err: Error) => {
+  console.error("[boot] uncaughtException:", err);
+  shutdown("uncaughtException", 1).catch(() => process.exit(1));
+});
+
+process.on("unhandledRejection", (reason: unknown) => {
+  console.error("[boot] unhandledRejection:", reason);
+  shutdown("unhandledRejection", 1).catch(() => process.exit(1));
+});

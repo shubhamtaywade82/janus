@@ -84,6 +84,15 @@ export const marketData = pgTable(
 export type MarketData = typeof marketData.$inferSelect;
 
 // ─── Signals (Confluence Scores) ───
+export const signalOutcomeEnum = pgEnum("signal_outcome", [
+  "tp_hit",
+  "sl_hit",
+  "manual_close",
+  "liquidated",
+  "timeout",
+  "open",
+]);
+
 export const signals = pgTable("signals", {
   id: serial("id").primaryKey(),
   symbol: varchar("symbol", { length: 20 }).notNull(),
@@ -94,6 +103,7 @@ export const signals = pgTable("signals", {
   threshold: decimal("threshold", { precision: 5, scale: 2 }).default("75.00").notNull(),
   isGated: boolean("is_gated").default(false).notNull(), // true if composite >= threshold
   direction: directionEnum("direction").default("neutral").notNull(),
+  outcome: signalOutcomeEnum("outcome"), // set when linked position is closed
   metadata: jsonb("metadata"), // store indicator values
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
@@ -478,3 +488,89 @@ export const liquidationEvents = pgTable(
 );
 
 export type LiquidationEvent = typeof liquidationEvents.$inferSelect;
+// ─── User Alert Rules (replaces localStorage "janus_alert_rules") ───
+export const userAlertRules = pgTable(
+  "user_alert_rules",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    // price | sweep | absorption | imbalance | volatility
+    type: varchar("type", { length: 30 }).notNull(),
+    // ">" | "<" — null for event-based types (volatility, sweep, absorption)
+    operator: varchar("operator", { length: 5 }),
+    value: decimal("value", { precision: 18, scale: 8 }),
+    isActive: boolean("is_active").default(true).notNull(),
+    cooldownSeconds: integer("cooldown_seconds").default(60).notNull(),
+    notifyTelegram: boolean("notify_telegram").default(true).notNull(),
+    notifyWebhook: text("notify_webhook"),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userAlertRulesUserIdx: index("idx_user_alert_rules_user").on(table.userId, table.isActive),
+  })
+);
+
+export type UserAlertRule = typeof userAlertRules.$inferSelect;
+export type InsertUserAlertRule = typeof userAlertRules.$inferInsert;
+
+// ─── User Alert Logs (replaces localStorage "janus_alert_logs") ───
+export const userAlertLogs = pgTable(
+  "user_alert_logs",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    ruleId: integer("rule_id").references(() => userAlertRules.id),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    type: varchar("type", { length: 30 }).notNull(),
+    message: text("message").notNull(),
+    metadata: jsonb("metadata"),
+    triggeredAt: timestamp("triggered_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userAlertLogsUserIdx: index("idx_user_alert_logs_user_time").on(table.userId, table.triggeredAt),
+  })
+);
+
+export type UserAlertLog = typeof userAlertLogs.$inferSelect;
+
+// ─── System Alert Logs (backend-generated indicator/SMC/KNN events) ───
+export const systemAlertLogs = pgTable(
+  "system_alert_logs",
+  {
+    id: serial("id").primaryKey(),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    // bos | choch | fvg_fill | liq_sweep | ema_cross | bb_breakout | supertrend_flip
+    // rsi_extreme | knn_bias_flip | knn_rejection | knn_regime_change | direction_flip | gated_flip
+    type: varchar("type", { length: 30 }).notNull(),
+    direction: varchar("direction", { length: 10 }),
+    interval: varchar("interval", { length: 10 }),
+    message: text("message").notNull(),
+    metadata: jsonb("metadata"),
+    triggeredAt: timestamp("triggered_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    systemAlertLogsSymbolIdx: index("idx_system_alert_logs_symbol_time").on(table.symbol, table.triggeredAt),
+  })
+);
+
+export type SystemAlertLog = typeof systemAlertLogs.$inferSelect;
+
+// ─── Alert Delivery Failures (webhook retry log) ───────────────────────────
+export const alertDeliveryFailures = pgTable(
+  "alert_delivery_failures",
+  {
+    id: serial("id").primaryKey(),
+    ruleId: integer("rule_id").references(() => userAlertRules.id),
+    url: text("url").notNull(),
+    payload: text("payload").notNull(),
+    error: text("error").notNull(),
+    retryCount: integer("retry_count").default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    alertDeliveryFailuresIdx: index("idx_alert_delivery_failures_rule").on(table.ruleId, table.createdAt),
+  })
+);
+
+export type AlertDeliveryFailure = typeof alertDeliveryFailures.$inferSelect;

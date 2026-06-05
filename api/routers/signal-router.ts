@@ -39,6 +39,194 @@ import {
   knnSnapshotCache,
   type KnnSupertrendSnapshot,
 } from "../services/knn-supertrend";
+import { alertEngine } from "../services/alert-engine";
+
+// Per-symbol previous KNN snapshot for transition detection
+// Evicted via evictKnnSnapshot(symbol) when a symbol leaves tracking
+const prevKnnSnapshotCache = new Map<string, KnnSupertrendSnapshot>();
+
+export function evictKnnSnapshot(symbol: string): void {
+  prevKnnSnapshotCache.delete(symbol);
+  alertEngine.evictSymbol(symbol);
+}
+
+// ─── Types for the Comprehensive Analysis Engine ───
+
+export interface SwingPoint {
+  price: number;
+  timestamp: number;
+  type: "high" | "low";
+}
+
+export interface FVG {
+  low: number;
+  high: number;
+  type: "BULLISH" | "BEARISH";
+  timestamp: number;
+  filled: boolean;
+}
+
+export interface OrderBlock {
+  high: number;
+  low: number;
+  type: "BULLISH" | "BEARISH";
+  timestamp: number;
+  status: "ACTIVE" | "MITIGATED" | "INVALIDATED";
+}
+
+export interface LiquidityPool {
+  price: number;
+  type: "BUY_SIDE" | "SELL_SIDE";
+  strength: "HIGH" | "MEDIUM" | "LOW";
+}
+
+export interface AnalysisResult {
+  symbol: string;
+  exchange: string;
+  timestamp: string;
+  market_state: {
+    regime: "BULLISH" | "BEARISH" | "NEUTRAL";
+    confidence: number;
+  };
+  multi_timeframe: Record<
+    string,
+    {
+      trend: "BULLISH" | "BEARISH" | "NEUTRAL";
+      structure: "UPTREND" | "DOWNTREND" | "RANGING";
+      bos: boolean;
+      choch: boolean;
+      ema_trend: "BULLISH" | "BEARISH" | "NEUTRAL";
+      momentum: "STRONG_BULLISH" | "BULLISH" | "NEUTRAL" | "BEARISH" | "STRONG_BEARISH" | "EXHAUSTING" | "RECOVERY";
+    }
+  >;
+  market_structure: {
+    overall_bias: "BULLISH" | "BEARISH" | "NEUTRAL";
+    swing_highs: number[];
+    swing_lows: number[];
+    latest_bos?: {
+      direction: "BULLISH" | "BEARISH";
+      level: number;
+    };
+    latest_choch?: {
+      direction: "BULLISH" | "BEARISH";
+      level: number;
+      timeframe: string;
+    };
+    structure_score: {
+      bullish: number;
+      bearish: number;
+    };
+  };
+  liquidity: {
+    buy_side: number[];
+    sell_side: number[];
+    last_sweep?: {
+      side: "BUY_SIDE" | "SELL_SIDE";
+      level: number;
+      confirmed: boolean;
+    };
+    liquidity_event?: {
+      type: string;
+      strength: string;
+    };
+    probability_of_reversal: number;
+  };
+  order_blocks: {
+    bullish: OrderBlock[];
+    bearish: OrderBlock[];
+    nearest_ob?: {
+      type: "BULLISH" | "BEARISH";
+      distance_percent: number;
+    };
+  };
+  fvg: {
+    bullish: FVG[];
+    bearish: FVG[];
+    nearest_fvg?: {
+      type: "BULLISH" | "BEARISH";
+    };
+  };
+  volume: {
+    relative_volume: number;
+    accumulation: boolean;
+    distribution: boolean;
+    climax_volume: boolean;
+    volume_score: {
+      bullish: number;
+      bearish: number;
+    };
+  };
+  open_interest: {
+    current: string;
+    change_24h: {
+      percent: number;
+    };
+    interpretation: "NEW_LONGS" | "NEW_SHORTS" | "SHORT_COVERING" | "LONG_LIQUIDATION" | "UNKNOWN";
+    conviction: "HIGH" | "MEDIUM" | "LOW";
+  };
+  funding: {
+    current: string;
+    sentiment: "LONG_HEAVY" | "SHORT_HEAVY" | "NEUTRAL";
+    squeeze_risk: "LONG_SQUEEZE" | "SHORT_SQUEEZE" | "NONE";
+  };
+  cvd: {
+    trend: "BULLISH_DIVERGENCE" | "BEARISH_DIVERGENCE" | "CONTINUATION" | "NEUTRAL";
+    signal_strength: "STRONG" | "MODERATE" | "WEAK";
+  };
+  orderbook: {
+    imbalance: {
+      bid_volume: string;
+      ask_volume: string;
+    };
+    ratio: number;
+    dominant_side: "BUYERS" | "SELLERS" | "NEUTRAL";
+    absorption: boolean;
+    spoofing: boolean;
+  };
+  volume_profile: {
+    poc: number;
+    vah: number;
+    val: number;
+    current_position: "ABOVE_POC" | "BELOW_POC" | "AT_POC";
+    implication: "BULLISH" | "BEARISH" | "NEUTRAL";
+  };
+  signals: {
+    reversal: {
+      detected: boolean;
+      confidence: number;
+    };
+    continuation: {
+      detected: boolean;
+      confidence: number;
+    };
+    squeeze?: {
+      type: "LONG_SQUEEZE" | "SHORT_SQUEEZE";
+      confidence: number;
+    };
+    accumulation: {
+      detected: boolean;
+      confidence: number;
+    };
+  };
+  trade_setup?: {
+    setup_type: "COUNTER_TREND_LONG" | "COUNTER_TREND_SHORT" | "CONTINUATION_LONG" | "CONTINUATION_SHORT" | "NO_TRADE";
+    entry_zone: {
+      low: number;
+      high: number;
+    };
+    stop_loss: number;
+    targets: number[];
+    risk_reward: number;
+    confidence: number;
+    invalidation: string;
+  };
+  summary: {
+    verdict: string;
+    market_phase: "ACCUMULATION" | "DISTRIBUTION" | "TRENDING" | "RANGING";
+    recommended_action: "WAIT_FOR_CONFIRMATION" | "TAKE_POSITION" | "NO_TRADE";
+    confidence: number;
+  };
+}
 
 // ─── Types for the Comprehensive Analysis Engine ───
 
@@ -1187,10 +1375,8 @@ let klineUpdateListener: ((symbol: string, kline: any) => void) | null = null;
 async function runAnalysisForSymbol(binanceSymbol: string) {
   const pair = SUPPORTED_PAIRS.find((p) => p.binance === binanceSymbol);
   if (!pair) return;
-
   try {
     const db = getDb();
-
     // Run regime detection for this symbol if needed
     if (autoRegimeDetect) {
       try {
@@ -1269,7 +1455,6 @@ async function runAnalysisForSymbol(binanceSymbol: string) {
       .limit(1)
       .catch(() => []);
     const prev = lastSignal[0];
-
     // Detect SMC Events on this 1m timeframe
     const last1mCandles = await getCandlesForTimeframe(binanceSymbol, "1m");
     const tfStructure = analyzeTimeframeStructure(last1mCandles, "1m");
@@ -1316,6 +1501,118 @@ async function runAnalysisForSymbol(binanceSymbol: string) {
         globalAutoExecutor.onSignalBatch(inserted).catch((err) =>
           console.error("[auto-executor] Batch error:", err)
         );
+
+        // ─── Emit system alerts for every detected transition ──────────────
+        const prevKnn = prevKnnSnapshotCache.get(binanceSymbol) ?? null;
+
+        if (isBosOrChoch) {
+          const bosType = tfStructure.bos ? "bos" : "choch";
+          const bosDir = signalData.direction === "long" ? "bullish" : signalData.direction === "short" ? "bearish" : null;
+          alertEngine.emitSystemAlert(
+            binanceSymbol,
+            bosType,
+            bosDir,
+            "1m",
+            `${bosType.toUpperCase()} detected — ${signalData.direction} bias (score: ${signalData.compositeScore})`,
+            { compositeScore: signalData.compositeScore, direction: signalData.direction }
+          ).catch(() => {});
+        }
+
+        if (isEmaCross) {
+          const crossDir = ema(prices, 20)[prices.length - 1] > ema(prices, 50)[prices.length - 1] ? "bullish" : "bearish";
+          alertEngine.emitSystemAlert(
+            binanceSymbol,
+            "ema_cross",
+            crossDir,
+            "1m",
+            `EMA(20) crossed ${crossDir === "bullish" ? "ABOVE" : "BELOW"} EMA(50)`,
+            { direction: crossDir }
+          ).catch(() => {});
+        }
+
+        if (isRsiExtreme) {
+          const rsiDir = rsiVal >= 70 ? "bearish" : "bullish";
+          alertEngine.emitSystemAlert(
+            binanceSymbol,
+            "rsi_extreme",
+            rsiDir,
+            "1m",
+            `RSI ${rsiVal.toFixed(1)} entered ${rsiVal >= 70 ? "OVERBOUGHT (>70)" : "OVERSOLD (<30)"} zone`,
+            { rsi: rsiVal }
+          ).catch(() => {});
+        }
+
+        if (isDirectionFlip) {
+          alertEngine.emitSystemAlert(
+            binanceSymbol,
+            "direction_flip",
+            signalData.direction === "long" ? "bullish" : "bearish",
+            "1m",
+            `Direction flipped: ${prev?.direction} → ${signalData.direction} (score: ${signalData.compositeScore})`,
+            { from: prev?.direction, to: signalData.direction, compositeScore: signalData.compositeScore }
+          ).catch(() => {});
+        }
+
+        if (isGatedFlip && signalData.isGated) {
+          alertEngine.emitSystemAlert(
+            binanceSymbol,
+            "gated_flip",
+            signalData.direction === "long" ? "bullish" : "bearish",
+            "1m",
+            `Signal GATED — ${binanceSymbol} composite score ${signalData.compositeScore} ≥ ${signalData.threshold}`,
+            { compositeScore: signalData.compositeScore, threshold: signalData.threshold, direction: signalData.direction }
+          ).catch(() => {});
+        }
+
+        if (knnSnapshot) {
+          if (isSTFlip) {
+            const stDir = knnSnapshot.supertrend.direction;
+            alertEngine.emitSystemAlert(
+              binanceSymbol,
+              "supertrend_flip",
+              stDir,
+              "1m",
+              `SuperTrend flipped ${stDir.toUpperCase()} — KNN ${knnSnapshot.knn.bias} (conf: ${knnSnapshot.knn.confidence}%)`,
+              { direction: stDir, knnBias: knnSnapshot.knn.bias, confidence: knnSnapshot.knn.confidence }
+            ).catch(() => {});
+          }
+
+          if (isRejection) {
+            const rejDir = knnSnapshot.rejection.type === "bullish_rejection" ? "bullish" : "bearish";
+            alertEngine.emitSystemAlert(
+              binanceSymbol,
+              "knn_rejection",
+              rejDir,
+              "1m",
+              `KNN rejection orb: ${knnSnapshot.rejection.type?.replace("_", " ")} at ST level ${knnSnapshot.supertrend.level.toFixed(4)}`,
+              { type: knnSnapshot.rejection.type, wickToBody: knnSnapshot.rejection.wickToBody, volumeScore: knnSnapshot.rejection.volumeScore }
+            ).catch(() => {});
+          }
+
+          if (prevKnn && prevKnn.knn.bias !== "neutral" && knnSnapshot.knn.bias !== "neutral" && prevKnn.knn.bias !== knnSnapshot.knn.bias) {
+            alertEngine.emitSystemAlert(
+              binanceSymbol,
+              "knn_bias_flip",
+              knnSnapshot.knn.bias,
+              "1m",
+              `KNN bias flipped ${prevKnn.knn.bias} → ${knnSnapshot.knn.bias} (conf: ${knnSnapshot.knn.confidence}%)`,
+              { from: prevKnn.knn.bias, to: knnSnapshot.knn.bias, confidence: knnSnapshot.knn.confidence }
+            ).catch(() => {});
+          }
+
+          if (prevKnn && prevKnn.regime !== knnSnapshot.regime) {
+            alertEngine.emitSystemAlert(
+              binanceSymbol,
+              "knn_regime_change",
+              null,
+              "1m",
+              `Market regime: ${prevKnn.regime} → ${knnSnapshot.regime} (${knnSnapshot.note})`,
+              { from: prevKnn.regime, to: knnSnapshot.regime, note: knnSnapshot.note }
+            ).catch(() => {});
+          }
+
+          prevKnnSnapshotCache.set(binanceSymbol, knnSnapshot);
+        }
       }
     } else {
       console.log(`[signal-router] Skipping duplicate signal update for ${binanceSymbol} (no active SMC, indicator alerts, or bias transitions).`);

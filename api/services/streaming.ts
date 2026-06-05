@@ -50,10 +50,43 @@ function ensureHeartbeat() {
   }, 5_000);
 }
 
+// ─── Dead-stream watchdog ───────────────────────────────────────────────────
+// Tracks the last message timestamp per symbol. If a subscribed stream goes
+// silent for > 60 s we force-reconnect it so trading never runs on stale data.
+
+if (!(_g.__lastMessageAt instanceof Map)) {
+  _g.__lastMessageAt = new Map<string, number>();
+}
+const lastMessageAt = _g.__lastMessageAt as Map<string, number>;
+
+let watchdogInterval: ReturnType<typeof setInterval> | null = null;
+function ensureWatchdog() {
+  if (watchdogInterval) return;
+  watchdogInterval = setInterval(() => {
+    const now = Date.now();
+    for (const [symbol] of activeStreams) {
+      const last = lastMessageAt.get(symbol) ?? 0;
+      if (last > 0 && now - last > 60_000) {
+        console.error(
+          `[streaming] WATCHDOG: ${symbol} stream silent for ` +
+          `${Math.round((now - last) / 1000)}s — forcing reconnect`
+        );
+        // Terminate the socket; the existing close handler will reconnect with backoff
+        const stream = activeStreams.get(symbol);
+        stream?.ws?.terminate();
+        lastMessageAt.delete(symbol); // reset so we don't fire again immediately
+      }
+    }
+  }, 30_000); // check every 30s
+}
+
 function getBinanceWsUrl(symbol: string): string {
   const s = symbol.toLowerCase();
-  // Using Binance Futures stream to get liquidations (@forceOrder) and funding (@markPrice)
-  return `wss://fstream.binance.com/stream?streams=${s}@depth20@100ms/${s}@trade/${s}@ticker/${s}@kline_1m/${s}@forceOrder/${s}@markPrice`;
+  // USE_TESTNET routes to Binance testnet; streams are otherwise identical
+  const host = process.env.USE_TESTNET === "true"
+    ? "stream.binancefuture.com"
+    : "fstream.binance.com";
+  return `wss://${host}/stream?streams=${s}@depth20@100ms/${s}@trade/${s}@ticker/${s}@kline_1m/${s}@forceOrder/${s}@markPrice`;
 }
 
 function getErrorMessage(err: unknown): string {
@@ -118,6 +151,7 @@ export function subscribeToSymbol(symbol: string) {
 
   ws.on("message", async (dataStr) => {
     try {
+      lastMessageAt.set(symbol, Date.now()); // watchdog timestamp
       getOrCreateFeedHealth(symbol).recordMessage();
       const payload = JSON.parse(dataStr.toString());
       const { stream, data } = payload;
@@ -369,6 +403,7 @@ export function subscribeToSymbol(symbol: string) {
   });
 
   ensureHeartbeat();
+  ensureWatchdog();
 }
 
 export function unsubscribeFromSymbol(symbol: string) {
@@ -386,6 +421,12 @@ export function unsubscribeFromSymbol(symbol: string) {
       current.ws.close();
     }
     activeStreams.delete(symbol);
+
+    // Evict per-symbol caches in signal-router + alertEngine storm maps
+    // Dynamic import avoids a circular dependency (streaming ← signal-router ← streaming)
+    import("../routers/signal-router").then(({ evictKnnSnapshot }) => {
+      evictKnnSnapshot(symbol);
+    }).catch(() => {});
   }
 }
 
@@ -400,6 +441,8 @@ if ((import.meta as any).hot) {
       stream.ws?.terminate();
     }
     activeStreams.clear();
+    lastMessageAt.clear();
     if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+    if (watchdogInterval) { clearInterval(watchdogInterval); watchdogInterval = null; }
   });
 }

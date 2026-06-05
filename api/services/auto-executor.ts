@@ -15,7 +15,7 @@
 
 import { EventEmitter } from "events";
 import { getDb } from "../queries/connection";
-import { positions, exchangeCredentials, autoExecutorConfig, systemLogs } from "@db/schema";
+import { positions, exchangeCredentials, autoExecutorConfig, systemLogs, signals } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { globalKillSwitch } from "./kill-switch";
 import { isFundingExtreme } from "./funding-filter";
@@ -35,6 +35,7 @@ import type { ExitDecision } from "./exit-manager";
 import { snapshotEquity } from "./performance-tracker";
 import { getPaperWallet, lockPaperMargin, releasePaperMargin, getPaperEquity } from "./paper-wallet";
 import { env } from "../lib/env";
+import { decryptCreds } from "../lib/crypto";
 import type { Signal, AutoExecutorConfig } from "@db/schema";
 import type { StrategyType } from "./strategy-config";
 
@@ -82,6 +83,10 @@ export class AutoExecutor {
     lastDecision: null,
   };
 
+  /** Dedup map: symbol+direction → timestamp of last execution */
+  private recentExecutions = new Map<string, number>();
+  private readonly DEDUP_WINDOW_MS = 60_000;
+
   // Cache config to avoid DB read on every signal
   private configCache: AutoExecutorConfig | null = null;
   private configCacheAt = 0;
@@ -98,6 +103,14 @@ export class AutoExecutor {
       (s) => s.isGated && s.direction !== "neutral" && s.direction !== null
     );
     if (gated.length === 0) return;
+
+    // Clean up stale dedup entries to prevent unbounded memory growth
+    const now = Date.now();
+    for (const [key, ts] of this.recentExecutions) {
+      if (now - ts > this.DEDUP_WINDOW_MS) {
+        this.recentExecutions.delete(key);
+      }
+    }
 
     for (const signal of gated) {
       try {
@@ -208,6 +221,22 @@ export class AutoExecutor {
     // Gate 1: symbol in target list
     if (!targetSymbols.includes(symbol)) return this.skip(signal, `${symbol} not in target list`);
 
+    // Gate 1b: signal staleness — reject signals older than 60s
+    const signalAgeMs = Date.now() - new Date(signal.createdAt).getTime();
+    if (signalAgeMs > 60_000) {
+      return this.skip(signal, `stale signal (${Math.round(signalAgeMs / 1000)}s old)`);
+    }
+
+    // Gate 1c: dedup — prevent same symbol+direction executing twice within 60s
+    const dedupKey = `${symbol}:${signal.direction}`;
+    const lastExec = this.recentExecutions.get(dedupKey) ?? 0;
+    if (Date.now() - lastExec < this.DEDUP_WINDOW_MS) {
+      return this.skip(
+        signal,
+        `dedup: same ${symbol} ${signal.direction} executed ${Math.round((Date.now() - lastExec) / 1000)}s ago`
+      );
+    }
+
     // Gate 2: kill switch
     if (!globalKillSwitch.canTrade()) return this.skip(signal, "kill switch active");
 
@@ -237,10 +266,17 @@ export class AutoExecutor {
     const corrCheck = await checkCorrelation(symbol, side, 1);
     if (!corrCheck.allowed) return this.skip(signal, corrCheck.reason);
 
+    // Gate 6b: spread filter — reject wide-spread / low-liquidity conditions
+    const metadata = signal.metadata as Record<string, unknown> | null;
+    const spreadPct = metadata?.spread as number | undefined;
+    if (spreadPct !== undefined && spreadPct > 0.01) {
+      return this.skip(signal, `spread ${(spreadPct * 100).toFixed(3)}% > 1% — low liquidity`);
+    }
+
     // Gate 7: risk engine
     let walletFree = 0;
     let walletLocked = 0;
-    const isPaperMode = !env.placeOrders;
+    const isPaperMode = !env.placeOrders || env.paperTrading;
 
     const creds = await db
       .select()
@@ -256,12 +292,15 @@ export class AutoExecutor {
       walletLocked = pw.lockedMargin;
     } else if (creds[0]) {
       try {
-        const liveWallets = await getFuturesWallet({ apiKey: creds[0].apiKey, apiSecret: creds[0].apiSecret });
+        const liveWallets = await getFuturesWallet(decryptCreds(creds[0]));
         for (const w of liveWallets) {
           walletFree += parseFloat(w.balance ?? "0");
           walletLocked += parseFloat(w.locked_balance ?? "0");
         }
-      } catch { /* fallback to 0 */ }
+      } catch {
+        // Live wallet fetch failed — do not trade on phantom balance
+        return this.skip(signal, "wallet balance unavailable — skipping to prevent oversizing");
+      }
     }
 
     const session = getOrCreateSession(1, walletFree || 10_000);
@@ -370,10 +409,12 @@ export class AutoExecutor {
     const notional = Math.min(sizeUsdt * sizeMult, balanceCap);
 
     // Leverage: if useStrategyLeverage=true, use strategy's maxLeverage; else use defaultLeverage
+    // Hard cap at 10× regardless of strategy config to prevent over-leveraged positions
     const strategyMaxLev = STRATEGY_CONFIGS[regimeData?.strategy ?? "intraday"]?.maxLeverage ?? 5;
-    const leverage = config.useStrategyLeverage
+    const rawLeverage = config.useStrategyLeverage
       ? strategyMaxLev
       : Math.min(config.defaultLeverage ?? 3, strategyMaxLev);
+    const leverage = Math.min(rawLeverage, 10);
 
     // Validate size and precision against instrument specifications
     let rawSize = notional / currentPrice;
@@ -413,6 +454,20 @@ export class AutoExecutor {
       ? currentPrice * (1 + tp1Pct)
       : currentPrice * (1 - tp1Pct);
 
+    // Gate (depth): order size must be < 5% of available depth on the relevant side.
+    // Prevents the bot from becoming the market for illiquid symbols.
+    const book = marketStateManager.get(symbol)?.orderBook;
+    if (book) {
+      const levels = side === "long" ? book.asks : book.bids;
+      const totalDepth = levels.reduce((sum, [, qty]) => sum + qty, 0);
+      if (totalDepth > 0 && size > totalDepth * 0.05) {
+        return this.skip(
+          signal,
+          `order size ${size.toFixed(4)} > 5% of book depth ${totalDepth.toFixed(4)} — too large for liquidity`
+        );
+      }
+    }
+
     // Execute
     await this.executePosition({
       userId: 1,
@@ -426,9 +481,12 @@ export class AutoExecutor {
       takeProfit: parseFloat(takeProfit.toFixed(basePrecision)),
       signalId: signal.id ?? undefined,
       strategyType: (regimeData?.strategy ?? "intraday") as StrategyType,
-      creds: creds[0],
+      creds: creds[0] ? decryptCreds(creds[0]) : undefined,
       isPaper: isPaperMode,
     });
+
+    // Record execution for dedup gate (Gate 1c)
+    this.recentExecutions.set(dedupKey, Date.now());
 
     // Lock margin in paper wallet
     if (isPaperMode) {
@@ -480,6 +538,7 @@ export class AutoExecutor {
     let exchangeOrderId: string | undefined;
 
     if (params.creds && env.placeOrders) {
+      const clientOrderId = `AE-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       try {
         const coindcxSym = `B-${params.symbol.replace("USDT", "_USDT")}`;
         const order = await createFuturesOrder(
@@ -491,37 +550,50 @@ export class AutoExecutor {
             total_quantity: params.size,
             price: params.currentPrice,
             leverage: params.leverage,
+            client_order_id: clientOrderId,
           }
         );
         exchangeOrderId = order?.id;
-        console.log(`[auto-executor] Exchange order placed: ${exchangeOrderId}`);
+        console.log(`[auto-executor] Exchange order placed: ${exchangeOrderId} (client=${clientOrderId})`);
+
+        // Verify order was fully filled (remaining_quantity should be "0" for market orders)
+        const remaining = parseFloat(order?.remaining_quantity ?? "0");
+        if (remaining > 0) {
+          console.warn(
+            `[auto-executor] Order ${exchangeOrderId} partially filled — remaining=${remaining}. ` +
+            `Position will reflect actual fill.`
+          );
+        }
       } catch (err: any) {
         console.error(`[auto-executor] Exchange order failed: ${err.message}`);
         throw err; // re-throw so processSignal catches it
       }
     }
 
-    const result = await db.insert(positions).values({
-      userId: params.userId,
-      symbol: params.symbol,
-      side: params.side,
-      entryPrice: String(params.currentPrice),
-      currentPrice: String(params.currentPrice),
-      size: String(params.size),
-      leverage: params.leverage,
-      margin: String((params.notional / params.leverage).toFixed(4)),
-      stopLoss: String(params.stopLoss),
-      takeProfit: String(params.takeProfit),
-      unrealizedPnl: "0",
-      realizedPnl: "0",
-      status: "open",
-      exchangeOrderId,
-      signalId: params.signalId,
-      strategyType: params.strategyType,
-      isPaper: params.isPaper,
-    }).returning({ id: positions.id });
+    // Wrap DB write in a transaction so a DB failure after order placement is detectable
+    const posId = await db.transaction(async (tx) => {
+      const result = await tx.insert(positions).values({
+        userId: params.userId,
+        symbol: params.symbol,
+        side: params.side,
+        entryPrice: String(params.currentPrice),
+        currentPrice: String(params.currentPrice),
+        size: String(params.size),
+        leverage: params.leverage,
+        margin: String((params.notional / params.leverage).toFixed(4)),
+        stopLoss: String(params.stopLoss),
+        takeProfit: String(params.takeProfit),
+        unrealizedPnl: "0",
+        realizedPnl: "0",
+        status: "open",
+        exchangeOrderId,
+        signalId: params.signalId,
+        strategyType: params.strategyType,
+        isPaper: params.isPaper,
+      }).returning({ id: positions.id });
+      return result[0].id;
+    });
 
-    const posId = result[0].id;
     registerPositionForTrailing({
       id: posId,
       symbol: params.symbol,
@@ -581,6 +653,25 @@ export class AutoExecutor {
     if (position.isPaper) {
       await releasePaperMargin(position.userId, parseFloat(position.margin), realizedPnl, position.id);
     }
+
+    // Update signal outcome for post-trade analysis / win-rate tracking
+    if (position.signalId) {
+      const reason = payload.decision.reason ?? "";
+      const outcome = reason.includes("Stop Loss")
+        ? "sl_hit"
+        : reason.includes("Take Profit")
+        ? "tp_hit"
+        : "manual_close";
+      db.update(signals)
+        .set({ outcome })
+        .where(eq(signals.id, position.signalId))
+        .catch(() => {});
+    }
+
+    // Update risk session so cooldown and drawdown circuit breakers fire correctly
+    const session = getOrCreateSession(position.userId, 0);
+    const updatedSession = globalRiskEngine.recordTrade(session, { pnl: realizedPnl });
+    updateSession(updatedSession);
 
     // Clean up trailing‑stop monitoring
     unregisterPosition(position.id);

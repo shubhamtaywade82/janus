@@ -21,6 +21,7 @@ import { OrderBlockPrimitive } from "@/lib/chart/primitives/OrderBlockPrimitive"
 import { FVGPrimitive } from "@/lib/chart/primitives/FVGPrimitive";
 import { StructurePrimitive } from "@/lib/chart/primitives/StructurePrimitive";
 import { VolumeProfilePrimitive } from "@/lib/chart/primitives/VolumeProfilePrimitive";
+import { OrderBookDepthPrimitive } from "@/lib/chart/primitives/OrderBookDepthPrimitive";
 import { SessionShadingPrimitive } from "@/lib/chart/primitives/SessionShadingPrimitive";
 import { CrosshairTooltipPrimitive } from "@/lib/chart/primitives/CrosshairTooltipPrimitive";
 import { LiquiditySweepPrimitive, type SweepMarker } from "@/lib/chart/primitives/LiquiditySweepPrimitive";
@@ -28,8 +29,6 @@ import { ChartOverlayPanel } from "@/components/ChartOverlayPanel";
 import type { OverlayToggles } from "@/components/ChartOverlayPanel";
 import { IndicatorPanel } from "@/components/IndicatorPanel";
 import { AlertConfigPanel } from "@/components/AlertConfigPanel";
-import type { AlertConfig } from "@/lib/chart/alert-engine";
-import { checkIndicatorAlerts, checkSMCAlerts } from "@/lib/chart/alert-engine";
 import type { IndicatorConfig } from "@/components/IndicatorPanel";
 import { EMA_COLORS, SMA_COLORS } from "@/components/IndicatorPanel";
 import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, calcNW, calcMACD, calcStochRSI, calcPSAR, calcIchimoku, calcADX, calcZScore, calcVolumeProfile, calcKeltner, calcDonchian, calcTTMSqueeze } from "@/lib/chart/indicators";
@@ -60,7 +59,7 @@ const resolveCSSColor = (varName: string, fallback: string): string => {
 };
 
 // ─── TradingView Lightweight Chart Component ───
-const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice, cvdBars, liquidityEvents }: {
+const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice, cvdBars, liquidityEvents, orderBook }: {
   data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string;
   onLoadMore?: (beforeTime: number) => void;
   overlayData?: PriceActionData | null;
@@ -70,10 +69,13 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   askPrice?: number;
   cvdBars?: { ts: number; delta: number; cumulative: number }[];
   liquidityEvents?: Array<{ id: string; type: string; priority: string; symbol: string; timestamp: number; message: string; data?: any }>;
+  orderBook?: { bids: [number, number][]; asks: [number, number][] };
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
   const [chartInitialized, setChartInitialized] = useState(false);
+  const [lastPriceY, setLastPriceY] = useState<number | null>(null);
+  const [countdownStr, setCountdownStr] = useState<string>("");
   const [positionsY, setPositionsY] = useState<Record<number, { entryY: number | null; liqY: number | null }>>({});
   const [isScrolledBack, setIsScrolledBack] = useState(false);
   const priceLinesRef = useRef<any[]>([]);
@@ -186,8 +188,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const zScorePriceLinesRef = useRef<any[]>([]);
   // Volume Profile primitive
   const vpPrimRef = useRef<VolumeProfilePrimitive | null>(null);
+  // Order Book Depth primitive
+  const obDepthPrimRef = useRef<OrderBookDepthPrimitive | null>(null);
   // TTM Squeeze histogram series
-  const ttmSqHistRef = useRef<any>(null);
+  const ttmSqHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   // Dedicated indicator signal markers plugin (separate from SMC markers)
   const indicatorMarkersRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
   // ─── Price line overlay (smooth thin line tracking close price) ───
@@ -328,6 +332,12 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   useEffect(() => { dataRef.current = data; }, [data]);
   useEffect(() => { onLoadMoreRef.current = onLoadMore; }, [onLoadMore]);
 
+  useEffect(() => {
+    if (obDepthPrimRef.current) {
+      obDepthPrimRef.current.setData(orderBook || null);
+    }
+  }, [orderBook]);
+
   // 1. Initialize Chart instance once
   useEffect(() => {
     if (!chartContainerRef.current) return;
@@ -424,15 +434,16 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         // Show latest data if cursor is out of bounds
         const last = currentData[currentData.length - 1];
         if (last) {
+          const dec = getPriceDecimals(symbol);
           const o = parseFloat(last.open);
           const c = parseFloat(last.close);
           const pct = ((c - o) / o) * 100;
           setHudData({
             time: new Date(last.openTime).toLocaleString(),
-            open: o.toFixed(2),
-            high: parseFloat(last.high).toFixed(2),
-            low: parseFloat(last.low).toFixed(2),
-            close: c.toFixed(2),
+            open: o.toFixed(dec),
+            high: parseFloat(last.high).toFixed(dec),
+            low: parseFloat(last.low).toFixed(dec),
+            close: c.toFixed(dec),
             volume: parseFloat(last.volume).toFixed(2),
             pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
             isGreen: c >= o,
@@ -446,15 +457,16 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const volume = param.seriesData.get(volumeSeries) as any;
 
       if (candle) {
+        const dec = getPriceDecimals(symbol);
         const o = candle.open;
         const c = candle.close;
         const pct = ((c - o) / o) * 100;
         setHudData({
           time: new Date((param.time as number) * 1000).toLocaleString(),
-          open: o.toFixed(2),
-          high: candle.high.toFixed(2),
-          low: candle.low.toFixed(2),
-          close: c.toFixed(2),
+          open: o.toFixed(dec),
+          high: candle.high.toFixed(dec),
+          low: candle.low.toFixed(dec),
+          close: c.toFixed(dec),
           volume: volume ? volume.value.toFixed(2) : "0.00",
           pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
           isGreen: c >= o,
@@ -729,15 +741,16 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     isLoadingMoreRef.current = false; // allow next lazy load after chart updated
 
     // Update HUD with live last candle
+    const dec = getPriceDecimals(symbol);
     const o = parseFloat(last.open);
     const c = parseFloat(last.close);
     const pct = ((c - o) / o) * 100;
     setHudData({
       time: new Date(last.openTime).toLocaleString(),
-      open: o.toFixed(2),
-      high: parseFloat(last.high).toFixed(2),
-      low: parseFloat(last.low).toFixed(2),
-      close: c.toFixed(2),
+      open: o.toFixed(dec),
+      high: parseFloat(last.high).toFixed(dec),
+      low: parseFloat(last.low).toFixed(dec),
+      close: c.toFixed(dec),
       volume: parseFloat(last.volume).toFixed(2),
       pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
       isGreen: c >= o,
@@ -780,13 +793,14 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     animTarget.current = { time: lastTime, open: o, high: h, low: l, close: targetClose, vol };
     startAnimLoop();
 
+    const dec = getPriceDecimals(symbol);
     const pct = ((targetClose - o) / o) * 100;
     setHudData({
       time: new Date(last.openTime).toLocaleString(),
-      open: o.toFixed(2),
-      high: h.toFixed(2),
-      low: l.toFixed(2),
-      close: targetClose.toFixed(2),
+      open: o.toFixed(dec),
+      high: h.toFixed(dec),
+      low: l.toFixed(dec),
+      close: targetClose.toFixed(dec),
       volume: vol.toFixed(2),
       pct: `${pct >= 0 ? "+" : ""}${pct.toFixed(2)}%`,
       isGreen: targetClose >= o,
@@ -1296,8 +1310,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const { values, direction } = calcPSAR(highs, lows, closes, indicatorCfg.psarStep, indicatorCfg.psarMax);
       const bullSAR = values.map((v, i) => direction[i] === "up"   ? v : null);
       const bearSAR = values.map((v, i) => direction[i] === "down" ? v : null);
-      addOrUpdate("psar-bull", bullSAR, "hsl(var(--janus-up))",   false, "right");
-      addOrUpdate("psar-bear", bearSAR, "hsl(var(--janus-down))", false, "right");
+      addOrUpdate("psar-bull", bullSAR, "#0ecb81",   false, "right");
+      addOrUpdate("psar-bear", bearSAR, "#f6465d", false, "right");
       // Style as dotted (lineStyle 3) to visually approximate dots
       const dotStyle = { lineWidth: 1, lineStyle: 3 } as const;
       serMap.get("psar-bull")?.applyOptions({ ...dotStyle, lineWidth: 1 });
@@ -1325,8 +1339,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         futureSpanA[i] = spanA[i + disp] ?? null;
         futureSpanB[i] = spanB[i + disp] ?? null;
       }
-      addOrUpdate("ichi-spanA", futureSpanA, "hsl(var(--janus-up)/0.60)",   true);
-      addOrUpdate("ichi-spanB", futureSpanB, "hsl(var(--janus-down)/0.60)", true);
+      addOrUpdate("ichi-spanA", futureSpanA, "rgba(14,203,129,0.60)",   true);
+      addOrUpdate("ichi-spanB", futureSpanB, "rgba(246,70,93,0.60)", true);
     } else {
       ["ichi-tenkan", "ichi-kijun", "ichi-chikou", "ichi-spanA", "ichi-spanB"].forEach(removeKey);
     }
@@ -1337,8 +1351,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const { adx, diPlus, diMinus } = calcADX(highs, lows, closes, indicatorCfg.adxPeriod);
       const adxScaleOpts = { scaleMargins: { top: 0.76, bottom: 0 }, borderVisible: false };
       addOrUpdate("adx-line",    adx,     "rgba(245,158,11,0.90)",  false, "adx");
-      addOrUpdate("adx-diplus",  diPlus,  "hsl(var(--janus-up)/0.80)",   false, "adx");
-      addOrUpdate("adx-diminus", diMinus, "hsl(var(--janus-down)/0.80)", false, "adx");
+      addOrUpdate("adx-diplus",  diPlus,  "rgba(14,203,129,0.80)",   false, "adx");
+      addOrUpdate("adx-diminus", diMinus, "rgba(246,70,93,0.80)", false, "adx");
       serMap.get("adx-line")?.priceScale().applyOptions(adxScaleOpts);
     } else {
       ["adx-line", "adx-diplus", "adx-diminus"].forEach(removeKey);
@@ -1433,6 +1447,18 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       vpPrimRef.current.setData(null);
       try { candlestickSeriesRef.current?.detachPrimitive(vpPrimRef.current); } catch { /* safe */ }
       vpPrimRef.current = null;
+    }
+
+    // Order Book Depth — canvas primitive attached to candlestick series
+    if (interval === "1m" && candlestickSeriesRef.current) {
+      if (!obDepthPrimRef.current) {
+        obDepthPrimRef.current = new OrderBookDepthPrimitive();
+        try { candlestickSeriesRef.current.attachPrimitive(obDepthPrimRef.current); } catch { /* safe */ }
+      }
+    } else if (interval !== "1m" && obDepthPrimRef.current) {
+      obDepthPrimRef.current.setData(null);
+      try { candlestickSeriesRef.current?.detachPrimitive(obDepthPrimRef.current); } catch { /* safe */ }
+      obDepthPrimRef.current = null;
     }
 
     // ── Indicator Signal Markers ─────────────────────────────────────────
@@ -1696,12 +1722,18 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const updatePositionsCoordinates = useCallback(() => {
     const chart = chartRef.current;
     const series = candlestickSeriesRef.current;
-    if (!chart || !series || !positions || positions.length === 0) {
-      setPositionsY({});
-      return;
+    const newCoords: Record<number, { entryY: number | null; liqY: number | null }> = {};
+    
+    if (lastPrice > 0) {
+      setLastPriceY(series.priceToCoordinate(lastPrice));
+    } else {
+      setLastPriceY(null);
     }
 
-    const newCoords: Record<number, { entryY: number | null; liqY: number | null }> = {};
+    if (!positions || positions.length === 0) {
+      setPositionsY(newCoords);
+      return;
+    }
     positions.forEach((pos) => {
       const entryPrice = parseFloat(pos.entryPrice);
       if (isNaN(entryPrice) || entryPrice <= 0) return;
@@ -1744,6 +1776,47 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       }
     };
   }, [chartInitialized, updatePositionsCoordinates]);
+
+  // Countdown Timer
+  useEffect(() => {
+    if (data.length === 0) return;
+    const intervalMap: Record<string, number> = {
+      "1s": 1000,
+      "1m": 60000,
+      "3m": 180000,
+      "5m": 300000,
+      "15m": 900000,
+      "30m": 1800000,
+      "1h": 3600000,
+      "2h": 7200000,
+      "4h": 14400000,
+      "6h": 21600000,
+      "8h": 28800000,
+      "12h": 43200000,
+      "1d": 86400000,
+    };
+    const ms = intervalMap[interval] || 60000;
+    
+    const tick = () => {
+      const lastOpen = data[data.length - 1].openTime;
+      const nextOpen = lastOpen + ms;
+      const remaining = Math.max(0, nextOpen - Date.now());
+      
+      const hours = Math.floor(remaining / 3600000);
+      const mins = Math.floor((remaining % 3600000) / 60000);
+      const secs = Math.floor((remaining % 60000) / 1000);
+      
+      if (hours > 0) {
+        setCountdownStr(`${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+      } else {
+        setCountdownStr(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+      }
+    };
+
+    tick(); // initial call
+    const intervalId = setInterval(tick, 1000);
+    return () => clearInterval(intervalId);
+  }, [data, interval]);
 
   return (
     <div
@@ -1797,6 +1870,19 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         </button>
       )}
 
+      {/* Countdown Timer Overlay */}
+      {lastPriceY !== null && countdownStr && (
+        <div
+          className="absolute z-20 text-[10px] text-[#f59e0b] font-medium font-mono pointer-events-none transition-all duration-75"
+          style={{
+            top: `${lastPriceY + 14}px`, // perfectly positioned right below the price tag
+            right: '4px',
+            textShadow: '0px 0px 4px rgba(0,0,0,0.8), 1px 1px 0px black, -1px -1px 0px black',
+          }}
+        >
+          {countdownStr}
+        </div>
+      )}
       {/* HTML Position Lines Left/Right Labels Overlay */}
       {chartInitialized && positions && positions.length > 0 && lastPrice > 0 && (
         <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
@@ -2031,6 +2117,58 @@ function aggregateOrderBook(levels: [string, string][], step: number, isBid: boo
     .sort((a, b) => isBid ? parseFloat(b[0]) - parseFloat(a[0]) : parseFloat(a[0]) - parseFloat(b[0]));
 }
 
+// Helper to summarize events in the last 60 seconds
+const getTapeSummary = (events: any[]) => {
+  const cutoff = Date.now() - 60_000;
+  const recent = events.filter((ev) => ev.timestamp >= cutoff);
+  if (recent.length === 0) return null;
+
+  const counts: Record<string, number> = {};
+  let bullishScore = 0;
+  let bearishScore = 0;
+
+  recent.forEach((ev) => {
+    const type = (ev.type || "").replace(/_/g, " ").toUpperCase();
+    counts[type] = (counts[type] || 0) + 1;
+
+    const msg = (ev.message || "").toUpperCase();
+    if (
+      type.includes("BUY ABSORPTION") || 
+      type.includes("SELLER EXHAUSTION") || 
+      msg.includes("BIDS ADDED") || 
+      msg.includes("ASKS REMOVED") ||
+      msg.includes("BULLISH TRAP")
+    ) {
+      bullishScore++;
+    } else if (
+      type.includes("SELL ABSORPTION") || 
+      type.includes("BUYER EXHAUSTION") || 
+      msg.includes("ASKS ADDED") || 
+      msg.includes("BIDS REMOVED") ||
+      msg.includes("BEARISH TRAP")
+    ) {
+      bearishScore++;
+    }
+  });
+
+  const parts = Object.entries(counts).map(([type, count]) => `${count} ${type}`);
+  let sentiment = "Neutral Balance";
+  let sentimentColor = "text-[#a1a1aa]";
+  if (bullishScore > bearishScore) {
+    sentiment = "Bullish 📈";
+    sentimentColor = "text-[#0ecb81]";
+  } else if (bearishScore > bullishScore) {
+    sentiment = "Bearish 📉";
+    sentimentColor = "text-[#f6465d]";
+  }
+
+  return {
+    text: `Last 60s: ${parts.join(", ")}.`,
+    sentiment,
+    sentimentColor,
+  };
+};
+
 // ─── Order Book Component ───
 const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLiquidityEvent }: { symbol: string; tickerData: any; markPrice?: number; liquidityEvents: any[]; onLiquidityEvent: (event: any) => void }) => {
   const [activeTab, setActiveTab] = useState<"book" | "telemetry">("book");
@@ -2110,11 +2248,11 @@ const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLiquidity
 
   // Aggregate dynamically
   const bids = useMemo(() => {
-    return aggregateOrderBook(rawBids, priceStep, true).slice(0, 6);
+    return aggregateOrderBook(rawBids, priceStep, true).slice(0, 20);
   }, [rawBids, priceStep]);
 
   const asks = useMemo(() => {
-    return aggregateOrderBook(rawAsks, priceStep, false).slice(0, 6);
+    return aggregateOrderBook(rawAsks, priceStep, false).slice(0, 20);
   }, [rawAsks, priceStep]);
 
   // Compute cumulative sums and total volumes
@@ -2469,9 +2607,27 @@ const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLiquidity
 
                 {/* Liquidity Event Tape */}
                 <div className="flex-1 mt-1 flex flex-col min-h-[60px] rounded-md border border-[#27272a] bg-[#09090b] overflow-hidden">
-                  <div className="px-2 py-1 text-[8px] uppercase tracking-wider text-[#71717a] font-bold border-b border-[#27272a] bg-[#18181b]">
-                    Live Event Tape
+                  <div className="px-2 py-1 text-[8px] uppercase tracking-wider text-[#71717a] font-bold border-b border-[#27272a] bg-[#18181b] flex justify-between items-center">
+                    <span>Live Event Tape</span>
+                    {(() => {
+                      const summary = getTapeSummary(liquidityEvents);
+                      if (!summary) return null;
+                      return (
+                        <span className={cn("text-[8px] font-bold uppercase", summary.sentimentColor)}>
+                          {summary.sentiment}
+                        </span>
+                      );
+                    })()}
                   </div>
+                  {(() => {
+                    const summary = getTapeSummary(liquidityEvents);
+                    if (!summary) return null;
+                    return (
+                      <div className="px-2 py-1 border-b border-[#27272a] bg-[#18181b]/30 text-[8px] text-[#a1a1aa] leading-tight select-none">
+                        {summary.text}
+                      </div>
+                    );
+                  })()}
                   <div className="flex-1 overflow-y-auto overflow-x-hidden p-1 space-y-0.5">
                     {liquidityEvents.length === 0 && (
                       <div className="text-center text-[#52525b] text-[9px] py-4">No recent events</div>
@@ -2722,10 +2878,12 @@ const Dashboard = () => {
   const [ticker, setTicker] = useState<any>(null);
   const [bestBid, setBestBid] = useState<number | null>(null);
   const [bestAsk, setBestAsk] = useState<number | null>(null);
+  const [orderBook, setOrderBook] = useState<{ bids: [number, number][]; asks: [number, number][] } | null>(null);
 
   useEffect(() => {
     setBestBid(null);
     setBestAsk(null);
+    setOrderBook(null);
   }, [selectedSymbol]);
 
   // Track which symbol+interval the current klines state belongs to
@@ -2795,7 +2953,6 @@ const Dashboard = () => {
 
   // ─── SMC / Price Action overlay ───
   const [indicatorCfg, setIndicatorCfg] = useState<IndicatorConfig | null>(null);
-  const [alertCfg, setAlertCfg] = useState<AlertConfig | null>(null);
   const prevPaDataRef = useRef<any>(null);
   const prevKlinesLenRef = useRef(0);
 
@@ -2833,7 +2990,7 @@ const Dashboard = () => {
         if (last.openTime === kline.openTime) {
           return [...prev.slice(0, -1), kline];
         } else if (kline.openTime > last.openTime) {
-          return [...prev, kline].slice(-150);
+          return [...prev, kline].slice(-2000);
         }
         return prev;
       });
@@ -2851,12 +3008,81 @@ const Dashboard = () => {
     klineStreamOpts.current
   );
 
+  const formingCandleRef = useRef<{ openTime: number; high: number; low: number; close: number } | null>(null);
+
   const tickerCallbackRef = useRef<(data: any) => void>(() => {});
   useEffect(() => {
     tickerCallbackRef.current = (data: any) => {
       setTicker((prev: any) => (prev ? { ...prev, ...data } : data));
+      
+      // Auto-rollover candle based on real-time ticks for all timeframes
+      const price = parseFloat(data.lastPrice);
+      if (!isNaN(price) && price > 0) {
+        setKlines((prev) => {
+          if (prev.length === 0) return prev;
+          
+          const match = interval.match(/^(\d+)([smhd])$/);
+          let intervalMs = 60000;
+          if (match) {
+            const val = parseInt(match[1], 10);
+            const unit = match[2];
+            if (unit === 'm') intervalMs = val * 60000;
+            else if (unit === 'h') intervalMs = val * 3600000;
+            else if (unit === 'd') intervalMs = val * 86400000;
+            else if (unit === 's') intervalMs = val * 1000;
+          }
+          
+          const currentTime = data.eventTime || Date.now();
+          const currentPeriodStart = Math.floor(currentTime / intervalMs) * intervalMs;
+          
+          const last = prev[prev.length - 1];
+          
+          // Accumulate highest high and lowest low of the currently forming candle
+          if (!formingCandleRef.current || formingCandleRef.current.openTime !== last.openTime) {
+            formingCandleRef.current = {
+              openTime: last.openTime,
+              high: Math.max(parseFloat(last.high), price),
+              low: Math.min(parseFloat(last.low), price),
+              close: price,
+            };
+          } else {
+            formingCandleRef.current.high = Math.max(formingCandleRef.current.high, price);
+            formingCandleRef.current.low = Math.min(formingCandleRef.current.low, price);
+            formingCandleRef.current.close = price;
+          }
+
+          // If we crossed into a new timeframe period, finalize the old candle and manually inject a new one
+          if (currentPeriodStart > last.openTime) {
+            const finalizedOldKline: KlineData = {
+              ...last,
+              high: String(formingCandleRef.current.high),
+              low: String(formingCandleRef.current.low),
+              close: String(formingCandleRef.current.close),
+            };
+
+            const newKline: KlineData = {
+              openTime: currentPeriodStart,
+              open: String(price),
+              high: String(price),
+              low: String(price),
+              close: String(price),
+              volume: "0",
+            };
+
+            formingCandleRef.current = {
+              openTime: currentPeriodStart,
+              high: price,
+              low: price,
+              close: price,
+            };
+
+            return [...prev.slice(0, -1), finalizedOldKline, newKline].slice(-2000);
+          }
+          return prev;
+        });
+      }
     };
-  }, []);
+  }, [interval]);
 
   const tickerStreamOpts = useRef({
     onData: (data: any) => tickerCallbackRef.current(data),
@@ -2876,8 +3102,15 @@ const Dashboard = () => {
       if (data.asks && data.asks.length > 0) {
         setBestAsk(parseFloat(data.asks[0][0]));
       }
+
+      if (interval === "1m") {
+        setOrderBook({
+          bids: data.bids ? data.bids.map((b: string[]) => [parseFloat(b[0]), parseFloat(b[1])]) : [],
+          asks: data.asks ? data.asks.map((a: string[]) => [parseFloat(a[0]), parseFloat(a[1])]) : []
+        });
+      }
     };
-  }, []);
+  }, [interval]);
 
   const depthStreamOpts = useRef({
     onData: (data: any) => depthCallbackRef.current(data),
@@ -2984,39 +3217,10 @@ const Dashboard = () => {
   const lastPrice = tickerData ? parseFloat(tickerData.lastPrice) : 0;
   const priceChange = tickerData ? parseFloat(tickerData.priceChangePercent) : 0;
 
-  // ─── Alert engine — runs when new candle or new SMC data arrives ───
-  const sendTelegramAlert = trpc.telegram.sendAlert.useMutation().mutate;
-
+  // Track previous PA data ref for chart overlay diffing
   useEffect(() => {
-    if (!alertCfg || !indicatorCfg || klines.length < 3) return;
-    const isNewCandle = klines.length !== prevKlinesLenRef.current;
-    const isNewPaData = paData !== prevPaDataRef.current;
-    if (!isNewCandle && !isNewPaData) return;
-
-    const currentPrice = lastPrice || parseFloat(klines[klines.length - 1]?.close ?? "0");
-    const allEvents: import("@/lib/chart/alert-engine").AlertEvent[] = [];
-
-    if (isNewCandle) {
-      allEvents.push(...checkIndicatorAlerts(klines as any[], alertCfg, indicatorCfg, selectedSymbol));
-    }
-    if (isNewPaData && paData && prevPaDataRef.current) {
-      allEvents.push(...checkSMCAlerts(paData as any, prevPaDataRef.current, currentPrice, selectedSymbol, alertCfg));
-    }
-
-    for (const evt of allEvents) {
-      toast(evt.message, {
-        description: `${selectedSymbol} @ ${evt.price.toFixed(2)} — ${interval}`,
-        duration: 8_000,
-        style: { borderLeft: `3px solid ${evt.direction === "bullish" ? "hsl(var(--janus-up))" : evt.direction === "bearish" ? "hsl(var(--janus-down))" : "#f59e0b"}` },
-      });
-      try {
-        sendTelegramAlert({ message: `${evt.emoji} <b>${selectedSymbol} ${interval}</b>\n${evt.message}\nPrice: <code>${evt.price.toFixed(4)}</code>` });
-      } catch { /* Telegram may not be configured */ }
-    }
-
-    prevKlinesLenRef.current = klines.length;
-    prevPaDataRef.current    = paData ?? prevPaDataRef.current;
-  }, [klines.length, paData, alertCfg, indicatorCfg, selectedSymbol, interval, lastPrice, sendTelegramAlert]);
+    prevPaDataRef.current = paData ?? prevPaDataRef.current;
+  }, [paData]);
 
   const maxLeverage = instrInfo?.maxLeverage ?? 10;
   const availableBalance = instrInfo?.availableUsdtEquivalent ?? 0;
@@ -3120,7 +3324,7 @@ const Dashboard = () => {
               <RegimeIndicator symbol={selectedSymbol} />
               <ChartOverlayPanel onChange={setOverlayToggles} />
               <IndicatorPanel onChange={setIndicatorCfg} />
-              <AlertConfigPanel onChange={setAlertCfg} />
+              <AlertConfigPanel onChange={() => {}} />
               <div className="h-3 w-px bg-[#27272a]" />
               <span className="text-[10px] text-[#71717a]">
                 H: {tickerData ? parseFloat(tickerData.highPrice).toFixed(2) : "--"}
@@ -3151,6 +3355,7 @@ const Dashboard = () => {
                 askPrice={bestAsk ?? undefined}
                 cvdBars={cvdBars}
                 liquidityEvents={liquidityEvents}
+                orderBook={orderBook ?? undefined}
               />
             ) : initialKlines === null || initialKlines === undefined ? (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
@@ -3499,7 +3704,7 @@ const Dashboard = () => {
               <OrderBook symbol={selectedSymbol} tickerData={tickerData} liquidityEvents={liquidityEvents} onLiquidityEvent={handleLiquidityEvent} />
             </div>
             {/* Recent Trades */}
-            <div className="h-64 border-t border-[#27272a] flex flex-col overflow-hidden bg-[#09090b]">
+            <div className="shrink-0 h-36 border-t border-[#27272a] flex flex-col overflow-hidden bg-[#09090b]">
               <RecentTrades symbol={selectedSymbol} />
             </div>
           </div>

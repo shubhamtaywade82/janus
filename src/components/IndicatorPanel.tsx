@@ -53,6 +53,8 @@ export interface IndicatorConfig {
   // Volume Profile
   volumeProfile:        boolean;
   volumeProfileBuckets: number;
+  // Order Book Depth
+  orderBookDepth:       boolean;
   // Keltner Channels
   keltner:       boolean;
   keltnerEma:    number;
@@ -81,6 +83,7 @@ const DEFAULTS: IndicatorConfig = {
   adx: false, adxPeriod: 14,
   zScore: false, zScorePeriod: 20,
   volumeProfile: false, volumeProfileBuckets: 48,
+  orderBookDepth: false,
   keltner: false, keltnerEma: 20, keltnerAtr: 10, keltnerMult: 2,
   donchian: false, donchianPeriod: 20,
   ttmSqueeze: false, ttmSqPeriod: 20, ttmSqBBMult: 2.0, ttmSqKMult: 1.5,
@@ -88,7 +91,7 @@ const DEFAULTS: IndicatorConfig = {
 
 const EMA_COLORS: Record<number, string> = {
   9:   "#f59e0b",   // amber
-  21:  "hsl(var(--janus-up))",   // green
+  21:  "#0ecb81",   // green
   50:  "#3b82f6",   // blue
   200: "#a855f7",   // purple
 };
@@ -140,7 +143,7 @@ export function IndicatorPanel({ onChange }: Props) {
     (cfg.rsi ? 1 : 0) + (cfg.vwap ? 1 : 0) + (cfg.cvd ? 1 : 0) + (cfg.nw ? 1 : 0) +
     (cfg.macd ? 1 : 0) + (cfg.stochRsi ? 1 : 0) + (cfg.psar ? 1 : 0) +
     (cfg.ichimoku ? 1 : 0) + (cfg.adx ? 1 : 0) +
-    (cfg.zScore ? 1 : 0) + (cfg.volumeProfile ? 1 : 0) +
+    (cfg.zScore ? 1 : 0) + (cfg.volumeProfile ? 1 : 0) + (cfg.orderBookDepth ? 1 : 0) +
     (cfg.keltner ? 1 : 0) + (cfg.donchian ? 1 : 0) + (cfg.ttmSqueeze ? 1 : 0);
 
   return (
@@ -366,6 +369,8 @@ export function IndicatorPanel({ onChange }: Props) {
             </div>
             {cfg.volumeProfile && <span className="text-[9px] text-[#52525b]">{cfg.volumeProfileBuckets}B</span>}
           </div>
+
+
 
           {/* Keltner Channels */}
           <div className="flex items-center justify-between mb-1.5">

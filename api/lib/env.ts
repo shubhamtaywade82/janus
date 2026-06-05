@@ -1,4 +1,8 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+import path from "path";
+
+dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), ".env.secret") });
 
 function required(name: string): string {
   const value = process.env[name];
@@ -20,6 +24,13 @@ export const env = {
   // Default OFF to prevent accidental trades
   placeOrders: process.env.PLACE_ORDERS === "true",
 
+  // Paper trading mode — signals fire and positions are DB-only (isPaper=true)
+  // No exchange orders placed regardless of PLACE_ORDERS
+  paperTrading: process.env.PAPER_TRADING === "true",
+
+  // Testnet mode — routes Binance market data to testnet endpoints
+  useTestnet: process.env.USE_TESTNET === "true",
+
   // ─── Ollama / LLM Advisor ───
   // OLLAMA_BASE_URL    — API base (default: http://localhost:11434 for local Ollama)
   // OLLAMA_MODEL       — model name (default: llama3.2)
@@ -36,4 +47,13 @@ export const env = {
   botAutoStart: process.env.BOT_AUTO_START === "true",
   // Auto-executor master switch — set AUTO_EXECUTE=true to enable autonomous trading
   autoExecute: process.env.AUTO_EXECUTE === "true",
+
+  // ─── Observability ───
+  // LOG_LEVEL — controls verbosity: debug | info | warn | error (default: info)
+  logLevel: (process.env.LOG_LEVEL ?? "info") as "debug" | "info" | "warn" | "error",
+
+  // ─── Security ───
+  // ENCRYPTION_KEY — 32-byte hex key for AES-256-GCM field-level encryption of API credentials
+  // Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
+  encryptionKey: process.env.ENCRYPTION_KEY ?? "",
 };
