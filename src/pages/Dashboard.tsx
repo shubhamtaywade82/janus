@@ -21,6 +21,7 @@ import { OrderBlockPrimitive } from "@/lib/chart/primitives/OrderBlockPrimitive"
 import { FVGPrimitive } from "@/lib/chart/primitives/FVGPrimitive";
 import { StructurePrimitive } from "@/lib/chart/primitives/StructurePrimitive";
 import { VolumeProfilePrimitive } from "@/lib/chart/primitives/VolumeProfilePrimitive";
+import { OrderBookDepthPrimitive } from "@/lib/chart/primitives/OrderBookDepthPrimitive";
 import { SessionShadingPrimitive } from "@/lib/chart/primitives/SessionShadingPrimitive";
 import { CrosshairTooltipPrimitive } from "@/lib/chart/primitives/CrosshairTooltipPrimitive";
 import { LiquiditySweepPrimitive, type SweepMarker } from "@/lib/chart/primitives/LiquiditySweepPrimitive";
@@ -58,7 +59,7 @@ const resolveCSSColor = (varName: string, fallback: string): string => {
 };
 
 // ─── TradingView Lightweight Chart Component ───
-const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice, cvdBars, liquidityEvents }: {
+const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice, cvdBars, liquidityEvents, orderBook }: {
   data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string;
   onLoadMore?: (beforeTime: number) => void;
   overlayData?: PriceActionData | null;
@@ -68,6 +69,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   askPrice?: number;
   cvdBars?: { ts: number; delta: number; cumulative: number }[];
   liquidityEvents?: Array<{ id: string; type: string; priority: string; symbol: string; timestamp: number; message: string; data?: any }>;
+  orderBook?: { bids: [number, number][]; asks: [number, number][] };
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
@@ -184,8 +186,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const zScorePriceLinesRef = useRef<any[]>([]);
   // Volume Profile primitive
   const vpPrimRef = useRef<VolumeProfilePrimitive | null>(null);
+  // Order Book Depth primitive
+  const obDepthPrimRef = useRef<OrderBookDepthPrimitive | null>(null);
   // TTM Squeeze histogram series
-  const ttmSqHistRef = useRef<any>(null);
+  const ttmSqHistRef = useRef<ISeriesApi<"Histogram"> | null>(null);
   // Dedicated indicator signal markers plugin (separate from SMC markers)
   const indicatorMarkersRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
   // ─── Price line overlay (smooth thin line tracking close price) ───
@@ -325,6 +329,12 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   // Keep refs updated
   useEffect(() => { dataRef.current = data; }, [data]);
   useEffect(() => { onLoadMoreRef.current = onLoadMore; }, [onLoadMore]);
+
+  useEffect(() => {
+    if (obDepthPrimRef.current) {
+      obDepthPrimRef.current.setData(orderBook || null);
+    }
+  }, [orderBook]);
 
   // 1. Initialize Chart instance once
   useEffect(() => {
@@ -1431,6 +1441,18 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       vpPrimRef.current.setData(null);
       try { candlestickSeriesRef.current?.detachPrimitive(vpPrimRef.current); } catch { /* safe */ }
       vpPrimRef.current = null;
+    }
+
+    // Order Book Depth — canvas primitive attached to candlestick series
+    if (indicatorCfg.orderBookDepth && candlestickSeriesRef.current) {
+      if (!obDepthPrimRef.current) {
+        obDepthPrimRef.current = new OrderBookDepthPrimitive();
+        try { candlestickSeriesRef.current.attachPrimitive(obDepthPrimRef.current); } catch { /* safe */ }
+      }
+    } else if (!indicatorCfg.orderBookDepth && obDepthPrimRef.current) {
+      obDepthPrimRef.current.setData(null);
+      try { candlestickSeriesRef.current?.detachPrimitive(obDepthPrimRef.current); } catch { /* safe */ }
+      obDepthPrimRef.current = null;
     }
 
     // ── Indicator Signal Markers ─────────────────────────────────────────
@@ -2720,10 +2742,12 @@ const Dashboard = () => {
   const [ticker, setTicker] = useState<any>(null);
   const [bestBid, setBestBid] = useState<number | null>(null);
   const [bestAsk, setBestAsk] = useState<number | null>(null);
+  const [orderBook, setOrderBook] = useState<{ bids: [number, number][]; asks: [number, number][] } | null>(null);
 
   useEffect(() => {
     setBestBid(null);
     setBestAsk(null);
+    setOrderBook(null);
   }, [selectedSymbol]);
 
   // Track which symbol+interval the current klines state belongs to
@@ -2942,8 +2966,15 @@ const Dashboard = () => {
       if (data.asks && data.asks.length > 0) {
         setBestAsk(parseFloat(data.asks[0][0]));
       }
+
+      if (indicatorCfg?.orderBookDepth) {
+        setOrderBook({
+          bids: data.bids ? data.bids.map((b: string[]) => [parseFloat(b[0]), parseFloat(b[1])]) : [],
+          asks: data.asks ? data.asks.map((a: string[]) => [parseFloat(a[0]), parseFloat(a[1])]) : []
+        });
+      }
     };
-  }, []);
+  }, [indicatorCfg?.orderBookDepth]);
 
   const depthStreamOpts = useRef({
     onData: (data: any) => depthCallbackRef.current(data),
@@ -3188,6 +3219,7 @@ const Dashboard = () => {
                 askPrice={bestAsk ?? undefined}
                 cvdBars={cvdBars}
                 liquidityEvents={liquidityEvents}
+                orderBook={orderBook ?? undefined}
               />
             ) : initialKlines === null || initialKlines === undefined ? (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">

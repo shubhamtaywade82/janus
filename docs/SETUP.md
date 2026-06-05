@@ -711,7 +711,29 @@ If you don't receive a heartbeat for 12+ hours, the bot is down.
 
 PM2 provides process management with auto-restart, memory guards, and log rotation.
 
-**Install PM2:**
+### Option A: Local PM2 (Recommended — No Global Installation)
+
+We have mapped standard PM2 processes to npm script shortcuts in `package.json`. These automatically resolve the local PM2 package binary, avoiding the need for global installation or terminal configuration aliases.
+
+**Start the bot:**
+```bash
+npm run build
+npm run db:push
+npm run bot:start
+```
+
+**Common Management Scripts:**
+* **View Logs:** `npm run bot:logs`
+* **Stop Bot:** `npm run bot:stop`
+* **Restart Bot:** `npm run bot:restart`
+* **Stop All Apps:** `npm run bot:stop-all`
+* **Kill PM2 Daemon:** `npm run bot:kill`
+
+---
+
+### Option B: Global PM2 installation
+
+**Install PM2 globally:**
 ```bash
 npm install -g pm2
 ```

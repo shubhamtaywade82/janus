@@ -15,7 +15,13 @@
     "test": "vitest run",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:push": "drizzle-kit push"
+    "db:push": "drizzle-kit push",
+    "bot:start": "pm2 start ecosystem.config.cjs --env production",
+    "bot:stop": "pm2 stop janus-bot",
+    "bot:restart": "pm2 restart janus-bot",
+    "bot:logs": "pm2 logs janus-bot",
+    "bot:stop-all": "pm2 stop all",
+    "bot:kill": "pm2 kill"
   },
   "dependencies": {
     "@aws-sdk/client-s3": "^3.965.0",

@@ -53,6 +53,8 @@ export interface IndicatorConfig {
   // Volume Profile
   volumeProfile:        boolean;
   volumeProfileBuckets: number;
+  // Order Book Depth
+  orderBookDepth:       boolean;
   // Keltner Channels
   keltner:       boolean;
   keltnerEma:    number;
@@ -81,6 +83,7 @@ const DEFAULTS: IndicatorConfig = {
   adx: false, adxPeriod: 14,
   zScore: false, zScorePeriod: 20,
   volumeProfile: false, volumeProfileBuckets: 48,
+  orderBookDepth: false,
   keltner: false, keltnerEma: 20, keltnerAtr: 10, keltnerMult: 2,
   donchian: false, donchianPeriod: 20,
   ttmSqueeze: false, ttmSqPeriod: 20, ttmSqBBMult: 2.0, ttmSqKMult: 1.5,
@@ -140,7 +143,7 @@ export function IndicatorPanel({ onChange }: Props) {
     (cfg.rsi ? 1 : 0) + (cfg.vwap ? 1 : 0) + (cfg.cvd ? 1 : 0) + (cfg.nw ? 1 : 0) +
     (cfg.macd ? 1 : 0) + (cfg.stochRsi ? 1 : 0) + (cfg.psar ? 1 : 0) +
     (cfg.ichimoku ? 1 : 0) + (cfg.adx ? 1 : 0) +
-    (cfg.zScore ? 1 : 0) + (cfg.volumeProfile ? 1 : 0) +
+    (cfg.zScore ? 1 : 0) + (cfg.volumeProfile ? 1 : 0) + (cfg.orderBookDepth ? 1 : 0) +
     (cfg.keltner ? 1 : 0) + (cfg.donchian ? 1 : 0) + (cfg.ttmSqueeze ? 1 : 0);
 
   return (
@@ -365,6 +368,16 @@ export function IndicatorPanel({ onChange }: Props) {
               <span className="text-[10px] text-[#a1a1aa]">Volume Profile</span>
             </div>
             {cfg.volumeProfile && <span className="text-[9px] text-[#52525b]">{cfg.volumeProfileBuckets}B</span>}
+          </div>
+
+          {/* Order Book Depth */}
+          <div className="flex items-center justify-between mb-1.5">
+            <div className="flex items-center gap-1.5">
+              <button onClick={() => setCfg((c) => ({ ...c, orderBookDepth: !c.orderBookDepth }))}
+                className={cn("w-3 h-3 rounded-sm border flex-shrink-0 transition-colors",
+                  cfg.orderBookDepth ? "bg-[#06b6d4]/20 border-[#06b6d4]/50" : "border-[#27272a]")} />
+              <span className="text-[10px] text-[#a1a1aa]">OB Depth</span>
+            </div>
           </div>
 
           {/* Keltner Channels */}
