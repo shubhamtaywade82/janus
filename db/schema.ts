@@ -546,3 +546,22 @@ export const systemAlertLogs = pgTable(
 );
 
 export type SystemAlertLog = typeof systemAlertLogs.$inferSelect;
+
+// ─── Alert Delivery Failures (webhook retry log) ───────────────────────────
+export const alertDeliveryFailures = pgTable(
+  "alert_delivery_failures",
+  {
+    id: serial("id").primaryKey(),
+    ruleId: integer("rule_id").references(() => userAlertRules.id),
+    url: text("url").notNull(),
+    payload: text("payload").notNull(),
+    error: text("error").notNull(),
+    retryCount: integer("retry_count").default(0).notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    alertDeliveryFailuresIdx: index("idx_alert_delivery_failures_rule").on(table.ruleId, table.createdAt),
+  })
+);
+
+export type AlertDeliveryFailure = typeof alertDeliveryFailures.$inferSelect;

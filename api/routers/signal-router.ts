@@ -42,7 +42,13 @@ import {
 import { alertEngine } from "../services/alert-engine";
 
 // Per-symbol previous KNN snapshot for transition detection
+// Evicted via evictKnnSnapshot(symbol) when a symbol leaves tracking
 const prevKnnSnapshotCache = new Map<string, KnnSupertrendSnapshot>();
+
+export function evictKnnSnapshot(symbol: string): void {
+  prevKnnSnapshotCache.delete(symbol);
+  alertEngine.evictSymbol(symbol);
+}
 
 // ─── Types for the Comprehensive Analysis Engine ───
 

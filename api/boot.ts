@@ -138,3 +138,15 @@ setTimeout(() => positionLifecycleManager.start().catch(console.error), 5_000);
 // Start backend alert engine (headless alert evaluation for user rules + system events)
 import { alertEngine } from "./services/alert-engine";
 alertEngine.start(5_000);
+
+// ─── Graceful shutdown ────────────────────────────────────────────────────────
+// Ensures background services are cleanly stopped on SIGTERM (Docker/k8s) and SIGINT (Ctrl-C).
+function shutdown(signal: string) {
+  console.log(`[boot] ${signal} received — shutting down gracefully`);
+  alertEngine.stop();
+  positionLifecycleManager.stop?.().catch?.(() => {});
+  process.exit(0);
+}
+
+process.once("SIGTERM", () => shutdown("SIGTERM"));
+process.once("SIGINT",  () => shutdown("SIGINT"));

@@ -1,18 +1,18 @@
 /**
  * AlertEngine — backend source of truth for all user-defined and system-level alerts.
  *
- * Replaces the three UI-coupled alert subsystems:
- *   1. localStorage "janus_alert_rules" evaluated in Layout.tsx
- *   2. checkIndicatorAlerts / checkSMCAlerts in Dashboard.tsx
- *   3. checkKnnAlerts in Signals.tsx
- *
- * Runs headlessly — no browser connection required.
+ * Headless operation: runs independently of any browser connection.
+ * Hardening:
+ *   - Price rules check the LTP ring buffer high/low (not just snapshot) to catch spikes
+ *   - Webhook failures are logged to alert_delivery_failures table
+ *   - Global 10s per-symbol:type cooldown prevents alert storms
+ *   - All subscriptions require auth (enforced in alerts-router.ts)
  */
 
 import { EventEmitter } from "events";
 import { eq } from "drizzle-orm";
 import { getDb } from "../queries/connection";
-import { userAlertRules, userAlertLogs, systemAlertLogs } from "@db/schema";
+import { userAlertRules, userAlertLogs, systemAlertLogs, alertDeliveryFailures } from "@db/schema";
 import { marketStateManager } from "./market-state";
 import { broadcastTelegramAlert } from "./telegram";
 import type { UserAlertRule } from "@db/schema";
@@ -30,8 +30,16 @@ export interface SystemAlertEvent {
 export const alertEngineEvents = new EventEmitter();
 alertEngineEvents.setMaxListeners(50);
 
-// Cooldown map: ruleId → lastTriggerMs
-const cooldownMap = new Map<number, number>();
+// Per-rule cooldown: ruleId → lastTriggerMs
+const ruleCooldownMap = new Map<number, number>();
+
+// Global storm protection: "symbol:type" → lastTriggerMs (10s window)
+const stormCooldownMap = new Map<string, number>();
+const STORM_COOLDOWN_MS = 10_000;
+
+// System alert dedup within the same polling window: "symbol:type" → lastEmitMs
+const systemAlertDedup = new Map<string, number>();
+const SYSTEM_DEDUP_MS = 5_000;
 
 class AlertEngine {
   private intervalId: ReturnType<typeof setInterval> | null = null;
@@ -57,6 +65,18 @@ class AlertEngine {
     console.log("[alert-engine] Stopped");
   }
 
+  // ─── Storm cooldown check ──────────────────────────────────────────────────
+
+  private isStormCooled(symbol: string, type: string): boolean {
+    const key = `${symbol}:${type}`;
+    const last = stormCooldownMap.get(key) ?? 0;
+    return Date.now() - last < STORM_COOLDOWN_MS;
+  }
+
+  private markStormCooldown(symbol: string, type: string): void {
+    stormCooldownMap.set(`${symbol}:${type}`, Date.now());
+  }
+
   // ─── User-defined rule evaluation ─────────────────────────────────────────
 
   private async evaluateUserRules(): Promise<void> {
@@ -72,8 +92,12 @@ class AlertEngine {
     const triggered: Array<{ rule: UserAlertRule; message: string }> = [];
 
     for (const rule of activeRules) {
-      const lastFired = cooldownMap.get(rule.id) ?? 0;
+      // Per-rule cooldown
+      const lastFired = ruleCooldownMap.get(rule.id) ?? 0;
       if (now - lastFired < rule.cooldownSeconds * 1_000) continue;
+
+      // Global storm protection per symbol:type
+      if (this.isStormCooled(rule.symbol, rule.type)) continue;
 
       const state = marketStateManager.get(rule.symbol);
       if (!state) continue;
@@ -81,7 +105,8 @@ class AlertEngine {
       const { fired, message } = this.evaluateRule(rule, state);
       if (!fired) continue;
 
-      cooldownMap.set(rule.id, now);
+      ruleCooldownMap.set(rule.id, now);
+      this.markStormCooldown(rule.symbol, rule.type);
       triggered.push({ rule, message });
     }
 
@@ -94,7 +119,7 @@ class AlertEngine {
 
   private evaluateRule(
     rule: UserAlertRule,
-    state: ReturnType<typeof marketStateManager.get> & object
+    state: NonNullable<ReturnType<typeof marketStateManager.get>>
   ): { fired: boolean; message: string } {
     const ltp = state.ltp ?? 0;
     const metrics = state.metrics ?? {};
@@ -104,10 +129,19 @@ class AlertEngine {
 
     switch (rule.type) {
       case "price": {
-        if (op === ">" && ltp > threshold)
-          return { fired: true, message: `💰 ${sym} price crossed ABOVE ${threshold} (current: ${ltp.toFixed(2)})` };
-        if (op === "<" && ltp < threshold)
-          return { fired: true, message: `💰 ${sym} price crossed BELOW ${threshold} (current: ${ltp.toFixed(2)})` };
+        // Check entire LTP ring buffer so we catch intra-poll spikes that reverse
+        const recentPrices = state.ltpWindow.values().map((t) => t.price);
+        if (recentPrices.length === 0) recentPrices.push(ltp);
+
+        if (op === ">") {
+          const hit = recentPrices.find((p) => p > threshold);
+          if (hit)
+            return { fired: true, message: `💰 ${sym} price crossed ABOVE ${threshold} (peak: ${hit.toFixed(2)}, current: ${ltp.toFixed(2)})` };
+        } else {
+          const hit = recentPrices.find((p) => p < threshold);
+          if (hit)
+            return { fired: true, message: `💰 ${sym} price crossed BELOW ${threshold} (trough: ${hit.toFixed(2)}, current: ${ltp.toFixed(2)})` };
+        }
         break;
       }
       case "sweep": {
@@ -143,7 +177,6 @@ class AlertEngine {
   private async dispatchUserAlert(rule: UserAlertRule, message: string): Promise<void> {
     const db = getDb();
 
-    // Persist to DB
     await db.insert(userAlertLogs).values({
       userId: rule.userId,
       ruleId: rule.id,
@@ -153,7 +186,6 @@ class AlertEngine {
       metadata: { operator: rule.operator, value: rule.value },
     });
 
-    // Push real-time event to any subscribed UI clients
     alertEngineEvents.emit("user-alert", {
       userId: rule.userId,
       ruleId: rule.id,
@@ -163,20 +195,51 @@ class AlertEngine {
       timestamp: Date.now(),
     });
 
-    // Send Telegram via existing broadcastTelegramAlert (reads credentials from DB)
     if (rule.notifyTelegram) {
-      await broadcastTelegramAlert(`🔔 <b>Janus Alert: ${rule.symbol}</b>\n\n${message}`).catch(
-        () => {}
-      );
+      broadcastTelegramAlert(`🔔 <b>Janus Alert: ${rule.symbol}</b>\n\n${message}`).catch(() => {});
     }
 
-    // Send Webhook
     if (rule.notifyWebhook) {
-      fetch(rule.notifyWebhook, {
+      await this.sendWebhook(rule, message);
+    }
+  }
+
+  private async sendWebhook(rule: UserAlertRule, message: string, attempt = 1): Promise<void> {
+    const url = rule.notifyWebhook!;
+    const payload = JSON.stringify({
+      symbol: rule.symbol,
+      type: rule.type,
+      message,
+      timestamp: new Date().toISOString(),
+    });
+
+    try {
+      const res = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ symbol: rule.symbol, type: rule.type, message, timestamp: new Date().toISOString() }),
-      }).catch(() => {});
+        body: payload,
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}`);
+      }
+    } catch (err: any) {
+      console.error(`[alert-engine] Webhook delivery failed for rule ${rule.id} (attempt ${attempt}):`, err.message);
+      const db = getDb();
+      db.insert(alertDeliveryFailures)
+        .values({
+          ruleId: rule.id,
+          url,
+          payload,
+          error: String(err?.message ?? err),
+          retryCount: attempt - 1,
+        })
+        .catch(() => {});
+
+      // Retry once after 5s for transient errors
+      if (attempt === 1) {
+        setTimeout(() => this.sendWebhook(rule, message, 2).catch(() => {}), 5_000);
+      }
     }
   }
 
@@ -190,33 +253,41 @@ class AlertEngine {
     message: string,
     metadata: Record<string, unknown> = {}
   ): Promise<void> {
+    // Dedup: skip if same symbol:type fired within SYSTEM_DEDUP_MS
+    const dedupKey = `${symbol}:${type}`;
+    const lastEmit = systemAlertDedup.get(dedupKey) ?? 0;
+    if (Date.now() - lastEmit < SYSTEM_DEDUP_MS) return;
+    systemAlertDedup.set(dedupKey, Date.now());
+
     const db = getDb();
 
-    // Persist to DB (best-effort, non-blocking)
     db.insert(systemAlertLogs)
       .values({ symbol, type, direction, interval, message, metadata })
       .catch((err) => console.error("[alert-engine] systemAlertLogs insert error:", err));
 
     const event: SystemAlertEvent = {
-      symbol,
-      type,
-      direction,
-      interval,
-      message,
-      metadata,
+      symbol, type, direction, interval, message, metadata,
       timestamp: Date.now(),
     };
 
-    // Broadcast to subscribed UI clients
     alertEngineEvents.emit("system-alert", event);
 
-    // Send Telegram for high-signal events
     const highSignalTypes = new Set([
       "bos", "choch", "knn_bias_flip", "supertrend_flip",
       "direction_flip", "gated_flip", "knn_rejection",
     ]);
     if (highSignalTypes.has(type)) {
       broadcastTelegramAlert(`📡 <b>${symbol}</b> ${message}`).catch(() => {});
+    }
+  }
+
+  // Called from signal-router when a symbol is removed from tracking
+  evictSymbol(symbol: string): void {
+    for (const key of stormCooldownMap.keys()) {
+      if (key.startsWith(`${symbol}:`)) stormCooldownMap.delete(key);
+    }
+    for (const key of systemAlertDedup.keys()) {
+      if (key.startsWith(`${symbol}:`)) systemAlertDedup.delete(key);
     }
   }
 }

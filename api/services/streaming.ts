@@ -386,6 +386,12 @@ export function unsubscribeFromSymbol(symbol: string) {
       current.ws.close();
     }
     activeStreams.delete(symbol);
+
+    // Evict per-symbol caches in signal-router + alertEngine storm maps
+    // Dynamic import avoids a circular dependency (streaming ← signal-router ← streaming)
+    import("../routers/signal-router").then(({ evictKnnSnapshot }) => {
+      evictKnnSnapshot(symbol);
+    }).catch(() => {});
   }
 }
 
