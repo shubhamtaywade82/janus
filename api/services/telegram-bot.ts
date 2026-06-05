@@ -20,6 +20,7 @@ import { users, positions } from "@db/schema";
 import { eq, and, gte, sql } from "drizzle-orm";
 import { globalKillSwitch } from "./kill-switch";
 import { sendTelegramMessage } from "./telegram";
+import { env } from "../lib/env";
 
 // ─── Public exports ────────────────────────────────────────────────────────────
 
@@ -402,10 +403,12 @@ async function sendHeartbeat(): Promise<void> {
     const hours = Math.floor(uptimeSec / 3600);
     const mins = Math.floor((uptimeSec % 3600) / 60);
     const killStr = globalKillSwitch.isActive ? "🔴 KILL SWITCH ACTIVE" : "🟢 trading enabled";
+    const modeStr = env.paperTrading ? "🧪 PAPER MODE" : env.placeOrders ? "💰 LIVE" : "📋 Dry-run";
 
     const text =
       `💓 <b>Heartbeat</b>\n\n` +
       `Uptime: ${hours}h ${mins}m\n` +
+      `Mode: ${modeStr}\n` +
       `Open positions: ${openPositions.length}\n` +
       `Unrealized PnL: ${unrealized >= 0 ? "+" : ""}${unrealized.toFixed(2)} USDT\n` +
       `Today realized: ${todayPnl >= 0 ? "+" : ""}${todayPnl.toFixed(2)} USDT\n` +

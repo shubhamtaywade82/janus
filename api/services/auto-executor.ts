@@ -276,7 +276,7 @@ export class AutoExecutor {
     // Gate 7: risk engine
     let walletFree = 0;
     let walletLocked = 0;
-    const isPaperMode = !env.placeOrders;
+    const isPaperMode = !env.placeOrders || env.paperTrading;
 
     const creds = await db
       .select()

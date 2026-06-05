@@ -20,6 +20,13 @@ export const env = {
   // Default OFF to prevent accidental trades
   placeOrders: process.env.PLACE_ORDERS === "true",
 
+  // Paper trading mode — signals fire and positions are DB-only (isPaper=true)
+  // No exchange orders placed regardless of PLACE_ORDERS
+  paperTrading: process.env.PAPER_TRADING === "true",
+
+  // Testnet mode — routes Binance market data to testnet endpoints
+  useTestnet: process.env.USE_TESTNET === "true",
+
   // ─── Ollama / LLM Advisor ───
   // OLLAMA_BASE_URL    — API base (default: http://localhost:11434 for local Ollama)
   // OLLAMA_MODEL       — model name (default: llama3.2)

@@ -82,8 +82,11 @@ function ensureWatchdog() {
 
 function getBinanceWsUrl(symbol: string): string {
   const s = symbol.toLowerCase();
-  // Using Binance Futures stream to get liquidations (@forceOrder) and funding (@markPrice)
-  return `wss://fstream.binance.com/stream?streams=${s}@depth20@100ms/${s}@trade/${s}@ticker/${s}@kline_1m/${s}@forceOrder/${s}@markPrice`;
+  // USE_TESTNET routes to Binance testnet; streams are otherwise identical
+  const host = process.env.USE_TESTNET === "true"
+    ? "stream.binancefuture.com"
+    : "fstream.binance.com";
+  return `wss://${host}/stream?streams=${s}@depth20@100ms/${s}@trade/${s}@ticker/${s}@kline_1m/${s}@forceOrder/${s}@markPrice`;
 }
 
 function getErrorMessage(err: unknown): string {
