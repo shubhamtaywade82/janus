@@ -74,6 +74,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
   const [chartInitialized, setChartInitialized] = useState(false);
+  const [lastPriceY, setLastPriceY] = useState<number | null>(null);
+  const [countdownStr, setCountdownStr] = useState<string>("");
   const [positionsY, setPositionsY] = useState<Record<number, { entryY: number | null; liqY: number | null }>>({});
   const [isScrolledBack, setIsScrolledBack] = useState(false);
   const priceLinesRef = useRef<any[]>([]);
@@ -1720,12 +1722,18 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const updatePositionsCoordinates = useCallback(() => {
     const chart = chartRef.current;
     const series = candlestickSeriesRef.current;
-    if (!chart || !series || !positions || positions.length === 0) {
-      setPositionsY({});
-      return;
+    const newCoords: Record<number, { entryY: number | null; liqY: number | null }> = {};
+    
+    if (lastPrice > 0) {
+      setLastPriceY(series.priceToCoordinate(lastPrice));
+    } else {
+      setLastPriceY(null);
     }
 
-    const newCoords: Record<number, { entryY: number | null; liqY: number | null }> = {};
+    if (!positions || positions.length === 0) {
+      setPositionsY(newCoords);
+      return;
+    }
     positions.forEach((pos) => {
       const entryPrice = parseFloat(pos.entryPrice);
       if (isNaN(entryPrice) || entryPrice <= 0) return;
@@ -1768,6 +1776,47 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       }
     };
   }, [chartInitialized, updatePositionsCoordinates]);
+
+  // Countdown Timer
+  useEffect(() => {
+    if (data.length === 0) return;
+    const intervalMap: Record<string, number> = {
+      "1s": 1000,
+      "1m": 60000,
+      "3m": 180000,
+      "5m": 300000,
+      "15m": 900000,
+      "30m": 1800000,
+      "1h": 3600000,
+      "2h": 7200000,
+      "4h": 14400000,
+      "6h": 21600000,
+      "8h": 28800000,
+      "12h": 43200000,
+      "1d": 86400000,
+    };
+    const ms = intervalMap[interval] || 60000;
+    
+    const tick = () => {
+      const lastOpen = data[data.length - 1].openTime;
+      const nextOpen = lastOpen + ms;
+      const remaining = Math.max(0, nextOpen - Date.now());
+      
+      const hours = Math.floor(remaining / 3600000);
+      const mins = Math.floor((remaining % 3600000) / 60000);
+      const secs = Math.floor((remaining % 60000) / 1000);
+      
+      if (hours > 0) {
+        setCountdownStr(`${hours.toString().padStart(2, '0')}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+      } else {
+        setCountdownStr(`${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`);
+      }
+    };
+
+    tick(); // initial call
+    const intervalId = setInterval(tick, 1000);
+    return () => clearInterval(intervalId);
+  }, [data, interval]);
 
   return (
     <div
@@ -1819,6 +1868,20 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
           </svg>
           Live
         </button>
+      )}
+
+      {/* Countdown Timer Overlay */}
+      {lastPriceY !== null && countdownStr && (
+        <div
+          className="absolute z-20 text-[10px] text-[#f59e0b] font-medium font-mono pointer-events-none transition-all duration-75"
+          style={{
+            top: `${lastPriceY + 14}px`, // perfectly positioned right below the price tag
+            right: '4px',
+            textShadow: '0px 0px 4px rgba(0,0,0,0.8), 1px 1px 0px black, -1px -1px 0px black',
+          }}
+        >
+          {countdownStr}
+        </div>
       )}
 
       {/* HTML Position Lines Left/Right Labels Overlay */}
