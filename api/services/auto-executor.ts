@@ -15,7 +15,7 @@
 
 import { EventEmitter } from "events";
 import { getDb } from "../queries/connection";
-import { positions, exchangeCredentials, autoExecutorConfig, systemLogs } from "@db/schema";
+import { positions, exchangeCredentials, autoExecutorConfig, systemLogs, signals } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { globalKillSwitch } from "./kill-switch";
 import { isFundingExtreme } from "./funding-filter";
@@ -83,6 +83,10 @@ export class AutoExecutor {
     lastDecision: null,
   };
 
+  /** Dedup map: symbol+direction → timestamp of last execution */
+  private recentExecutions = new Map<string, number>();
+  private readonly DEDUP_WINDOW_MS = 60_000;
+
   // Cache config to avoid DB read on every signal
   private configCache: AutoExecutorConfig | null = null;
   private configCacheAt = 0;
@@ -99,6 +103,14 @@ export class AutoExecutor {
       (s) => s.isGated && s.direction !== "neutral" && s.direction !== null
     );
     if (gated.length === 0) return;
+
+    // Clean up stale dedup entries to prevent unbounded memory growth
+    const now = Date.now();
+    for (const [key, ts] of this.recentExecutions) {
+      if (now - ts > this.DEDUP_WINDOW_MS) {
+        this.recentExecutions.delete(key);
+      }
+    }
 
     for (const signal of gated) {
       try {
@@ -208,6 +220,22 @@ export class AutoExecutor {
 
     // Gate 1: symbol in target list
     if (!targetSymbols.includes(symbol)) return this.skip(signal, `${symbol} not in target list`);
+
+    // Gate 1b: signal staleness — reject signals older than 60s
+    const signalAgeMs = Date.now() - new Date(signal.createdAt).getTime();
+    if (signalAgeMs > 60_000) {
+      return this.skip(signal, `stale signal (${Math.round(signalAgeMs / 1000)}s old)`);
+    }
+
+    // Gate 1c: dedup — prevent same symbol+direction executing twice within 60s
+    const dedupKey = `${symbol}:${signal.direction}`;
+    const lastExec = this.recentExecutions.get(dedupKey) ?? 0;
+    if (Date.now() - lastExec < this.DEDUP_WINDOW_MS) {
+      return this.skip(
+        signal,
+        `dedup: same ${symbol} ${signal.direction} executed ${Math.round((Date.now() - lastExec) / 1000)}s ago`
+      );
+    }
 
     // Gate 2: kill switch
     if (!globalKillSwitch.canTrade()) return this.skip(signal, "kill switch active");
@@ -426,6 +454,20 @@ export class AutoExecutor {
       ? currentPrice * (1 + tp1Pct)
       : currentPrice * (1 - tp1Pct);
 
+    // Gate (depth): order size must be < 5% of available depth on the relevant side.
+    // Prevents the bot from becoming the market for illiquid symbols.
+    const book = marketStateManager.get(symbol)?.orderBook;
+    if (book) {
+      const levels = side === "long" ? book.asks : book.bids;
+      const totalDepth = levels.reduce((sum, [, qty]) => sum + qty, 0);
+      if (totalDepth > 0 && size > totalDepth * 0.05) {
+        return this.skip(
+          signal,
+          `order size ${size.toFixed(4)} > 5% of book depth ${totalDepth.toFixed(4)} — too large for liquidity`
+        );
+      }
+    }
+
     // Execute
     await this.executePosition({
       userId: 1,
@@ -442,6 +484,9 @@ export class AutoExecutor {
       creds: creds[0] ? decryptCreds(creds[0]) : undefined,
       isPaper: isPaperMode,
     });
+
+    // Record execution for dedup gate (Gate 1c)
+    this.recentExecutions.set(dedupKey, Date.now());
 
     // Lock margin in paper wallet
     if (isPaperMode) {
@@ -607,6 +652,20 @@ export class AutoExecutor {
 
     if (position.isPaper) {
       await releasePaperMargin(position.userId, parseFloat(position.margin), realizedPnl, position.id);
+    }
+
+    // Update signal outcome for post-trade analysis / win-rate tracking
+    if (position.signalId) {
+      const reason = payload.decision.reason ?? "";
+      const outcome = reason.includes("Stop Loss")
+        ? "sl_hit"
+        : reason.includes("Take Profit")
+        ? "tp_hit"
+        : "manual_close";
+      db.update(signals)
+        .set({ outcome })
+        .where(eq(signals.id, position.signalId))
+        .catch(() => {});
     }
 
     // Update risk session so cooldown and drawdown circuit breakers fire correctly

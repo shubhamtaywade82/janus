@@ -172,11 +172,23 @@ setTimeout(() => positionLifecycleManager.start().catch(console.error), 5_000);
 import { alertEngine } from "./services/alert-engine";
 alertEngine.start(5_000);
 
+// Start Telegram command bot (polling-based — receives /status, /pause, /resume, etc.)
+import { startTelegramCommandBot } from "./services/telegram-bot";
+startTelegramCommandBot();
+
+// Start liquidation proximity monitor (alerts + auto-reduce when within 5%/2% of liq price)
+import { startLiquidationMonitor, stopLiquidationMonitor } from "./services/liquidation-monitor";
+startLiquidationMonitor(10_000);
+
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 // Ensures background services are cleanly stopped on SIGTERM (Docker/k8s) and SIGINT (Ctrl-C).
+import { stopTelegramCommandBot } from "./services/telegram-bot";
+
 function shutdown(signal: string) {
   console.log(`[boot] ${signal} received — shutting down gracefully`);
   alertEngine.stop();
+  stopTelegramCommandBot();
+  stopLiquidationMonitor();
   positionLifecycleManager.stop?.().catch?.(() => {});
   process.exit(0);
 }

@@ -84,6 +84,15 @@ export const marketData = pgTable(
 export type MarketData = typeof marketData.$inferSelect;
 
 // ─── Signals (Confluence Scores) ───
+export const signalOutcomeEnum = pgEnum("signal_outcome", [
+  "tp_hit",
+  "sl_hit",
+  "manual_close",
+  "liquidated",
+  "timeout",
+  "open",
+]);
+
 export const signals = pgTable("signals", {
   id: serial("id").primaryKey(),
   symbol: varchar("symbol", { length: 20 }).notNull(),
@@ -94,6 +103,7 @@ export const signals = pgTable("signals", {
   threshold: decimal("threshold", { precision: 5, scale: 2 }).default("75.00").notNull(),
   isGated: boolean("is_gated").default(false).notNull(), // true if composite >= threshold
   direction: directionEnum("direction").default("neutral").notNull(),
+  outcome: signalOutcomeEnum("outcome"), // set when linked position is closed
   metadata: jsonb("metadata"), // store indicator values
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });

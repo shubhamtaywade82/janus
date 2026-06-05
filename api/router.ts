@@ -9,6 +9,7 @@ import { autoExecutorRouter } from "./routers/auto-executor-router";
 import { llmRouter } from "./routers/llm-router";
 import { positionManagerRouter } from "./routers/position-manager-router";
 import { alertsRouter } from "./routers/alerts-router";
+import { exportRouter } from "./routers/export-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -24,6 +25,7 @@ export const appRouter = createRouter({
   llm: llmRouter,
   positionManager: positionManagerRouter,
   alerts: alertsRouter,
+  exports: exportRouter,
 });
 
 export type AppRouter = typeof appRouter;
