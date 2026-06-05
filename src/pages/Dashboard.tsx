@@ -2118,6 +2118,58 @@ function aggregateOrderBook(levels: [string, string][], step: number, isBid: boo
     .sort((a, b) => isBid ? parseFloat(b[0]) - parseFloat(a[0]) : parseFloat(a[0]) - parseFloat(b[0]));
 }
 
+// Helper to summarize events in the last 60 seconds
+const getTapeSummary = (events: any[]) => {
+  const cutoff = Date.now() - 60_000;
+  const recent = events.filter((ev) => ev.timestamp >= cutoff);
+  if (recent.length === 0) return null;
+
+  const counts: Record<string, number> = {};
+  let bullishScore = 0;
+  let bearishScore = 0;
+
+  recent.forEach((ev) => {
+    const type = (ev.type || "").replace(/_/g, " ").toUpperCase();
+    counts[type] = (counts[type] || 0) + 1;
+
+    const msg = (ev.message || "").toUpperCase();
+    if (
+      type.includes("BUY ABSORPTION") || 
+      type.includes("SELLER EXHAUSTION") || 
+      msg.includes("BIDS ADDED") || 
+      msg.includes("ASKS REMOVED") ||
+      msg.includes("BULLISH TRAP")
+    ) {
+      bullishScore++;
+    } else if (
+      type.includes("SELL ABSORPTION") || 
+      type.includes("BUYER EXHAUSTION") || 
+      msg.includes("ASKS ADDED") || 
+      msg.includes("BIDS REMOVED") ||
+      msg.includes("BEARISH TRAP")
+    ) {
+      bearishScore++;
+    }
+  });
+
+  const parts = Object.entries(counts).map(([type, count]) => `${count} ${type}`);
+  let sentiment = "Neutral Balance";
+  let sentimentColor = "text-[#a1a1aa]";
+  if (bullishScore > bearishScore) {
+    sentiment = "Bullish 📈";
+    sentimentColor = "text-[#0ecb81]";
+  } else if (bearishScore > bullishScore) {
+    sentiment = "Bearish 📉";
+    sentimentColor = "text-[#f6465d]";
+  }
+
+  return {
+    text: `Last 60s: ${parts.join(", ")}.`,
+    sentiment,
+    sentimentColor,
+  };
+};
+
 // ─── Order Book Component ───
 const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLiquidityEvent }: { symbol: string; tickerData: any; markPrice?: number; liquidityEvents: any[]; onLiquidityEvent: (event: any) => void }) => {
   const [activeTab, setActiveTab] = useState<"book" | "telemetry">("book");
@@ -2556,9 +2608,27 @@ const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLiquidity
 
                 {/* Liquidity Event Tape */}
                 <div className="flex-1 mt-1 flex flex-col min-h-[60px] rounded-md border border-[#27272a] bg-[#09090b] overflow-hidden">
-                  <div className="px-2 py-1 text-[8px] uppercase tracking-wider text-[#71717a] font-bold border-b border-[#27272a] bg-[#18181b]">
-                    Live Event Tape
+                  <div className="px-2 py-1 text-[8px] uppercase tracking-wider text-[#71717a] font-bold border-b border-[#27272a] bg-[#18181b] flex justify-between items-center">
+                    <span>Live Event Tape</span>
+                    {(() => {
+                      const summary = getTapeSummary(liquidityEvents);
+                      if (!summary) return null;
+                      return (
+                        <span className={cn("text-[8px] font-bold uppercase", summary.sentimentColor)}>
+                          {summary.sentiment}
+                        </span>
+                      );
+                    })()}
                   </div>
+                  {(() => {
+                    const summary = getTapeSummary(liquidityEvents);
+                    if (!summary) return null;
+                    return (
+                      <div className="px-2 py-1 border-b border-[#27272a] bg-[#18181b]/30 text-[8px] text-[#a1a1aa] leading-tight select-none">
+                        {summary.text}
+                      </div>
+                    );
+                  })()}
                   <div className="flex-1 overflow-y-auto overflow-x-hidden p-1 space-y-0.5">
                     {liquidityEvents.length === 0 && (
                       <div className="text-center text-[#52525b] text-[9px] py-4">No recent events</div>
