@@ -48,7 +48,8 @@ module.exports = {
       merge_logs: true,
 
       // ─── Miscellaneous ───────────────────────────────────────────────────
-      watch: false,           // never watch files in production
+      watch: ["dist", "api"],
+      ignore_watch: ["node_modules", "logs", "backups", "db", ".git"],
       source_map_support: false,
     },
   ],

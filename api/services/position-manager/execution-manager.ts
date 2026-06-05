@@ -2,7 +2,7 @@ import type { ManagedPosition, AiRecommendation, PolicyResult } from "./types";
 import { PositionAction as PA } from "./types";
 import { positionStore } from "./position-store";
 import { positionManagerBus } from "./event-bus";
-import { createFuturesOrder } from "../coindcx";
+import { createFuturesOrder, getFuturesInstrumentInfo } from "../coindcx";
 import { syncTrailingStopLoss } from "../trailing-stop";
 import { env } from "../../lib/env";
 import { getDb } from "../../queries/connection";
@@ -99,7 +99,22 @@ export async function executeAction(
       case PA.PARTIAL_EXIT:
       case PA.REDUCE_SIZE: {
         const exitPct = recommendation.exitSizePct ?? 0.5;
-        const exitQty = position.quantity * exitPct;
+        let exitQty = position.quantity * exitPct;
+
+        try {
+          const instrInfo = await getFuturesInstrumentInfo(position.symbol);
+          if (instrInfo) {
+            const stepSize = parseFloat(instrInfo.step ?? instrInfo.quantity_step ?? "0");
+            const targetPrecision = instrInfo.target_currency_precision ?? 4;
+            if (stepSize > 0) {
+              exitQty = Math.floor(exitQty / stepSize) * stepSize;
+            } else {
+              exitQty = parseFloat(exitQty.toFixed(targetPrecision));
+            }
+          }
+        } catch (err) {
+          console.warn(`[execution-manager] Failed to fetch instrument info for precision mapping:`, err);
+        }
 
         if (!position.isPaper) {
           if (!env.placeOrders) {
