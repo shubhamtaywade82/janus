@@ -1,5 +1,9 @@
 import postgres from 'postgres';
-import 'dotenv/config';
+import dotenv from "dotenv";
+import path from "path";
+
+dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), ".env.secret") });
 
 function getPostgresClient(connectionString: string) {
   if (connectionString.startsWith("/") || connectionString.includes("run/postgresql")) {

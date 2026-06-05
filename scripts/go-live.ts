@@ -18,8 +18,12 @@
  *   9. Kill switch — not active
  *  10. Open orphan positions — none detected
  */
+import dotenv from "dotenv";
+import path from "path";
 
-import "dotenv/config";
+dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), ".env.secret") });
+
 import { execSync } from "child_process";
 import { existsSync, readdirSync, statSync } from "fs";
 import { join, resolve } from "path";

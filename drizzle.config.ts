@@ -1,4 +1,9 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+import path from "path";
+
+dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), ".env.secret") });
+
 import { defineConfig } from "drizzle-kit";
 
 const connectionString = process.env.DATABASE_URL;

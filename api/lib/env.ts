@@ -1,4 +1,8 @@
-import "dotenv/config";
+import dotenv from "dotenv";
+import path from "path";
+
+dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), ".env.secret") });
 
 function required(name: string): string {
   const value = process.env[name];
