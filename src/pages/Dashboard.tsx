@@ -1310,8 +1310,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const { values, direction } = calcPSAR(highs, lows, closes, indicatorCfg.psarStep, indicatorCfg.psarMax);
       const bullSAR = values.map((v, i) => direction[i] === "up"   ? v : null);
       const bearSAR = values.map((v, i) => direction[i] === "down" ? v : null);
-      addOrUpdate("psar-bull", bullSAR, "hsl(var(--janus-up))",   false, "right");
-      addOrUpdate("psar-bear", bearSAR, "hsl(var(--janus-down))", false, "right");
+      addOrUpdate("psar-bull", bullSAR, "#0ecb81",   false, "right");
+      addOrUpdate("psar-bear", bearSAR, "#f6465d", false, "right");
       // Style as dotted (lineStyle 3) to visually approximate dots
       const dotStyle = { lineWidth: 1, lineStyle: 3 } as const;
       serMap.get("psar-bull")?.applyOptions({ ...dotStyle, lineWidth: 1 });
@@ -1339,8 +1339,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         futureSpanA[i] = spanA[i + disp] ?? null;
         futureSpanB[i] = spanB[i + disp] ?? null;
       }
-      addOrUpdate("ichi-spanA", futureSpanA, "hsl(var(--janus-up)/0.60)",   true);
-      addOrUpdate("ichi-spanB", futureSpanB, "hsl(var(--janus-down)/0.60)", true);
+      addOrUpdate("ichi-spanA", futureSpanA, "rgba(14,203,129,0.60)",   true);
+      addOrUpdate("ichi-spanB", futureSpanB, "rgba(246,70,93,0.60)", true);
     } else {
       ["ichi-tenkan", "ichi-kijun", "ichi-chikou", "ichi-spanA", "ichi-spanB"].forEach(removeKey);
     }
@@ -1351,8 +1351,8 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const { adx, diPlus, diMinus } = calcADX(highs, lows, closes, indicatorCfg.adxPeriod);
       const adxScaleOpts = { scaleMargins: { top: 0.76, bottom: 0 }, borderVisible: false };
       addOrUpdate("adx-line",    adx,     "rgba(245,158,11,0.90)",  false, "adx");
-      addOrUpdate("adx-diplus",  diPlus,  "hsl(var(--janus-up)/0.80)",   false, "adx");
-      addOrUpdate("adx-diminus", diMinus, "hsl(var(--janus-down)/0.80)", false, "adx");
+      addOrUpdate("adx-diplus",  diPlus,  "rgba(14,203,129,0.80)",   false, "adx");
+      addOrUpdate("adx-diminus", diMinus, "rgba(246,70,93,0.80)", false, "adx");
       serMap.get("adx-line")?.priceScale().applyOptions(adxScaleOpts);
     } else {
       ["adx-line", "adx-diplus", "adx-diminus"].forEach(removeKey);

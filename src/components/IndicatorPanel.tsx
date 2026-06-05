@@ -91,7 +91,7 @@ const DEFAULTS: IndicatorConfig = {
 
 const EMA_COLORS: Record<number, string> = {
   9:   "#f59e0b",   // amber
-  21:  "hsl(var(--janus-up))",   // green
+  21:  "#0ecb81",   // green
   50:  "#3b82f6",   // blue
   200: "#a855f7",   // purple
 };
