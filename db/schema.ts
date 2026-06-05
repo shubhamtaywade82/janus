@@ -488,7 +488,6 @@ export const liquidationEvents = pgTable(
 );
 
 export type LiquidationEvent = typeof liquidationEvents.$inferSelect;
-
 // ─── User Alert Rules (replaces localStorage "janus_alert_rules") ───
 export const userAlertRules = pgTable(
   "user_alert_rules",

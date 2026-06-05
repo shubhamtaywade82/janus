@@ -228,6 +228,184 @@ export interface AnalysisResult {
   };
 }
 
+// ─── Types for the Comprehensive Analysis Engine ───
+
+export interface SwingPoint {
+  price: number;
+  timestamp: number;
+  type: "high" | "low";
+}
+
+export interface FVG {
+  low: number;
+  high: number;
+  type: "BULLISH" | "BEARISH";
+  timestamp: number;
+  filled: boolean;
+}
+
+export interface OrderBlock {
+  high: number;
+  low: number;
+  type: "BULLISH" | "BEARISH";
+  timestamp: number;
+  status: "ACTIVE" | "MITIGATED" | "INVALIDATED";
+}
+
+export interface LiquidityPool {
+  price: number;
+  type: "BUY_SIDE" | "SELL_SIDE";
+  strength: "HIGH" | "MEDIUM" | "LOW";
+}
+
+export interface AnalysisResult {
+  symbol: string;
+  exchange: string;
+  timestamp: string;
+  market_state: {
+    regime: "BULLISH" | "BEARISH" | "NEUTRAL";
+    confidence: number;
+  };
+  multi_timeframe: Record<
+    string,
+    {
+      trend: "BULLISH" | "BEARISH" | "NEUTRAL";
+      structure: "UPTREND" | "DOWNTREND" | "RANGING";
+      bos: boolean;
+      choch: boolean;
+      ema_trend: "BULLISH" | "BEARISH" | "NEUTRAL";
+      momentum: "STRONG_BULLISH" | "BULLISH" | "NEUTRAL" | "BEARISH" | "STRONG_BEARISH" | "EXHAUSTING" | "RECOVERY";
+    }
+  >;
+  market_structure: {
+    overall_bias: "BULLISH" | "BEARISH" | "NEUTRAL";
+    swing_highs: number[];
+    swing_lows: number[];
+    latest_bos?: {
+      direction: "BULLISH" | "BEARISH";
+      level: number;
+    };
+    latest_choch?: {
+      direction: "BULLISH" | "BEARISH";
+      level: number;
+      timeframe: string;
+    };
+    structure_score: {
+      bullish: number;
+      bearish: number;
+    };
+  };
+  liquidity: {
+    buy_side: number[];
+    sell_side: number[];
+    last_sweep?: {
+      side: "BUY_SIDE" | "SELL_SIDE";
+      level: number;
+      confirmed: boolean;
+    };
+    liquidity_event?: {
+      type: string;
+      strength: string;
+    };
+    probability_of_reversal: number;
+  };
+  order_blocks: {
+    bullish: OrderBlock[];
+    bearish: OrderBlock[];
+    nearest_ob?: {
+      type: "BULLISH" | "BEARISH";
+      distance_percent: number;
+    };
+  };
+  fvg: {
+    bullish: FVG[];
+    bearish: FVG[];
+    nearest_fvg?: {
+      type: "BULLISH" | "BEARISH";
+    };
+  };
+  volume: {
+    relative_volume: number;
+    accumulation: boolean;
+    distribution: boolean;
+    climax_volume: boolean;
+    volume_score: {
+      bullish: number;
+      bearish: number;
+    };
+  };
+  open_interest: {
+    current: string;
+    change_24h: {
+      percent: number;
+    };
+    interpretation: "NEW_LONGS" | "NEW_SHORTS" | "SHORT_COVERING" | "LONG_LIQUIDATION" | "UNKNOWN";
+    conviction: "HIGH" | "MEDIUM" | "LOW";
+  };
+  funding: {
+    current: string;
+    sentiment: "LONG_HEAVY" | "SHORT_HEAVY" | "NEUTRAL";
+    squeeze_risk: "LONG_SQUEEZE" | "SHORT_SQUEEZE" | "NONE";
+  };
+  cvd: {
+    trend: "BULLISH_DIVERGENCE" | "BEARISH_DIVERGENCE" | "CONTINUATION" | "NEUTRAL";
+    signal_strength: "STRONG" | "MODERATE" | "WEAK";
+  };
+  orderbook: {
+    imbalance: {
+      bid_volume: string;
+      ask_volume: string;
+    };
+    ratio: number;
+    dominant_side: "BUYERS" | "SELLERS" | "NEUTRAL";
+    absorption: boolean;
+    spoofing: boolean;
+  };
+  volume_profile: {
+    poc: number;
+    vah: number;
+    val: number;
+    current_position: "ABOVE_POC" | "BELOW_POC" | "AT_POC";
+    implication: "BULLISH" | "BEARISH" | "NEUTRAL";
+  };
+  signals: {
+    reversal: {
+      detected: boolean;
+      confidence: number;
+    };
+    continuation: {
+      detected: boolean;
+      confidence: number;
+    };
+    squeeze?: {
+      type: "LONG_SQUEEZE" | "SHORT_SQUEEZE";
+      confidence: number;
+    };
+    accumulation: {
+      detected: boolean;
+      confidence: number;
+    };
+  };
+  trade_setup?: {
+    setup_type: "COUNTER_TREND_LONG" | "COUNTER_TREND_SHORT" | "CONTINUATION_LONG" | "CONTINUATION_SHORT" | "NO_TRADE";
+    entry_zone: {
+      low: number;
+      high: number;
+    };
+    stop_loss: number;
+    targets: number[];
+    risk_reward: number;
+    confidence: number;
+    invalidation: string;
+  };
+  summary: {
+    verdict: string;
+    market_phase: "ACCUMULATION" | "DISTRIBUTION" | "TRENDING" | "RANGING";
+    recommended_action: "WAIT_FOR_CONFIRMATION" | "TAKE_POSITION" | "NO_TRADE";
+    confidence: number;
+  };
+}
+
 // ─── Signal update event bus ───
 export const signalEvents = new EventEmitter();
 signalEvents.setMaxListeners(50);
@@ -1197,10 +1375,8 @@ let klineUpdateListener: ((symbol: string, kline: any) => void) | null = null;
 async function runAnalysisForSymbol(binanceSymbol: string) {
   const pair = SUPPORTED_PAIRS.find((p) => p.binance === binanceSymbol);
   if (!pair) return;
-
   try {
     const db = getDb();
-
     // Run regime detection for this symbol if needed
     if (autoRegimeDetect) {
       try {
@@ -1279,7 +1455,6 @@ async function runAnalysisForSymbol(binanceSymbol: string) {
       .limit(1)
       .catch(() => []);
     const prev = lastSignal[0];
-
     // Detect SMC Events on this 1m timeframe
     const last1mCandles = await getCandlesForTimeframe(binanceSymbol, "1m");
     const tfStructure = analyzeTimeframeStructure(last1mCandles, "1m");

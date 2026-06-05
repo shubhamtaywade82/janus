@@ -1883,7 +1883,6 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
           {countdownStr}
         </div>
       )}
-
       {/* HTML Position Lines Left/Right Labels Overlay */}
       {chartInitialized && positions && positions.length > 0 && lastPrice > 0 && (
         <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
