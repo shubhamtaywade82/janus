@@ -134,3 +134,7 @@ console.log(`[auto-executor] AUTO_EXECUTE=${env.autoExecute} | PLACE_ORDERS=${en
 // Start AI position lifecycle manager (after LLM advisor is initialized)
 import { positionLifecycleManager } from "./services/position-manager/index";
 setTimeout(() => positionLifecycleManager.start().catch(console.error), 5_000);
+
+// Start backend alert engine (headless alert evaluation for user rules + system events)
+import { alertEngine } from "./services/alert-engine";
+alertEngine.start(5_000);

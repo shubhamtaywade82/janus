@@ -10,7 +10,7 @@ import {
   Activity,
   ChevronRight,
 } from "lucide-react";
-import { checkKnnAlerts, ALERT_DEFAULTS, type KnnSnapshotLike } from "@/lib/chart/alert-engine";
+import type { KnnSnapshotLike } from "@/lib/chart/alert-engine";
 import { cn } from "@/lib/utils";
 
 // ─── Market Regime Classifier ───
@@ -371,26 +371,11 @@ const Signals = () => {
   });
   trpc.signal.stream.useSubscription(undefined, streamOptsRef.current);
 
-  // KNN SuperTrend alert stream — fires toast alerts on bias flips, rejection orbs, regime changes
-  const knnPrevRef = useRef<Record<string, KnnSnapshotLike>>({});
+  // KNN stream — updates the KNN display data (transitions are alerted server-side via AlertEngine)
   const knnStreamOptsRef = useRef({
-    onData: (data: { symbol: string; snapshot: KnnSnapshotLike }) => {
-      try {
-        const stored = localStorage.getItem("janus_alert_cfg");
-        const cfg = stored ? { ...ALERT_DEFAULTS, ...JSON.parse(stored) } : ALERT_DEFAULTS;
-        const prev = knnPrevRef.current[data.symbol] ?? null;
-        const alerts = checkKnnAlerts(data.snapshot, prev, cfg, data.symbol);
-        knnPrevRef.current[data.symbol] = data.snapshot;
-
-        for (const alert of alerts) {
-          const color = alert.direction === "bullish" ? "hsl(var(--janus-up-bright))" : alert.direction === "bearish" ? "hsl(var(--janus-down-bright))" : "#a1a1aa";
-          toast(alert.message, {
-            description: `${alert.symbol} · KNN`,
-            duration: 6000,
-            style: { borderLeft: `3px solid ${color}` },
-          });
-        }
-      } catch { /* non-fatal */ }
+    onData: (_data: { symbol: string; snapshot: KnnSnapshotLike }) => {
+      // KNN bias flips and regime changes are now detected and alerted by the backend AlertEngine.
+      // This subscription is kept for live KNN data display only.
     },
   });
   trpc.signal.knnStream.useSubscription(undefined, knnStreamOptsRef.current);

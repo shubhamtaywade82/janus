@@ -39,6 +39,10 @@ import {
   knnSnapshotCache,
   type KnnSupertrendSnapshot,
 } from "../services/knn-supertrend";
+import { alertEngine } from "../services/alert-engine";
+
+// Per-symbol previous KNN snapshot for transition detection
+const prevKnnSnapshotCache = new Map<string, KnnSupertrendSnapshot>();
 
 // ─── Types for the Comprehensive Analysis Engine ───
 
@@ -1316,6 +1320,118 @@ async function runAnalysisForSymbol(binanceSymbol: string) {
         globalAutoExecutor.onSignalBatch(inserted).catch((err) =>
           console.error("[auto-executor] Batch error:", err)
         );
+
+        // ─── Emit system alerts for every detected transition ──────────────
+        const prevKnn = prevKnnSnapshotCache.get(binanceSymbol) ?? null;
+
+        if (isBosOrChoch) {
+          const bosType = tfStructure.bos ? "bos" : "choch";
+          const bosDir = signalData.direction === "long" ? "bullish" : signalData.direction === "short" ? "bearish" : null;
+          alertEngine.emitSystemAlert(
+            binanceSymbol,
+            bosType,
+            bosDir,
+            "1m",
+            `${bosType.toUpperCase()} detected — ${signalData.direction} bias (score: ${signalData.compositeScore})`,
+            { compositeScore: signalData.compositeScore, direction: signalData.direction }
+          ).catch(() => {});
+        }
+
+        if (isEmaCross) {
+          const crossDir = ema(prices, 20)[prices.length - 1] > ema(prices, 50)[prices.length - 1] ? "bullish" : "bearish";
+          alertEngine.emitSystemAlert(
+            binanceSymbol,
+            "ema_cross",
+            crossDir,
+            "1m",
+            `EMA(20) crossed ${crossDir === "bullish" ? "ABOVE" : "BELOW"} EMA(50)`,
+            { direction: crossDir }
+          ).catch(() => {});
+        }
+
+        if (isRsiExtreme) {
+          const rsiDir = rsiVal >= 70 ? "bearish" : "bullish";
+          alertEngine.emitSystemAlert(
+            binanceSymbol,
+            "rsi_extreme",
+            rsiDir,
+            "1m",
+            `RSI ${rsiVal.toFixed(1)} entered ${rsiVal >= 70 ? "OVERBOUGHT (>70)" : "OVERSOLD (<30)"} zone`,
+            { rsi: rsiVal }
+          ).catch(() => {});
+        }
+
+        if (isDirectionFlip) {
+          alertEngine.emitSystemAlert(
+            binanceSymbol,
+            "direction_flip",
+            signalData.direction === "long" ? "bullish" : "bearish",
+            "1m",
+            `Direction flipped: ${prev?.direction} → ${signalData.direction} (score: ${signalData.compositeScore})`,
+            { from: prev?.direction, to: signalData.direction, compositeScore: signalData.compositeScore }
+          ).catch(() => {});
+        }
+
+        if (isGatedFlip && signalData.isGated) {
+          alertEngine.emitSystemAlert(
+            binanceSymbol,
+            "gated_flip",
+            signalData.direction === "long" ? "bullish" : "bearish",
+            "1m",
+            `Signal GATED — ${binanceSymbol} composite score ${signalData.compositeScore} ≥ ${signalData.threshold}`,
+            { compositeScore: signalData.compositeScore, threshold: signalData.threshold, direction: signalData.direction }
+          ).catch(() => {});
+        }
+
+        if (knnSnapshot) {
+          if (isSTFlip) {
+            const stDir = knnSnapshot.supertrend.direction;
+            alertEngine.emitSystemAlert(
+              binanceSymbol,
+              "supertrend_flip",
+              stDir,
+              "1m",
+              `SuperTrend flipped ${stDir.toUpperCase()} — KNN ${knnSnapshot.knn.bias} (conf: ${knnSnapshot.knn.confidence}%)`,
+              { direction: stDir, knnBias: knnSnapshot.knn.bias, confidence: knnSnapshot.knn.confidence }
+            ).catch(() => {});
+          }
+
+          if (isRejection) {
+            const rejDir = knnSnapshot.rejection.type === "bullish_rejection" ? "bullish" : "bearish";
+            alertEngine.emitSystemAlert(
+              binanceSymbol,
+              "knn_rejection",
+              rejDir,
+              "1m",
+              `KNN rejection orb: ${knnSnapshot.rejection.type?.replace("_", " ")} at ST level ${knnSnapshot.supertrend.level.toFixed(4)}`,
+              { type: knnSnapshot.rejection.type, wickToBody: knnSnapshot.rejection.wickToBody, volumeScore: knnSnapshot.rejection.volumeScore }
+            ).catch(() => {});
+          }
+
+          if (prevKnn && prevKnn.knn.bias !== "neutral" && knnSnapshot.knn.bias !== "neutral" && prevKnn.knn.bias !== knnSnapshot.knn.bias) {
+            alertEngine.emitSystemAlert(
+              binanceSymbol,
+              "knn_bias_flip",
+              knnSnapshot.knn.bias,
+              "1m",
+              `KNN bias flipped ${prevKnn.knn.bias} → ${knnSnapshot.knn.bias} (conf: ${knnSnapshot.knn.confidence}%)`,
+              { from: prevKnn.knn.bias, to: knnSnapshot.knn.bias, confidence: knnSnapshot.knn.confidence }
+            ).catch(() => {});
+          }
+
+          if (prevKnn && prevKnn.regime !== knnSnapshot.regime) {
+            alertEngine.emitSystemAlert(
+              binanceSymbol,
+              "knn_regime_change",
+              null,
+              "1m",
+              `Market regime: ${prevKnn.regime} → ${knnSnapshot.regime} (${knnSnapshot.note})`,
+              { from: prevKnn.regime, to: knnSnapshot.regime, note: knnSnapshot.note }
+            ).catch(() => {});
+          }
+
+          prevKnnSnapshotCache.set(binanceSymbol, knnSnapshot);
+        }
       }
     } else {
       console.log(`[signal-router] Skipping duplicate signal update for ${binanceSymbol} (no active SMC, indicator alerts, or bias transitions).`);

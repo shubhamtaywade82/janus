@@ -16,54 +16,32 @@ const ALERTS_SUPPORTED_PAIRS = [
   { binance: "AVAXUSDT", name: "Avalanche" },
 ];
 
-export interface AlertRule {
-  id: string;
-  symbol: string;
-  type: "price" | "sweep" | "absorption" | "volatility" | "imbalance";
-  operator?: ">" | "<";
-  value: number; // target value
-  isActive: boolean;
-}
-
-export interface AlertLog {
-  id: string;
-  timestamp: number;
-  symbol: string;
-  message: string;
-  type: string;
-}
+type AlertType = "price" | "sweep" | "absorption" | "volatility" | "imbalance";
+type AlertOperator = ">" | "<";
 
 interface AlertsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-// Utility helper to play sound chime using Web Audio API
 export function playAlertChime() {
   try {
     const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    
-    // Play dual-tone chime
     const playTone = (freq: number, start: number, duration: number) => {
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
-      
       osc.type = "sine";
       osc.frequency.setValueAtTime(freq, start);
-      
       gain.gain.setValueAtTime(0.12, start);
       gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
-      
       osc.connect(gain);
       gain.connect(audioCtx.destination);
-      
       osc.start(start);
       osc.stop(start + duration);
     };
-
     const now = audioCtx.currentTime;
-    playTone(523.25, now, 0.15); // C5
-    playTone(783.99, now + 0.1, 0.3); // G5
+    playTone(523.25, now, 0.15);
+    playTone(783.99, now + 0.1, 0.3);
   } catch (err) {
     console.error("Failed to synthesize audio chime:", err);
   }
@@ -71,15 +49,11 @@ export function playAlertChime() {
 
 const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
   const [activeTab, setActiveTab] = useState<"create" | "rules" | "logs" | "telegram">("create");
-  
-  // Rules and Logs State
-  const [rules, setRules] = useState<AlertRule[]>([]);
-  const [logs, setLogs] = useState<AlertLog[]>([]);
 
   // Create Form State
   const [symbol, setSymbol] = useState("BTCUSDT");
-  const [type, setType] = useState<AlertRule["type"]>("price");
-  const [operator, setOperator] = useState<AlertRule["operator"]>(">");
+  const [type, setType] = useState<AlertType>("price");
+  const [operator, setOperator] = useState<AlertOperator>(">");
   const [value, setValue] = useState("");
 
   // Telegram settings state
@@ -89,16 +63,27 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
   const [isSavingTelegram, setIsSavingTelegram] = useState(false);
   const [isTestingTelegram, setIsTestingTelegram] = useState(false);
 
-  // Queries/Mutations for Telegram settings
+  // ─── tRPC: rules, logs, mutations ───────────────────────────────────────
+  const { data: rules = [], refetch: refetchRules } = trpc.alerts.getRules.useQuery(undefined, {
+    enabled: isOpen,
+  });
+
+  const { data: logs = [], refetch: refetchLogs } = trpc.alerts.getLogs.useQuery(
+    { limit: 100 },
+    { enabled: isOpen && activeTab === "logs" }
+  );
+
+  const createRule = trpc.alerts.createRule.useMutation({ onSuccess: () => refetchRules() });
+  const deleteRule = trpc.alerts.deleteRule.useMutation({ onSuccess: () => refetchRules() });
+  const updateRule = trpc.alerts.updateRule.useMutation({ onSuccess: () => refetchRules() });
+
   const { data: telegramSettings, refetch: refetchTelegram } = trpc.telegram.getSettings.useQuery(
     undefined,
     { enabled: isOpen }
   );
-
   const saveTelegramSettings = trpc.telegram.saveSettings.useMutation();
   const testTelegramSettings = trpc.telegram.testSettings.useMutation();
 
-  // Load backend Telegram settings into inputs
   useEffect(() => {
     if (telegramSettings) {
       setBotToken(telegramSettings.telegramBotToken || "");
@@ -107,27 +92,36 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
     }
   }, [telegramSettings]);
 
-  // Load alert settings from local storage
-  useEffect(() => {
-    if (isOpen) {
-      const storedRules = localStorage.getItem("janus_alert_rules");
-      const storedLogs = localStorage.getItem("janus_alert_logs");
-      if (storedRules) setRules(JSON.parse(storedRules));
-      if (storedLogs) setLogs(JSON.parse(storedLogs));
-    }
-  }, [isOpen]);
-
   if (!isOpen) return null;
 
-  const saveRules = (updatedRules: AlertRule[]) => {
-    setRules(updatedRules);
-    localStorage.setItem("janus_alert_rules", JSON.stringify(updatedRules));
-    window.dispatchEvent(new Event("janus_alerts_changed"));
+  const handleAddRule = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (type !== "volatility" && !value) return;
+    try {
+      await createRule.mutateAsync({
+        symbol,
+        type,
+        operator: type === "volatility" ? undefined : operator,
+        value: type === "volatility" ? undefined : parseFloat(value),
+        notifyTelegram: true,
+      });
+      setValue("");
+      setActiveTab("rules");
+    } catch (err: any) {
+      toast.error(err.message || "Failed to create rule");
+    }
   };
 
-  const saveLogs = (updatedLogs: AlertLog[]) => {
-    setLogs(updatedLogs);
-    localStorage.setItem("janus_alert_logs", JSON.stringify(updatedLogs));
+  const handleDeleteRule = async (id: number) => {
+    await deleteRule.mutateAsync({ id }).catch((err: any) =>
+      toast.error(err.message || "Failed to delete rule")
+    );
+  };
+
+  const handleToggleRule = async (id: number, current: boolean) => {
+    await updateRule.mutateAsync({ id, isActive: !current }).catch((err: any) =>
+      toast.error(err.message || "Failed to update rule")
+    );
   };
 
   const handleSaveTelegram = async (e: React.FormEvent) => {
@@ -171,40 +165,6 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
     }
   };
 
-  // Form submit handler
-  const handleAddRule = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (type !== "volatility" && !value) return;
-
-    const newRule: AlertRule = {
-      id: Math.random().toString(36).substring(2, 9),
-      symbol,
-      type,
-      operator: type === "volatility" ? undefined : operator,
-      value: type === "volatility" ? 1 : parseFloat(value), // 1 signifies high volatility trigger
-      isActive: true,
-    };
-
-    const updated = [...rules, newRule];
-    saveRules(updated);
-    setValue("");
-    setActiveTab("rules");
-  };
-
-  const handleDeleteRule = (id: string) => {
-    const updated = rules.filter((r) => r.id !== id);
-    saveRules(updated);
-  };
-
-  const handleToggleRule = (id: string) => {
-    const updated = rules.map((r) => (r.id === id ? { ...r, isActive: !r.isActive } : r));
-    saveRules(updated);
-  };
-
-  const handleClearLogs = () => {
-    saveLogs([]);
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/75 backdrop-blur-sm animate-fade-in">
       <div className="w-full max-w-md bg-[#09090b] border border-[#27272a] rounded-lg shadow-2xl overflow-hidden flex flex-col max-h-[85vh]">
@@ -224,50 +184,23 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
 
         {/* Tab Headers */}
         <div className="flex border-b border-[#27272a] text-[10px] bg-[#18181b]/30">
-          <button
-            onClick={() => setActiveTab("create")}
-            className={cn(
-              "flex-1 py-2 text-center font-bold border-b-2 transition-all",
-              activeTab === "create"
-                ? "text-[#f4f4f5] border-[#f59e0b] bg-[#27272a]/20"
-                : "text-[#71717a] border-transparent hover:text-[#a1a1aa]"
-            )}
-          >
-            Create Trigger
-          </button>
-          <button
-            onClick={() => setActiveTab("rules")}
-            className={cn(
-              "flex-1 py-2 text-center font-bold border-b-2 transition-all flex items-center justify-center gap-1.5",
-              activeTab === "rules"
-                ? "text-[#f4f4f5] border-[#f59e0b] bg-[#27272a]/20"
-                : "text-[#71717a] border-transparent hover:text-[#a1a1aa]"
-            )}
-          >
-            Active Rules ({rules.length})
-          </button>
-          <button
-            onClick={() => setActiveTab("logs")}
-            className={cn(
-              "flex-1 py-2 text-center font-bold border-b-2 transition-all flex items-center justify-center gap-1.5",
-              activeTab === "logs"
-                ? "text-[#f4f4f5] border-[#f59e0b] bg-[#27272a]/20"
-                : "text-[#71717a] border-transparent hover:text-[#a1a1aa]"
-            )}
-          >
-            Alert History ({logs.length})
-          </button>
-          <button
-            onClick={() => setActiveTab("telegram")}
-            className={cn(
-              "flex-1 py-2 text-center font-bold border-b-2 transition-all flex items-center justify-center gap-1.5",
-              activeTab === "telegram"
-                ? "text-[#f4f4f5] border-[#f59e0b] bg-[#27272a]/20"
-                : "text-[#71717a] border-transparent hover:text-[#a1a1aa]"
-            )}
-          >
-            Telegram Config
-          </button>
+          {(["create", "rules", "logs", "telegram"] as const).map((tab) => (
+            <button
+              key={tab}
+              onClick={() => { setActiveTab(tab); if (tab === "logs") refetchLogs(); }}
+              className={cn(
+                "flex-1 py-2 text-center font-bold border-b-2 transition-all",
+                activeTab === tab
+                  ? "text-[#f4f4f5] border-[#f59e0b] bg-[#27272a]/20"
+                  : "text-[#71717a] border-transparent hover:text-[#a1a1aa]"
+              )}
+            >
+              {tab === "create" && "Create Trigger"}
+              {tab === "rules" && `Active Rules (${rules.length})`}
+              {tab === "logs" && `History (${logs.length})`}
+              {tab === "telegram" && "Telegram Config"}
+            </button>
+          ))}
         </div>
 
         {/* Content Body */}
@@ -275,7 +208,6 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
           {/* Tab 1: Create Alert */}
           {activeTab === "create" && (
             <form onSubmit={handleAddRule} className="flex flex-col gap-3.5">
-              {/* Target symbol dropdown */}
               <div>
                 <label className="block text-[9px] uppercase tracking-wider text-[#71717a] font-semibold mb-1">
                   Trading Pair
@@ -293,7 +225,6 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                 </select>
               </div>
 
-              {/* Alert Type */}
               <div>
                 <label className="block text-[9px] uppercase tracking-wider text-[#71717a] font-semibold mb-1">
                   Condition Type
@@ -301,19 +232,13 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                 <select
                   value={type}
                   onChange={(e) => {
-                    const newType = e.target.value as AlertRule["type"];
+                    const newType = e.target.value as AlertType;
                     setType(newType);
-                    if (newType === "volatility") {
-                      setValue("1");
-                    } else if (newType === "imbalance") {
-                      setValue("0.5");
-                    } else if (newType === "sweep") {
-                      setValue("60");
-                    } else if (newType === "absorption") {
-                      setValue("60");
-                    } else {
-                      setValue("");
-                    }
+                    if (newType === "volatility") setValue("1");
+                    else if (newType === "imbalance") setValue("0.5");
+                    else if (newType === "sweep") setValue("60");
+                    else if (newType === "absorption") setValue("60");
+                    else setValue("");
                   }}
                   className="w-full bg-[#18181b] border border-[#27272a] rounded px-2.5 py-1.5 text-xs text-[#f4f4f5] focus:outline-none focus:border-[#f59e0b]"
                 >
@@ -325,7 +250,6 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                 </select>
               </div>
 
-              {/* Operators and Target Values */}
               {type !== "volatility" && (
                 <div className="grid grid-cols-3 gap-2">
                   <div className="col-span-1">
@@ -334,7 +258,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                     </label>
                     <select
                       value={operator}
-                      onChange={(e) => setOperator(e.target.value as AlertRule["operator"])}
+                      onChange={(e) => setOperator(e.target.value as AlertOperator)}
                       className="w-full bg-[#18181b] border border-[#27272a] rounded px-2.5 py-1.5 text-xs text-[#f4f4f5] focus:outline-none focus:border-[#f59e0b]"
                     >
                       <option value=">">&gt; (Above)</option>
@@ -361,16 +285,17 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
               {type === "volatility" && (
                 <div className="p-2.5 rounded border border-j-down/20 bg-j-down/5 text-j-down text-[10px] leading-relaxed flex gap-2">
                   <AlertCircle size={14} className="flex-shrink-0 mt-0.5" />
-                  <span>Triggers instantly when the symbol's volatility standard deviation enters the <strong>HIGH</strong> regime state.</span>
+                  <span>Triggers when the symbol's volatility standard deviation enters the <strong>HIGH</strong> regime. Evaluated server-side every 5 seconds.</span>
                 </div>
               )}
 
               <button
                 type="submit"
-                className="w-full mt-2.5 py-2 rounded bg-[#f59e0b] hover:bg-[#d97706] text-black text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-[#f59e0b]/10"
+                disabled={createRule.isPending}
+                className="w-full mt-2.5 py-2 rounded bg-[#f59e0b] hover:bg-[#d97706] disabled:opacity-50 text-black text-xs font-bold transition-all flex items-center justify-center gap-1.5 shadow-lg shadow-[#f59e0b]/10"
               >
                 <Plus size={14} />
-                Create Active Rule
+                {createRule.isPending ? "Creating..." : "Create Active Rule"}
               </button>
             </form>
           )}
@@ -382,6 +307,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                 <div className="flex flex-col items-center justify-center py-12 text-[#71717a] text-[10px] gap-1.5">
                   <Bell size={24} className="opacity-20 mb-1" />
                   <span>No alert rules configured.</span>
+                  <span className="text-[8px]">Rules are stored in the database and evaluated server-side.</span>
                 </div>
               ) : (
                 rules.map((rule) => (
@@ -394,16 +320,15 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                       <span className="text-[9px] text-[#71717a] font-semibold uppercase">
                         {rule.type === "volatility"
                           ? "VOLATILITY REGIME ➡️ HIGH"
-                          : `${rule.type.toUpperCase()} ${rule.operator} ${rule.value}`}
+                          : `${rule.type.toUpperCase()} ${rule.operator ?? ""} ${rule.value ?? ""}`}
                       </span>
                     </div>
-                    
                     <div className="flex items-center gap-2">
-                      {/* Active/Inactive Toggle Button */}
                       <button
-                        onClick={() => handleToggleRule(rule.id)}
+                        onClick={() => handleToggleRule(rule.id, rule.isActive)}
+                        disabled={updateRule.isPending}
                         className={cn(
-                          "px-2 py-0.5 rounded text-[8px] font-bold border uppercase transition-all",
+                          "px-2 py-0.5 rounded text-[8px] font-bold border uppercase transition-all disabled:opacity-50",
                           rule.isActive
                             ? "bg-j-up-bright/15 text-j-up-bright border-j-up-bright/40"
                             : "bg-[#27272a]/30 text-[#52525b] border-[#27272a]"
@@ -411,11 +336,10 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                       >
                         {rule.isActive ? "Active" : "Disabled"}
                       </button>
-
-                      {/* Delete Button */}
                       <button
                         onClick={() => handleDeleteRule(rule.id)}
-                        className="text-[#71717a] hover:text-j-down p-1.5 hover:bg-[#27272a]/50 rounded transition-colors"
+                        disabled={deleteRule.isPending}
+                        className="text-[#71717a] hover:text-j-down p-1.5 hover:bg-[#27272a]/50 rounded transition-colors disabled:opacity-50"
                       >
                         <Trash2 size={12} />
                       </button>
@@ -430,17 +354,8 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
           {activeTab === "logs" && (
             <div className="flex flex-col gap-2">
               <div className="flex justify-between items-center mb-1">
-                <span className="text-[9px] text-[#71717a] font-semibold uppercase">Triggered Alerts History</span>
-                {logs.length > 0 && (
-                  <button
-                    onClick={handleClearLogs}
-                    className="text-[9px] text-j-down hover:underline flex items-center gap-1 font-semibold"
-                  >
-                    Clear History
-                  </button>
-                )}
+                <span className="text-[9px] text-[#71717a] font-semibold uppercase">Triggered Alert History</span>
               </div>
-
               {logs.length === 0 ? (
                 <div className="flex flex-col items-center justify-center py-12 text-[#71717a] text-[10px] gap-1.5">
                   <ShieldAlert size={24} className="opacity-20 mb-1" />
@@ -455,7 +370,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                     >
                       <div className="flex justify-between text-[8px] text-[#71717a] font-semibold">
                         <span className="text-white/60">{log.symbol}</span>
-                        <span>{new Date(log.timestamp).toLocaleTimeString()}</span>
+                        <span>{new Date(log.triggeredAt).toLocaleTimeString()}</span>
                       </div>
                       <span className="text-[#f4f4f5]">{log.message}</span>
                     </div>
@@ -470,7 +385,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
             <form onSubmit={handleSaveTelegram} className="flex flex-col gap-4">
               <div>
                 <span className="text-[10px] text-[#a1a1aa] leading-relaxed block">
-                  Configure a Telegram Bot to receive real-time alert notifications directly on your Telegram account or group/channel.
+                  Configure a Telegram Bot to receive real-time alert notifications. Alerts are sent server-side — they fire even when this dashboard is closed.
                 </span>
               </div>
 

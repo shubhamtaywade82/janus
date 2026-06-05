@@ -20,7 +20,6 @@ import {
 import { cn } from "@/lib/utils";
 import SettingsModal from "./SettingsModal";
 import AlertsModal, { playAlertChime } from "./AlertsModal";
-import type { AlertRule, AlertLog } from "./AlertsModal";
 
 const navItems = [
   { path: "/", label: "Dashboard", icon: TrendingUp },
@@ -37,160 +36,24 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAlertsOpen, setIsAlertsOpen] = useState(false);
   const [activeAlertsCount, setActiveAlertsCount] = useState(0);
-  const lastAlertTimeRef = useRef<Record<string, number>>({});
 
-  const sendTelegramAlert = trpc.telegram.sendAlert.useMutation();
-
-  // Query to fetch all live states periodically for custom alerts comparison
-  const { data: allStates } = trpc.market.allLiveStates.useQuery(undefined, {
-    refetchInterval: 2000,
+  // ─── Backend user-alert stream → in-browser toast + badge ───
+  // Alert evaluation and Telegram delivery happen on the backend (AlertEngine).
+  // The frontend only receives the already-fired event for display purposes.
+  const userAlertStreamOpts = useRef({
+    onData: (event: { symbol: string; type: string; message: string }) => {
+      playAlertChime();
+      const sym = event.symbol.replace("B-", "").replace("_", "");
+      toast.warning(`Alert: ${sym} 🔔`, {
+        description: event.message,
+        duration: 6000,
+      });
+      setActiveAlertsCount((prev) => prev + 1);
+    },
   });
+  trpc.alerts.userAlertStream.useSubscription(undefined, userAlertStreamOpts.current);
 
-  useEffect(() => {
-    if (!allStates) return;
-
-    // Load current alert rules from local storage
-    let storedRules = localStorage.getItem("janus_alert_rules");
-    if (!storedRules) {
-      const defaultRules = [
-        {
-          id: "default-btc-volatility",
-          symbol: "BTCUSDT",
-          type: "volatility",
-          value: 1,
-          isActive: true,
-        },
-        {
-          id: "default-eth-volatility",
-          symbol: "ETHUSDT",
-          type: "volatility",
-          value: 1,
-          isActive: true,
-        },
-        {
-          id: "default-btc-imbalance-high",
-          symbol: "BTCUSDT",
-          type: "imbalance",
-          operator: ">",
-          value: 1.5,
-          isActive: true,
-        },
-        {
-          id: "default-btc-imbalance-low",
-          symbol: "BTCUSDT",
-          type: "imbalance",
-          operator: "<",
-          value: -1.5,
-          isActive: true,
-        },
-      ];
-      localStorage.setItem("janus_alert_rules", JSON.stringify(defaultRules));
-      storedRules = JSON.stringify(defaultRules);
-    }
-
-    const alertRules: AlertRule[] = JSON.parse(storedRules);
-    const activeRules = alertRules.filter((r) => r.isActive);
-    if (activeRules.length === 0) return;
-
-    const now = Date.now();
-    const triggeredLogs: AlertLog[] = [];
-
-    for (const rule of activeRules) {
-      const state = allStates[rule.symbol];
-      if (!state) continue;
-
-      let isTriggered = false;
-      let triggerMessage = "";
-
-      const ltp = state.ltp || 0;
-      const metrics = state.metrics || {};
-      const cleanSymbol = rule.symbol.replace("B-", "").replace("_", "");
-
-      // Evaluate condition
-      switch (rule.type) {
-        case "price":
-          if (rule.operator === ">" && ltp > rule.value) {
-            isTriggered = true;
-            triggerMessage = `Price crossed ABOVE ${rule.value} (Current: ${ltp.toFixed(2)})`;
-          } else if (rule.operator === "<" && ltp < rule.value) {
-            isTriggered = true;
-            triggerMessage = `Price crossed BELOW ${rule.value} (Current: ${ltp.toFixed(2)})`;
-          }
-          break;
-        case "sweep":
-          const sweep = metrics.sweepScore || 0;
-          if (sweep > rule.value) {
-            isTriggered = true;
-            triggerMessage = `Sweep Intensity crossed above ${rule.value} (Current: ${sweep.toFixed(0)})`;
-          }
-          break;
-        case "absorption":
-          const absorb = metrics.absorptionScore || 0;
-          if (absorb > rule.value) {
-            isTriggered = true;
-            triggerMessage = `Wall Limit Absorption crossed above ${rule.value} (Current: ${absorb.toFixed(0)})`;
-          }
-          break;
-        case "imbalance":
-          const imbalance = metrics.bidAskImbalance || 0;
-          if (rule.operator === ">" && imbalance > rule.value) {
-            isTriggered = true;
-            triggerMessage = `OFI Imbalance went above ${rule.value} (Current: +${imbalance.toFixed(2)})`;
-          } else if (rule.operator === "<" && imbalance < rule.value) {
-            isTriggered = true;
-            triggerMessage = `OFI Imbalance went below ${rule.value} (Current: ${imbalance.toFixed(2)})`;
-          }
-          break;
-        case "volatility":
-          if (metrics.volatilityRegime === "HIGH") {
-            isTriggered = true;
-            triggerMessage = `Volatility Regime shifted to HIGH!`;
-          }
-          break;
-      }
-
-      if (isTriggered) {
-        // Apply a 1-minute cooldown per alert rule ID
-        const lastTrigger = lastAlertTimeRef.current[rule.id] || 0;
-        if (now - lastTrigger > 60_000) {
-          lastAlertTimeRef.current[rule.id] = now;
-          
-          // Play sound and fire toast
-          playAlertChime();
-          toast.warning(`Alert: ${cleanSymbol} 🔔`, {
-            description: triggerMessage,
-            duration: 6000,
-          });
-
-          // Send Telegram message
-          sendTelegramAlert.mutate({
-            message: `🔔 <b>Janus Alert: ${cleanSymbol}</b>\n\n${triggerMessage}`,
-          });
-
-          // Push to logs
-          triggeredLogs.push({
-            id: Math.random().toString(36).substring(2, 9),
-            timestamp: now,
-            symbol: rule.symbol,
-            message: triggerMessage,
-            type: rule.type,
-          });
-        }
-      }
-    }
-
-    if (triggeredLogs.length > 0) {
-      const storedLogs = localStorage.getItem("janus_alert_logs");
-      const currentLogs: AlertLog[] = storedLogs ? JSON.parse(storedLogs) : [];
-      const updatedLogs = [...triggeredLogs, ...currentLogs].slice(0, 100); // keep last 100
-      localStorage.setItem("janus_alert_logs", JSON.stringify(updatedLogs));
-      
-      // Flash active alert count indicator
-      setActiveAlertsCount((prev) => prev + triggeredLogs.length);
-    }
-  }, [allStates]);
-
-  // ─── Global Signal Stream & Alerts ───
+  // ─── Global Signal Stream — direction / gate flip toasts (UI only) ───
   const prevSignalsRef = useRef<Map<string, { direction: string; isGated: boolean; compositeScore: number }>>(new Map());
   const isInitialRef = useRef(true);
 
@@ -229,64 +92,46 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
       return;
     }
 
-    // Compare updates
+    // Show in-browser toasts on state transitions
+    // (Telegram delivery for these events is handled by the backend AlertEngine)
     for (const sig of signals) {
       const prev = prevSignalsRef.current.get(sig.symbol);
       const compositeScore = parseFloat(sig.compositeScore || "0");
       const cleanSymbol = sig.symbol.replace("B-", "").replace("_", "");
 
       if (prev) {
-        // 1. Check Direction Flip
         if (prev.direction !== sig.direction) {
           if (sig.direction === "long") {
             toast.success(`${cleanSymbol} Signal BULLISH 🚀`, {
               description: `Score: ${compositeScore.toFixed(1)}. Trend turned bullish (was ${prev.direction.toUpperCase()}).`,
               duration: 5000,
             });
-            sendTelegramAlert.mutate({
-              message: `🟢 <b>Janus Trend Alert: ${cleanSymbol}</b>\n\nTrend turned <b>BULLISH 🚀</b> (Score: ${compositeScore.toFixed(1)}, was ${prev.direction.toUpperCase()})`,
-            });
           } else if (sig.direction === "short") {
             toast.error(`${cleanSymbol} Signal BEARISH 📉`, {
               description: `Score: ${compositeScore.toFixed(1)}. Trend turned bearish (was ${prev.direction.toUpperCase()}).`,
               duration: 5000,
-            });
-            sendTelegramAlert.mutate({
-              message: `🔴 <b>Janus Trend Alert: ${cleanSymbol}</b>\n\nTrend turned <b>BEARISH 📉</b> (Score: ${compositeScore.toFixed(1)}, was ${prev.direction.toUpperCase()})`,
             });
           } else {
             toast.info(`${cleanSymbol} Signal NEUTRAL ⚖️`, {
               description: `Score: ${compositeScore.toFixed(1)}. Trend returned to neutral (was ${prev.direction.toUpperCase()}).`,
               duration: 4000,
             });
-            sendTelegramAlert.mutate({
-              message: `⚪ <b>Janus Trend Alert: ${cleanSymbol}</b>\n\nTrend returned to <b>NEUTRAL ⚖️</b> (Score: ${compositeScore.toFixed(1)}, was ${prev.direction.toUpperCase()})`,
-            });
           }
-        }
-        // 2. Check Gate status change
-        else if (prev.isGated !== sig.isGated) {
+        } else if (prev.isGated !== sig.isGated) {
           if (!sig.isGated) {
             toast.success(`${cleanSymbol} Signal UNLOCKED 🔓`, {
               description: `Composite Score: ${compositeScore.toFixed(1)} crossed 75-point gate threshold.`,
               duration: 5000,
-            });
-            sendTelegramAlert.mutate({
-              message: `🔓 <b>Janus Signal Alert: ${cleanSymbol}</b>\n\nSignal crossed the 75-point gate threshold! Composite score: <b>${compositeScore.toFixed(1)}</b>`,
             });
           } else {
             toast.warning(`${cleanSymbol} Signal GATED 🔒`, {
               description: `Composite Score: ${compositeScore.toFixed(1)} fell below threshold.`,
               duration: 4000,
             });
-            sendTelegramAlert.mutate({
-              message: `🔒 <b>Janus Signal Alert: ${cleanSymbol}</b>\n\nSignal fell below the gate threshold. Composite score: <b>${compositeScore.toFixed(1)}</b>`,
-            });
           }
         }
       }
 
-      // Update state ref
       prevSignalsRef.current.set(sig.symbol, {
         direction: sig.direction,
         isGated: sig.isGated,

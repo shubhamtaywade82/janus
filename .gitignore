@@ -32,6 +32,7 @@ dist-ssr
 *.sqlite3
 db/migrations/*.sql
 !db/migrations/0008_market_positioning_data.sql
+!db/migrations/0009_alert_engine_tables.sql
 # TypeScript cache
 *.tsbuildinfo
 # Build outputs
