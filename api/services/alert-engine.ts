@@ -127,20 +127,30 @@ class AlertEngine {
     const op = rule.operator ?? ">";
     const sym = rule.symbol;
 
+    const getPriceDecimals = (s: string): number => {
+      const clean = s.replace("B-", "").replace("_", "");
+      const map: Record<string, number> = {
+        BTCUSDT: 2, ETHUSDT: 2, SOLUSDT: 2, BNBUSDT: 2,
+        XRPUSDT: 4, ADAUSDT: 4, DOGEUSDT: 5, AVAXUSDT: 2
+      };
+      return map[clean] ?? 2;
+    };
+
     switch (rule.type) {
       case "price": {
         // Check entire LTP ring buffer so we catch intra-poll spikes that reverse
         const recentPrices = state.ltpWindow.values().map((t) => t.price);
         if (recentPrices.length === 0) recentPrices.push(ltp);
 
+        const dec = getPriceDecimals(sym);
         if (op === ">") {
           const hit = recentPrices.find((p) => p > threshold);
           if (hit)
-            return { fired: true, message: `💰 ${sym} price crossed ABOVE ${threshold} (peak: ${hit.toFixed(2)}, current: ${ltp.toFixed(2)})` };
+            return { fired: true, message: `💰 ${sym} price crossed ABOVE ${threshold} (peak: ${hit.toFixed(dec)}, current: ${ltp.toFixed(dec)})` };
         } else {
           const hit = recentPrices.find((p) => p < threshold);
           if (hit)
-            return { fired: true, message: `💰 ${sym} price crossed BELOW ${threshold} (trough: ${hit.toFixed(2)}, current: ${ltp.toFixed(2)})` };
+            return { fired: true, message: `💰 ${sym} price crossed BELOW ${threshold} (trough: ${hit.toFixed(dec)}, current: ${ltp.toFixed(dec)})` };
         }
         break;
       }
