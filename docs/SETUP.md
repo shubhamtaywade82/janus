@@ -720,7 +720,7 @@ npm install -g pm2
 ```bash
 npm run build
 npm run db:migrate && npm run db:push
-pm2 start ecosystem.config.js --env production
+pm2 start ecosystem.config.cjs --env production
 pm2 save                   # persist process list for reboots
 pm2 startup                # auto-generates OS startup script (follow the printed command)
 ```
@@ -731,7 +731,7 @@ pm2 startup                # auto-generates OS startup script (follow the printe
 # Handles: git pull → npm ci → db:migrate → build → pm2 reload → health check
 ```
 
-**PM2 configuration summary** (`ecosystem.config.js`):
+**PM2 configuration summary** (`ecosystem.config.cjs`):
 
 | Setting | Value | Effect |
 |---|---|---|
@@ -1121,7 +1121,7 @@ psql $DATABASE_URL -c "TRUNCATE recent_ticks;"
 ```bash
 pm2 logs janus-bot --err --lines 100   # diagnose crash reason
 pm2 delete janus-bot                   # clear errored process
-pm2 start ecosystem.config.js --env production
+pm2 start ecosystem.config.cjs --env production
 pm2 save
 ```
 
