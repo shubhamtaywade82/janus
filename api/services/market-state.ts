@@ -34,6 +34,19 @@ export interface FundingTick {
   timestamp: number;
 }
 
+export interface OpenInterestTick {
+  openInterest: number;
+  quoteOI?: number;
+  timestamp: number;
+}
+
+export interface CvdTick {
+  delta: number;
+  cumulative: number;
+  price: number;
+  timestamp: number;
+}
+
 export interface LiquidityDelta {
   level: number;
   bidRemoved: number;
@@ -74,7 +87,11 @@ export interface InstrumentState {
   bookWindow: RingBuffer<OrderBookSnapshot>;
   deltaWindow: RingBuffer<LiquidityDelta>;
   liquidationWindow: RingBuffer<LiquidationTick>;
+  openInterestWindow: RingBuffer<OpenInterestTick>;
+  cvdWindow: RingBuffer<CvdTick>;
   latestFunding: FundingTick | null;
+  latestOpenInterest: OpenInterestTick | null;
+  cumulativeCvd: number;
 
   metrics: MarketMetrics;
   updatedAt: number;
@@ -178,7 +195,11 @@ export class MarketStateManager {
         bookWindow: new RingBuffer<OrderBookSnapshot>(50),
         deltaWindow: new RingBuffer<LiquidityDelta>(500),
         liquidationWindow: new RingBuffer<LiquidationTick>(1000),
+        openInterestWindow: new RingBuffer<OpenInterestTick>(500),
+        cvdWindow: new RingBuffer<CvdTick>(1000),
         latestFunding: null,
+        latestOpenInterest: null,
+        cumulativeCvd: 0,
         metrics: {
           spread: 0,
           spreadPercent: 0,
@@ -251,6 +272,22 @@ export class MarketStateManager {
   }
 
   /**
+   * Update Open Interest snapshots from REST polling.
+   */
+  updateOpenInterest(symbol: string, oiInput: { openInterest: number; quoteOI?: number; timestamp?: number }): void {
+    const state = this.getOrInitializeState(symbol);
+    const tick: OpenInterestTick = {
+      openInterest: oiInput.openInterest,
+      quoteOI: oiInput.quoteOI,
+      timestamp: oiInput.timestamp ?? Date.now(),
+    };
+    state.latestOpenInterest = tick;
+    state.openInterestWindow.push(tick);
+    state.updatedAt = tick.timestamp;
+    state.sequenceNo++;
+  }
+
+  /**
    * Update the trade tape.
    */
   updateTrade(
@@ -267,6 +304,18 @@ export class MarketStateManager {
       timestamp,
     };
     state.tradeWindow.push(trade);
+
+    const delta = trade.side === "BUY"
+      ? trade.quantity * trade.price
+      : -trade.quantity * trade.price;
+    state.cumulativeCvd += delta;
+    state.cvdWindow.push({
+      delta,
+      cumulative: state.cumulativeCvd,
+      price: trade.price,
+      timestamp,
+    });
+
     state.updatedAt = timestamp;
     state.sequenceNo++;
   }
@@ -392,6 +441,59 @@ export class MarketStateManager {
 
     state.updatedAt = timestamp;
     state.sequenceNo++;
+  }
+
+  /**
+   * Analyze CVD for a symbol: detect divergences between price and cumulative volume delta.
+   */
+  analyzeCvd(symbol: string): {
+    trend: "BULLISH_DIVERGENCE" | "BEARISH_DIVERGENCE" | "CONFIRMING" | "NEUTRAL";
+    signalStrength: "STRONG" | "MODERATE" | "WEAK";
+    current: number;
+    sessionDelta: number;
+  } {
+    const state = this.instruments.get(symbol);
+    if (!state || state.cvdWindow.size() < 10) {
+      return { trend: "NEUTRAL", signalStrength: "WEAK", current: 0, sessionDelta: 0 };
+    }
+
+    const points = state.cvdWindow.values();
+    const recent = points.slice(-20);
+    const sessionStart = points.length > 100 ? points[points.length - 100] : points[0];
+
+    const priceValues = recent.map((p) => p.price);
+    const cvdValues = recent.map((p) => p.cumulative);
+
+    const half = Math.floor(recent.length / 2);
+    const priceLow1 = Math.min(...priceValues.slice(0, half));
+    const priceLow2 = Math.min(...priceValues.slice(half));
+    const cvdLow1 = Math.min(...cvdValues.slice(0, half));
+    const cvdLow2 = Math.min(...cvdValues.slice(half));
+    const priceHigh1 = Math.max(...priceValues.slice(0, half));
+    const priceHigh2 = Math.max(...priceValues.slice(half));
+    const cvdHigh1 = Math.max(...cvdValues.slice(0, half));
+    const cvdHigh2 = Math.max(...cvdValues.slice(half));
+
+    let trend: "BULLISH_DIVERGENCE" | "BEARISH_DIVERGENCE" | "CONFIRMING" | "NEUTRAL" = "NEUTRAL";
+    let signalStrength: "STRONG" | "MODERATE" | "WEAK" = "WEAK";
+
+    if (priceLow2 < priceLow1 && cvdLow2 > cvdLow1) {
+      trend = "BULLISH_DIVERGENCE";
+      signalStrength = "STRONG";
+    } else if (priceHigh2 > priceHigh1 && cvdHigh2 < cvdHigh1) {
+      trend = "BEARISH_DIVERGENCE";
+      signalStrength = "STRONG";
+    } else if (state.cumulativeCvd > (sessionStart.cumulative ?? 0)) {
+      trend = "CONFIRMING";
+      signalStrength = "MODERATE";
+    }
+
+    return {
+      trend,
+      signalStrength,
+      current: state.cumulativeCvd,
+      sessionDelta: state.cumulativeCvd - (sessionStart.cumulative ?? 0),
+    };
   }
 }
 

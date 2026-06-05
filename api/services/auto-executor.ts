@@ -23,7 +23,9 @@ import { checkCorrelation } from "./correlation-guard";
 import { globalRiskEngine, getOrCreateSession, updateSession } from "./risk-engine";
 import { globalLlmAdvisor, type SignalContext } from "./llm-advisor";
 import { latestTickerCache } from "./streaming";
+import { marketStateManager } from "./market-state";
 import { markPriceCache, tradingEvents } from "./coindcx-ws";
+import { fetchKlines } from "./binance";
 import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo } from "./coindcx";
 import { registerPositionForTrailing, unregisterPosition } from "./trailing-stop";
 import { knnSnapshotCache } from "./knn-supertrend";
@@ -337,10 +339,27 @@ export class AutoExecutor {
       sizeMult = advice.sizeMult ?? 1.0;
     }
 
-    // Position sizing
-    const currentPrice =
-      markPriceCache.get(signal.symbol) ??
-      latestTickerCache.get(symbol)?.lastPrice;
+    // Position sizing — 4-level price fallback chain
+    let currentPrice: number | undefined =
+      markPriceCache.get(signal.symbol) ??        // CoinDCX mark price (keyed by B-XXX_USDT)
+      latestTickerCache.get(symbol)?.lastPrice ??  // Binance ticker (keyed by XXXUSDT)
+      marketStateManager.get(symbol)?.ltp ?? undefined; // in-memory LTP from trade stream
+
+    if (!currentPrice || currentPrice <= 0) {
+      // Last resort: fetch via REST
+      try {
+        const klines = await fetchKlines(symbol, "1m", 1);
+        const restPrice = klines[0] ? parseFloat(klines[0].close) : 0;
+        if (restPrice > 0) {
+          currentPrice = restPrice;
+          // Seed the ticker cache so subsequent signals don't need REST
+          latestTickerCache.set(symbol, { lastPrice: restPrice, symbol });
+        }
+      } catch {
+        // REST also failed — skip
+      }
+    }
+
     if (!currentPrice || currentPrice <= 0) {
       return this.skip(signal, "no price feed");
     }

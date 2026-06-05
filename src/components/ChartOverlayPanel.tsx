@@ -11,6 +11,9 @@ export interface OverlayToggles {
   displacement: boolean;
   premiumDiscount: boolean;
   obv:          boolean;
+  sessions:     boolean;
+  crosshairTooltip: boolean;
+  sweepMarkers: boolean;
 }
 
 const DEFAULTS: OverlayToggles = {
@@ -22,6 +25,9 @@ const DEFAULTS: OverlayToggles = {
   displacement:    false,
   premiumDiscount: false,
   obv:             false,
+  sessions:        true,
+  crosshairTooltip: true,
+  sweepMarkers:    true,
 };
 
 const LAYERS: { key: keyof OverlayToggles; label: string; color: string; shortLabel: string }[] = [
@@ -33,6 +39,9 @@ const LAYERS: { key: keyof OverlayToggles; label: string; color: string; shortLa
   { key: "displacement",    label: "Displacement",     shortLabel: "DIS",  color: "#f59e0b" },
   { key: "premiumDiscount", label: "Prem / Disc",      shortLabel: "P/D",  color: "#52525b" },
   { key: "obv",             label: "OBV",              shortLabel: "OBV",  color: "#06b6d4" },
+  { key: "sessions",        label: "Sessions",         shortLabel: "SES",  color: "#3b82f6" },
+  { key: "crosshairTooltip", label: "Tooltip",         shortLabel: "TIP",  color: "#71717a" },
+  { key: "sweepMarkers",    label: "Sweep Markers",    shortLabel: "SWP",  color: "#ef4444" },
 ];
 
 interface Props {

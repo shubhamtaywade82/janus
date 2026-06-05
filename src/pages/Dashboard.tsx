@@ -21,6 +21,9 @@ import { OrderBlockPrimitive } from "@/lib/chart/primitives/OrderBlockPrimitive"
 import { FVGPrimitive } from "@/lib/chart/primitives/FVGPrimitive";
 import { StructurePrimitive } from "@/lib/chart/primitives/StructurePrimitive";
 import { VolumeProfilePrimitive } from "@/lib/chart/primitives/VolumeProfilePrimitive";
+import { SessionShadingPrimitive } from "@/lib/chart/primitives/SessionShadingPrimitive";
+import { CrosshairTooltipPrimitive } from "@/lib/chart/primitives/CrosshairTooltipPrimitive";
+import { LiquiditySweepPrimitive, type SweepMarker } from "@/lib/chart/primitives/LiquiditySweepPrimitive";
 import { ChartOverlayPanel } from "@/components/ChartOverlayPanel";
 import type { OverlayToggles } from "@/components/ChartOverlayPanel";
 import { IndicatorPanel } from "@/components/IndicatorPanel";
@@ -57,7 +60,7 @@ const resolveCSSColor = (varName: string, fallback: string): string => {
 };
 
 // ─── TradingView Lightweight Chart Component ───
-const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice }: {
+const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice, cvdBars, liquidityEvents }: {
   data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string;
   onLoadMore?: (beforeTime: number) => void;
   overlayData?: PriceActionData | null;
@@ -65,11 +68,14 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   indicatorCfg?: IndicatorConfig | null;
   bidPrice?: number;
   askPrice?: number;
+  cvdBars?: { ts: number; delta: number; cumulative: number }[];
+  liquidityEvents?: Array<{ id: string; type: string; priority: string; symbol: string; timestamp: number; message: string; data?: any }>;
 }) => {
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
   const [chartInitialized, setChartInitialized] = useState(false);
   const [positionsY, setPositionsY] = useState<Record<number, { entryY: number | null; liqY: number | null }>>({});
+  const [isScrolledBack, setIsScrolledBack] = useState(false);
   const priceLinesRef = useRef<any[]>([]);
 
   const [alertRules, setAlertRules] = useState<any[]>([]);
@@ -157,9 +163,12 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const isLoadingMoreRef = useRef(false);
   const onLoadMoreRef = useRef(onLoadMore);
   // SMC primitives
-  const obPrimRef   = useRef<OrderBlockPrimitive | null>(null);
-  const fvgPrimRef  = useRef<FVGPrimitive | null>(null);
-  const strPrimRef  = useRef<StructurePrimitive | null>(null);
+  const obPrimRef      = useRef<OrderBlockPrimitive | null>(null);
+  const fvgPrimRef     = useRef<FVGPrimitive | null>(null);
+  const strPrimRef     = useRef<StructurePrimitive | null>(null);
+  const sessionPrimRef = useRef<SessionShadingPrimitive | null>(null);
+  const tooltipPrimRef = useRef<CrosshairTooltipPrimitive | null>(null);
+  const sweepPrimRef = useRef<LiquiditySweepPrimitive | null>(null);
   const markersPluginRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
   // OBV series
   const obvSeriesRef = useRef<any>(null);
@@ -189,11 +198,27 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
   const volumeHistoryRef = useRef<{ time: number; value: number }[]>([]);
 
   // ─── Tick animation: persistent lerp loop chasing target ───
+  //
+  // INVARIANTS (do not violate — each caused a hard-to-debug bug):
+  //  1. animTarget.high/low must ONLY expand within a candle — never shrink.
+  //     Shrinking makes the wick clamp in the anim loop jump backward → flicker.
+  //     Use liveHighRef / liveLowRef to accumulate the running max/min.
+  //  2. Do NOT clamp rendered high/low to the animated close (`c`).
+  //     The old pattern `Math.min(finalHigh, Math.max(open, c))` made wick length
+  //     depend on lerp position → different value every frame → flicker.
+  //     Just pass t.high / t.low directly to series.update().
+  //  3. Effect 3 (lastPrice) must merge kline high/low from `last` into liveHighRef/liveLowRef.
+  //     If it ignores kline data, real wicks from klineStream get overwritten with lower values.
+  //
   const animFrameRef = useRef<number | null>(null);
   const animTarget = useRef({ time: 0, open: 0, high: 0, low: 0, close: 0, vol: 0 });
   const animCurrent = useRef({ close: 0, vol: 0 });
   const animLoopRunning = useRef(false);
   const animSeeded = useRef(false); // track if we've seeded initial values
+  // Running high/low for the current candle — only expand, never contract (prevents wick flicker)
+  const liveHighRef = useRef(0);
+  const liveLowRef = useRef(Infinity);
+  const liveTimeRef = useRef(0); // openTime (seconds) of the candle being tracked
   const VOLUME_MA_PERIOD = 20; // 20-period volume MA
 
   const startAnimLoop = useCallback(() => {
@@ -258,16 +283,14 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const c = animCurrent.current.close;
       const v = animCurrent.current.vol;
 
-      // Animated candle update: clamp intermediate high/low to target high/low.
-      // Doing this prevents range fluctuations (where the canvas scale shifts up and down 
-      // dynamically during animation frames, causing the chart to visually vibrate).
-      const finalHigh = Math.max(t.open, t.close, t.high);
-      const finalLow = Math.min(t.open, t.close, t.low);
+      // Use full high/low from animTarget directly — do NOT clamp to animated close.
+      // Clamping made the wick length depend on the lerp position, causing wicks to
+      // flicker every frame as `c` moved. Wicks are accurate; only close animates.
       candlestickSeriesRef.current.update({
         time: t.time as UTCTimestamp,
         open: t.open,
-        high: Math.min(finalHigh, Math.max(t.open, c)),
-        low: Math.max(finalLow, Math.min(t.open, c)),
+        high: t.high,
+        low: t.low,
         close: c,
       });
 
@@ -415,6 +438,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
             isGreen: c >= o,
           });
         }
+        tooltipPrimRef.current?.setBar(null);
         return;
       }
 
@@ -436,6 +460,25 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
           isGreen: c >= o,
         });
       }
+
+      // Update crosshair tooltip primitive
+      if (tooltipPrimRef.current) {
+        const ohlc = param.seriesData.get(candlestickSeries) as any;
+        if (ohlc && ohlc.open !== undefined) {
+          const t = param.time as number;
+          const kline = dataRef.current.find((k) => Math.round(k.openTime / 1000) === t);
+          tooltipPrimRef.current.setBar({
+            time: t,
+            open: ohlc.open,
+            high: ohlc.high,
+            low: ohlc.low,
+            close: ohlc.close,
+            volume: kline ? parseFloat(kline.volume) : 0,
+          });
+        } else {
+          tooltipPrimRef.current.setBar(null);
+        }
+      }
     });
 
     // Resize handler
@@ -449,7 +492,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     const resizeObserver = new ResizeObserver(handleResize);
     resizeObserver.observe(container);
 
-    // Lazy load older candles when user scrolls to the left edge
+    // Lazy load + "go live" detection on scroll
     chart.timeScale().subscribeVisibleLogicalRangeChange((range) => {
       if (!range) return;
 
@@ -460,6 +503,10 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
           to: range.to
         }));
       } catch (err) {}
+
+      // Show "go live" button when right edge is > 3 bars behind the last loaded bar
+      const lastIdx = dataRef.current.length - 1;
+      setIsScrolledBack(lastIdx > 0 && range.to < lastIdx - 3);
 
       // When left edge approaches the first bar (< 5 bars left of data start)
       if (range.from > 5) return;
@@ -497,21 +544,33 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
       const obPrim  = new OrderBlockPrimitive();
       const fvgPrim = new FVGPrimitive();
       const strPrim = new StructurePrimitive();
+      const sessionPrim = new SessionShadingPrimitive();
+      const tooltipPrim = new CrosshairTooltipPrimitive();
       candlestickSeriesRef.current.attachPrimitive(obPrim);
       candlestickSeriesRef.current.attachPrimitive(fvgPrim);
       candlestickSeriesRef.current.attachPrimitive(strPrim);
-      obPrimRef.current  = obPrim;
-      fvgPrimRef.current = fvgPrim;
-      strPrimRef.current = strPrim;
+      candlestickSeriesRef.current.attachPrimitive(sessionPrim);
+      candlestickSeriesRef.current.attachPrimitive(tooltipPrim);
+      const sweepPrim = new LiquiditySweepPrimitive();
+      candlestickSeriesRef.current.attachPrimitive(sweepPrim);
+      obPrimRef.current      = obPrim;
+      fvgPrimRef.current     = fvgPrim;
+      strPrimRef.current     = strPrim;
+      sessionPrimRef.current = sessionPrim;
+      tooltipPrimRef.current = tooltipPrim;
+      sweepPrimRef.current   = sweepPrim;
       // createSeriesMarkers replaces the old .setMarkers() — create lazily only when needed
       // to avoid interfering with auto-scroll and chart rendering pipeline
     } catch (err) {
       console.warn("[chart] SMC primitive attach failed:", err);
     }
     return () => {
-      obPrimRef.current  = null;
-      fvgPrimRef.current = null;
-      strPrimRef.current = null;
+      obPrimRef.current      = null;
+      fvgPrimRef.current     = null;
+      strPrimRef.current     = null;
+      sessionPrimRef.current = null;
+      tooltipPrimRef.current = null;
+      sweepPrimRef.current   = null;
       markersPluginRef.current = null;
     };
   }, [chartInitialized]);
@@ -685,16 +744,31 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     });
   }, [data, symbol, interval]);
 
-  // 3. Live Price tick updates for non-1m timeframes using lastPrice prop
+  // 3. Live price tick — drives chart animation for all timeframes from ticker lastPrice.
+  // klineStream provides high/low/volume updates; lastPrice provides real-time close.
   useEffect(() => {
-    if (!candlestickSeriesRef.current || !volumeSeriesRef.current || data.length === 0 || interval === "1m" || lastPrice <= 0) return;
+    if (!candlestickSeriesRef.current || !volumeSeriesRef.current || data.length === 0 || lastPrice <= 0) return;
 
     const last = data[data.length - 1];
     const lastTime = last.openTime / 1000;
     const o = parseFloat(last.open);
     const targetClose = lastPrice;
-    const h = Math.max(parseFloat(last.high), targetClose);
-    const l = Math.min(parseFloat(last.low), targetClose);
+
+    // Always merge: kline high/low (from klineStream via data prop) + live price.
+    // On candle change, reset accumulator; otherwise only expand — never contract.
+    const klineHigh = parseFloat(last.high);
+    const klineLow = parseFloat(last.low);
+    if (liveTimeRef.current !== lastTime) {
+      liveTimeRef.current = lastTime;
+      liveHighRef.current = klineHigh;
+      liveLowRef.current = klineLow;
+    }
+    // Expand to include both the kline's actual high/low AND the current tick price
+    liveHighRef.current = Math.max(liveHighRef.current, klineHigh, targetClose);
+    liveLowRef.current = Math.min(liveLowRef.current, klineLow, targetClose);
+
+    const h = liveHighRef.current;
+    const l = liveLowRef.current;
     const vol = parseFloat(last.volume);
 
     if (!animSeeded.current) {
@@ -725,16 +799,27 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     const tog = overlayToggles;
     const pa  = overlayData;
 
+    // Session shading
+    if (sessionPrimRef.current) {
+      sessionPrimRef.current.setEnabled(tog?.sessions ?? true);
+    }
+
+    // Crosshair tooltip
+    if (tooltipPrimRef.current) {
+      tooltipPrimRef.current.setEnabled(tog?.crosshairTooltip ?? true);
+    }
+
     // Order Blocks
     obPrimRef.current.setBlocks(tog?.orderBlocks && pa?.orderBlocks ? pa.orderBlocks : []);
 
     // FVGs
     fvgPrimRef.current.setFVGs(tog?.fvg && pa?.fvgs ? pa.fvgs : []);
 
-    // Structure + Liquidity
+    // Structure + Liquidity + Swings
     strPrimRef.current.setData(
       tog?.structure  && pa?.structure  ? pa.structure  : [],
-      tog?.liquidity  && pa?.liquidity  ? pa.liquidity  : []
+      tog?.liquidity  && pa?.liquidity  ? pa.liquidity  : [],
+      tog?.swings     && pa?.swings     ? pa.swings     : []
     );
 
     // Swing markers + displacement markers — create plugin lazily on first use
@@ -748,18 +833,6 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     if (markersPluginRef.current) {
       const markers: SeriesMarker<Time>[] = [];
 
-      if (tog?.swings && pa?.swings) {
-        for (const s of pa.swings) {
-          markers.push({
-            time:     (s.time / 1000) as Time,
-            position: s.type === "high" ? "aboveBar" : "belowBar",
-            shape:    "circle", // Use circle with size 0 to effectively hide the shape
-            color:    s.type === "high" ? "#a1a1aa" : "#a1a1aa",
-            size:     0.01,
-            text:     s.label || "",
-          });
-        }
-      }
 
       if (tog?.displacement && pa?.displacement) {
         for (const d of pa.displacement) {
@@ -810,6 +883,29 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
 
     // Primitives call requestUpdate() internally via their setters above
   }, [overlayData, overlayToggles]);
+
+  // ─── Sweep markers effect ───
+  useEffect(() => {
+    if (!sweepPrimRef.current) return;
+    const enabled = overlayToggles?.sweepMarkers ?? true;
+    sweepPrimRef.current.setEnabled(enabled);
+
+    if (!enabled || !liquidityEvents || liquidityEvents.length === 0) {
+      sweepPrimRef.current.setMarkers([]);
+      return;
+    }
+
+    const markers: SweepMarker[] = liquidityEvents
+      .filter((e) => ["SSS", "SS", "S"].includes(e.priority))
+      .map((e) => ({
+        time: e.timestamp,
+        type: e.type,
+        priority: e.priority as SweepMarker["priority"],
+        message: e.message,
+      }));
+
+    sweepPrimRef.current.setMarkers(markers);
+  }, [liquidityEvents, overlayToggles]);
 
   // ─── Indicator series update ───
   useEffect(() => {
@@ -1045,7 +1141,33 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
 
     // CVD — per-bar delta histogram + cumulative CVD line, both on "cvd" sub-pane
     if (indicatorCfg.cvd) {
-      const { delta, cvd } = calcCVD(highs, lows, closes, volumes);
+      let delta: (number | null)[];
+      let cvd: (number | null)[];
+
+      if (cvdBars && cvdBars.length >= 10 && data.length > 0) {
+        // Aggregate tick-level CVD into per-bar buckets
+        const barMs = data.length > 1
+          ? (data[1].openTime - data[0].openTime)
+          : 60_000;
+
+        let lastCum = 0;
+        delta = data.map((bar) => {
+          const barEnd = bar.openTime + barMs;
+          const ticks = cvdBars.filter((t) => t.ts >= bar.openTime && t.ts < barEnd);
+          return ticks.length > 0 ? ticks.reduce((sum, t) => sum + t.delta, 0) : null;
+        });
+        cvd = data.map((bar) => {
+          const barEnd = bar.openTime + barMs;
+          const ticks = cvdBars.filter((t) => t.ts >= bar.openTime && t.ts < barEnd);
+          if (ticks.length > 0) lastCum = ticks[ticks.length - 1].cumulative;
+          return lastCum;
+        });
+      } else {
+        // Fallback: OHLCV approximation
+        const result = calcCVD(highs, lows, closes, volumes);
+        delta = result.delta;
+        cvd = result.cvd;
+      }
       const upColor   = "rgba(14,203,129,0.65)";
       const downColor = "rgba(246,70,93,0.65)";
       const cvdScaleOpts = { scaleMargins: { top: 0.78, bottom: 0 }, borderVisible: false };
@@ -1372,8 +1494,21 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         signals.push(...detectRSIDivergence(closes, rsiVals, times));
       }
       if (indicatorCfg.cvd) {
-        const { cvd } = calcCVD(highs, lows, closes, volumes);
-        signals.push(...detectCVDDivergence(closes, cvd, times));
+        let cvdForSignals: (number | null)[];
+        if (cvdBars && cvdBars.length >= 10 && data.length > 0) {
+          const barMs = data.length > 1 ? (data[1].openTime - data[0].openTime) : 60_000;
+          let lastCum = 0;
+          cvdForSignals = data.map((bar) => {
+            const barEnd = bar.openTime + barMs;
+            const ticks = cvdBars.filter((t) => t.ts >= bar.openTime && t.ts < barEnd);
+            if (ticks.length > 0) lastCum = ticks[ticks.length - 1].cumulative;
+            return lastCum;
+          });
+        } else {
+          const result = calcCVD(highs, lows, closes, volumes);
+          cvdForSignals = result.cvd;
+        }
+        signals.push(...detectCVDDivergence(closes, cvdForSignals, times));
       }
 
       if (indicatorMarkersRef.current) {
@@ -1648,6 +1783,20 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
         </div>
       )}
 
+      {/* Go-to-live button — appears when user scrolls into history */}
+      {isScrolledBack && (
+        <button
+          onClick={() => chartRef.current?.timeScale().scrollToRealTime()}
+          className="absolute bottom-8 right-4 z-20 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[11px] font-semibold bg-[#f59e0b]/90 hover:bg-[#f59e0b] text-black shadow-lg transition-all animate-pulse"
+          title="Go to current candle"
+        >
+          <svg width="10" height="10" viewBox="0 0 10 10" fill="none" className="shrink-0">
+            <path d="M2 5h6M6 3l2 2-2 2" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          Live
+        </button>
+      )}
+
       {/* HTML Position Lines Left/Right Labels Overlay */}
       {chartInitialized && positions && positions.length > 0 && lastPrice > 0 && (
         <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">
@@ -1883,7 +2032,7 @@ function aggregateOrderBook(levels: [string, string][], step: number, isBid: boo
 }
 
 // ─── Order Book Component ───
-const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerData: any; markPrice?: number }) => {
+const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLiquidityEvent }: { symbol: string; tickerData: any; markPrice?: number; liquidityEvents: any[]; onLiquidityEvent: (event: any) => void }) => {
   const [activeTab, setActiveTab] = useState<"book" | "telemetry">("book");
   const [depth, setDepth] = useState<any>(null);
 
@@ -1919,14 +2068,22 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
     { refetchInterval: 1000, enabled: activeTab === "telemetry" }
   );
 
-  const [liquidityEvents, setLiquidityEvents] = useState<any[]>([]);
+  const depthInput = useMemo(() => ({ symbol }), [symbol]);
+
+  const onLiquidityEventRef = useRef<(event: any) => void>(() => {});
+  useEffect(() => {
+    onLiquidityEventRef.current = (event: any) => {
+      onLiquidityEvent(event);
+    };
+  }, [onLiquidityEvent]);
+
+  const liquidityOpts = useRef({
+    onData: (event: any) => onLiquidityEventRef.current(event),
+  });
+
   trpc.market.liquidityEventStream.useSubscription(
-    { symbol },
-    {
-      onData: (event: any) => {
-        setLiquidityEvents((prev) => [event, ...prev].slice(0, 50));
-      },
-    }
+    depthInput,
+    liquidityOpts.current
   );
 
   useEffect(() => {
@@ -1943,7 +2100,7 @@ const OrderBook = ({ symbol, tickerData, markPrice }: { symbol: string; tickerDa
   });
 
   trpc.market.orderBookStream.useSubscription(
-    { symbol },
+    depthInput,
     streamOpts.current
   );
 
@@ -2375,8 +2532,10 @@ const RecentTrades = ({ symbol }: { symbol: string }) => {
     onData: (trade: any) => onDataRef.current(trade),
   });
 
+  const recentTradesInput = useMemo(() => ({ symbol }), [symbol]);
+
   trpc.market.recentTradesStream.useSubscription(
-    { symbol },
+    recentTradesInput,
     streamOpts.current
   );
 
@@ -2432,7 +2591,8 @@ const TickerStreamSubscriber = ({
     onData: (data: any) => onDataRef.current(data),
   });
 
-  trpc.market.tickerStream.useSubscription({ symbol }, opts.current);
+  const tickerInput = useMemo(() => ({ symbol }), [symbol]);
+  trpc.market.tickerStream.useSubscription(tickerInput, opts.current);
   return null;
 };
 
@@ -2466,7 +2626,7 @@ const TickerStrip = ({
   const handleTickerUpdate = useCallback((symbol: string, data: any) => {
     setTickersMap((prev) => ({
       ...prev,
-      [symbol]: data,
+      [symbol]: { ...prev[symbol], ...data },
     }));
   }, []);
 
@@ -2598,6 +2758,7 @@ const Dashboard = () => {
     if (klineKeyRef.current !== newKey) {
       klineKeyRef.current = newKey;
       setKlines([]);
+      setLiquidityEvents([]);
     }
   }, [selectedSymbol, interval]);
 
@@ -2641,9 +2802,14 @@ const Dashboard = () => {
   const [overlayToggles, setOverlayToggles] = useState<OverlayToggles>(() => {
     try {
       const saved = localStorage.getItem("janus_chart_overlays");
-      return saved ? JSON.parse(saved) : { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false };
-    } catch { return { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false }; }
+      return saved ? JSON.parse(saved) : { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false, sweepMarkers: true };
+    } catch { return { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false, sweepMarkers: true }; }
   });
+
+  const [liquidityEvents, setLiquidityEvents] = useState<any[]>([]);
+  const handleLiquidityEvent = useCallback((event: any) => {
+    setLiquidityEvents((prev) => [event, ...prev].slice(0, 50));
+  }, []);
 
   const { data: paData } = trpc.market.priceAction.useQuery(
     { symbol: selectedSymbol, interval, limit: 200 },
@@ -2674,19 +2840,21 @@ const Dashboard = () => {
     };
   }, [interval]);
 
+  const symbolInput = useMemo(() => ({ symbol: selectedSymbol }), [selectedSymbol]);
+
   const klineStreamOpts = useRef({
     onData: (data: any) => klineCallbackRef.current(data),
   });
 
   trpc.market.klineStream.useSubscription(
-    { symbol: selectedSymbol },
+    symbolInput,
     klineStreamOpts.current
   );
 
   const tickerCallbackRef = useRef<(data: any) => void>(() => {});
   useEffect(() => {
     tickerCallbackRef.current = (data: any) => {
-      setTicker(data);
+      setTicker((prev: any) => (prev ? { ...prev, ...data } : data));
     };
   }, []);
 
@@ -2695,7 +2863,7 @@ const Dashboard = () => {
   });
 
   trpc.market.tickerStream.useSubscription(
-    { symbol: selectedSymbol },
+    symbolInput,
     tickerStreamOpts.current
   );
 
@@ -2716,8 +2884,42 @@ const Dashboard = () => {
   });
 
   trpc.market.orderBookStream.useSubscription(
-    { symbol: selectedSymbol },
+    symbolInput,
     depthStreamOpts.current
+  );
+
+  // ─── CVD tick-level data from backend ───
+  const { data: cvdHistoryData } = trpc.market.cvdHistory.useQuery(
+    symbolInput,
+    { staleTime: 0, refetchOnWindowFocus: false }
+  );
+
+  const [cvdBars, setCvdBars] = useState<{ ts: number; delta: number; cumulative: number }[]>([]);
+
+  useEffect(() => {
+    setCvdBars([]); // reset on symbol change
+  }, [selectedSymbol]);
+
+  useEffect(() => {
+    if (cvdHistoryData?.points && cvdHistoryData.points.length > 0) {
+      setCvdBars(cvdHistoryData.points);
+    }
+  }, [cvdHistoryData]);
+
+  const cvdOnDataRef = useRef<(tick: any) => void>(() => {});
+  useEffect(() => {
+    cvdOnDataRef.current = (tick) => {
+      setCvdBars((prev) => [...prev, tick].slice(-5000));
+    };
+  }, []);
+
+  const cvdStreamOpts = useRef({
+    onData: (tick: any) => cvdOnDataRef.current(tick),
+  });
+
+  trpc.market.cvdStream.useSubscription(
+    symbolInput,
+    cvdStreamOpts.current
   );
 
   // Fetch portfolio for open positions
@@ -2743,8 +2945,10 @@ const Dashboard = () => {
     onData: (data: any) => portfolioCallbackRef.current(data),
   });
 
+  const portfolioStreamInput = useMemo(() => ({ userId: 1 }), []);
+
   trpc.trading.portfolioStream.useSubscription(
-    { userId: 1 },
+    portfolioStreamInput,
     portfolioStreamOpts.current
   );
 
@@ -2945,6 +3149,8 @@ const Dashboard = () => {
                 indicatorCfg={indicatorCfg}
                 bidPrice={bestBid ?? undefined}
                 askPrice={bestAsk ?? undefined}
+                cvdBars={cvdBars}
+                liquidityEvents={liquidityEvents}
               />
             ) : initialKlines === null || initialKlines === undefined ? (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
@@ -3290,7 +3496,7 @@ const Dashboard = () => {
           <div className={cn("flex-1 flex flex-col overflow-hidden", sidebarTab !== "market" && "hidden")}>
             {/* Order Book */}
             <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-              <OrderBook symbol={selectedSymbol} tickerData={tickerData} />
+              <OrderBook symbol={selectedSymbol} tickerData={tickerData} liquidityEvents={liquidityEvents} onLiquidityEvent={handleLiquidityEvent} />
             </div>
             {/* Recent Trades */}
             <div className="h-64 border-t border-[#27272a] flex flex-col overflow-hidden bg-[#09090b]">

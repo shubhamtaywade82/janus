@@ -1,23 +1,45 @@
 import { EventEmitter } from "events";
 import WebSocket from "ws";
 import { getDb } from "../queries/connection";
-import { marketData, orderBookSnapshots, recentTicks } from "@db/schema";
+import { fundingRateHistory, liquidationEvents, marketData, openInterestData, orderBookSnapshots, recentTicks } from "@db/schema";
 import { marketStateManager } from "./market-state";
 import { getOrCreateFeedHealth, feedHealthRegistry } from "./feed-health";
 import { liquidityEngine } from "./liquidity-engine";
+import { fetchOpenInterest } from "./binance";
 
-export const marketEvents = new EventEmitter();
-marketEvents.setMaxListeners(100);
+// Survive Vite HMR: store singletons on globalThis so hot-reloads don't orphan listeners
+const _g = globalThis as Record<string, unknown>;
+
+if (!(_g.__marketEvents instanceof EventEmitter)) {
+  _g.__marketEvents = new EventEmitter();
+  (_g.__marketEvents as EventEmitter).setMaxListeners(100);
+}
+export const marketEvents = _g.__marketEvents as EventEmitter;
 
 // Latest ticker per symbol — populated by streaming WS, read by portfolio/signal logic
-export const latestTickerCache = new Map<string, { lastPrice: number; symbol: string }>();
+if (!(_g.__latestTickerCache instanceof Map)) {
+  _g.__latestTickerCache = new Map<string, { lastPrice: number; symbol: string }>();
+}
+export const latestTickerCache = _g.__latestTickerCache as Map<string, { lastPrice: number; symbol: string }>;
 
 interface ActiveSymbolStream {
   ws: WebSocket | null;
   subscribers: number;
+  openInterestTimer: ReturnType<typeof setInterval> | null;
 }
 
-export const activeStreams = new Map<string, ActiveSymbolStream>();
+if (!(_g.__activeStreams instanceof Map)) {
+  _g.__activeStreams = new Map<string, ActiveSymbolStream>();
+}
+export const activeStreams = _g.__activeStreams as Map<string, ActiveSymbolStream>;
+const OPEN_INTEREST_POLL_MS = 30_000;
+
+// Per-symbol ticker state: merged from @ticker (24h stats) + @trade (live lastPrice)
+// Survives HMR via globalThis
+if (!(_g.__tickerStateCache instanceof Map)) {
+  _g.__tickerStateCache = new Map<string, Record<string, unknown>>();
+}
+const tickerStateCache = _g.__tickerStateCache as Map<string, Record<string, unknown>>;
 
 // Global heartbeat — ticks all FeedHealth instances every 5s
 let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
@@ -34,6 +56,34 @@ function getBinanceWsUrl(symbol: string): string {
   return `wss://fstream.binance.com/stream?streams=${s}@depth20@100ms/${s}@trade/${s}@ticker/${s}@kline_1m/${s}@forceOrder/${s}@markPrice`;
 }
 
+function getErrorMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function pollOpenInterest(symbol: string): Promise<void> {
+  try {
+    const oi = await fetchOpenInterest(symbol);
+    const openInterest = parseFloat(String(oi.openInterest));
+    const timestamp = Number(oi.time) || Date.now();
+
+    if (!Number.isFinite(openInterest) || openInterest <= 0) return;
+
+    marketStateManager.updateOpenInterest(symbol, {
+      openInterest,
+      timestamp,
+    });
+
+    const db = getDb();
+    await db.insert(openInterestData).values({
+      symbol,
+      openInterest: String(openInterest),
+      timestamp: new Date(timestamp),
+    }).catch(() => {});
+  } catch (err: unknown) {
+    console.warn(`[streaming] Open interest poll failed for ${symbol}:`, getErrorMessage(err));
+  }
+}
+
 export function subscribeToSymbol(symbol: string) {
   const current = activeStreams.get(symbol);
   if (current) {
@@ -45,6 +95,7 @@ export function subscribeToSymbol(symbol: string) {
   const streamInfo: ActiveSymbolStream = {
     ws: null,
     subscribers: 1,
+    openInterestTimer: null,
   };
   activeStreams.set(symbol, streamInfo);
 
@@ -53,11 +104,16 @@ export function subscribeToSymbol(symbol: string) {
 
   const ws = new WebSocket(url);
   streamInfo.ws = ws;
+  pollOpenInterest(symbol).catch(() => {});
+  streamInfo.openInterestTimer = setInterval(() => {
+    pollOpenInterest(symbol).catch(() => {});
+  }, OPEN_INTEREST_POLL_MS);
 
-  let lastDbSave = {
+  const lastDbSave = {
     depth: 0,
     trade: 0,
     kline: 0,
+    funding: 0,
   };
 
   ws.on("message", async (dataStr) => {
@@ -78,8 +134,8 @@ export function subscribeToSymbol(symbol: string) {
 
         // Update in-memory state manager
         marketStateManager.updateOrderBook(symbol, {
-          bids: bids.map(([p, q]: any) => [parseFloat(String(p)), parseFloat(String(q))]),
-          asks: asks.map(([p, q]: any) => [parseFloat(String(p)), parseFloat(String(q))]),
+          bids: bids.map(([p, q]: [unknown, unknown]) => [parseFloat(String(p)), parseFloat(String(q))]),
+          asks: asks.map(([p, q]: [unknown, unknown]) => [parseFloat(String(p)), parseFloat(String(q))]),
           timestamp: data.E || Date.now(),
         });
 
@@ -120,6 +176,14 @@ export function subscribeToSymbol(symbol: string) {
         });
         marketStateManager.updateLtp(symbol, parseFloat(String(data.p)), data.T);
 
+        // Emit live ticker update on every trade so the UI price stays current.
+        // @ticker stream fires infrequently on Binance Futures; @trade is the real-time source.
+        const prevTicker = tickerStateCache.get(symbol) ?? {};
+        const liveTickerFromTrade = { ...prevTicker, symbol: data.s ?? symbol, lastPrice: String(data.p) };
+        tickerStateCache.set(symbol, liveTickerFromTrade);
+        latestTickerCache.set(symbol, { lastPrice: parseFloat(String(data.p)), symbol: data.s ?? symbol });
+        marketEvents.emit(`${symbol}:ticker`, liveTickerFromTrade);
+
         // Save trade to DB
         const now = Date.now();
         if (now - lastDbSave.trade > 1000) {
@@ -134,8 +198,9 @@ export function subscribeToSymbol(symbol: string) {
             tradeTime: new Date(data.T),
           }).catch(() => {});
         }
-      } 
+      }
       else if (stream.endsWith("@ticker")) {
+        require("fs").writeFileSync("test-ticker.json", JSON.stringify(data));
         const formattedTicker = {
           symbol: data.s,
           priceChange: data.p,
@@ -155,12 +220,14 @@ export function subscribeToSymbol(symbol: string) {
           count: data.n,
         };
 
+        // Merge 24h stats into the shared ticker state so live trade emissions keep them
+        tickerStateCache.set(symbol, { ...formattedTicker });
         latestTickerCache.set(symbol, { lastPrice: parseFloat(data.c), symbol: data.s });
         marketEvents.emit(`${symbol}:ticker`, formattedTicker);
 
         // Update in-memory state manager LTP
         marketStateManager.updateLtp(symbol, parseFloat(String(data.c)), data.E || Date.now());
-      } 
+      }
       else if (stream.endsWith("@kline_1m")) {
         const k = data.k;
         const formattedKline = {
@@ -173,9 +240,10 @@ export function subscribeToSymbol(symbol: string) {
           closeTime: k.T,
           quoteVolume: k.q,
           trades: k.n,
+          isClosed: k.x,
         };
-
         marketEvents.emit(`${symbol}:kline`, formattedKline);
+        marketEvents.emit(`kline-update`, symbol, formattedKline);
 
         // Throttle kline updates in DB
         const now = Date.now();
@@ -219,7 +287,7 @@ export function subscribeToSymbol(symbol: string) {
           orderType: o.o,
           timeInForce: o.f,
           originalQuantity: o.q,
-          price: o.p,
+          price: parseFloat(String(o.p)),
           averagePrice: o.ap,
           orderStatus: o.X,
           lastFilledQuantity: o.l,
@@ -229,9 +297,18 @@ export function subscribeToSymbol(symbol: string) {
         marketEvents.emit(`${symbol}:liquidation`, formattedLiquidation);
         
         // Pass to Market State
-        if (typeof marketStateManager !== "undefined" && typeof (marketStateManager as any).updateLiquidation === "function") {
-          (marketStateManager as any).updateLiquidation(symbol, formattedLiquidation);
-        }
+        marketStateManager.updateLiquidation(symbol, formattedLiquidation);
+
+        const db = getDb();
+        await db.insert(liquidationEvents).values({
+          symbol,
+          side: formattedLiquidation.side,
+          price: String(formattedLiquidation.price),
+          quantity: formattedLiquidation.originalQuantity,
+          filledQty: formattedLiquidation.orderFilledAccumulatedQuantity,
+          status: formattedLiquidation.orderStatus,
+          tradeTime: new Date(formattedLiquidation.orderTradeTime),
+        }).catch(() => {});
       }
       else if (stream.endsWith("@markPrice")) {
         const formattedFunding = {
@@ -245,8 +322,19 @@ export function subscribeToSymbol(symbol: string) {
         marketEvents.emit(`${symbol}:funding`, formattedFunding);
 
         // Pass to Market State
-        if (typeof marketStateManager !== "undefined" && typeof (marketStateManager as any).updateFunding === "function") {
-          (marketStateManager as any).updateFunding(symbol, formattedFunding);
+        marketStateManager.updateFunding(symbol, formattedFunding);
+
+        const now = Date.now();
+        if (now - lastDbSave.funding > 60_000) {
+          lastDbSave.funding = now;
+          const db = getDb();
+          await db.insert(fundingRateHistory).values({
+            symbol,
+            fundingRate: formattedFunding.fundingRate,
+            markPrice: formattedFunding.markPrice,
+            nextFundingTime: new Date(formattedFunding.nextFundingTime),
+            timestamp: new Date(data.E || now),
+          }).catch(() => {});
         }
       }
 
@@ -266,6 +354,10 @@ export function subscribeToSymbol(symbol: string) {
     console.log(`[streaming] WS closed for ${symbol}`);
     const state = activeStreams.get(symbol);
     if (state && state.subscribers > 0) {
+      if (state.openInterestTimer) {
+        clearInterval(state.openInterestTimer);
+        state.openInterestTimer = null;
+      }
       const health = getOrCreateFeedHealth(symbol);
       health.status = "reconnecting";
       health.reconnectAttempts++;
@@ -286,9 +378,28 @@ export function unsubscribeFromSymbol(symbol: string) {
   current.subscribers--;
   if (current.subscribers <= 0) {
     console.log(`[streaming] No subscribers left for ${symbol}. Closing WS connection.`);
+    if (current.openInterestTimer) {
+      clearInterval(current.openInterestTimer);
+      current.openInterestTimer = null;
+    }
     if (current.ws) {
       current.ws.close();
     }
     activeStreams.delete(symbol);
   }
+}
+
+// ─── Vite HMR: force-close all WS connections on hot-reload ───
+// New streaming.ts module = new message handlers. Old connections have stale closures.
+// Closing them triggers the reconnect loop which uses the fresh subscribeToSymbol.
+if ((import.meta as any).hot) {
+  (import.meta as any).hot.dispose(() => {
+    console.log("[streaming] HMR: closing all WS connections for fresh handlers");
+    for (const [, stream] of activeStreams) {
+      if (stream.openInterestTimer) clearInterval(stream.openInterestTimer);
+      stream.ws?.terminate();
+    }
+    activeStreams.clear();
+    if (heartbeatInterval) { clearInterval(heartbeatInterval); heartbeatInterval = null; }
+  });
 }

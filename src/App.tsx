@@ -7,6 +7,7 @@ import Logs from "./pages/Logs";
 import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 import RiskMetrics from "./pages/RiskMetrics";
+import AiAnalysis from "./pages/AiAnalysis";
 import { Toaster } from "./components/ui/sonner";
 
 const App = () => {
@@ -27,6 +28,14 @@ const App = () => {
         element={
           <Layout>
             <Signals />
+          </Layout>
+        }
+      />
+      <Route
+        path="/ai-analysis"
+        element={
+          <Layout>
+            <AiAnalysis />
           </Layout>
         }
       />

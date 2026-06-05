@@ -59,8 +59,8 @@ export class LiquidityEngine extends EventEmitter {
     const longLiqVol = longLiqs.reduce((sum, l) => sum + (l.quantity * l.price), 0);
     const shortLiqVol = shortLiqs.reduce((sum, l) => sum + (l.quantity * l.price), 0);
 
-    // 15. LONG_LIQUIDATION_CASCADE
-    if (longLiqs.length >= 8 && longLiqVol > 300000 && this.shouldFireEvent(symbol, "LONG_LIQUIDATION_CASCADE", 30000)) {
+    // 15. LONG_LIQUIDATION_CASCADE (Hardened: 10 liqs, 500k vol, 120s cooldown)
+    if (longLiqs.length >= 10 && longLiqVol > 500000 && this.shouldFireEvent(symbol, "LONG_LIQUIDATION_CASCADE", 120000)) {
       events.push({
         id: Math.random().toString(),
         type: "LONG_LIQUIDATION_CASCADE",
@@ -72,8 +72,8 @@ export class LiquidityEngine extends EventEmitter {
       });
     }
 
-    // 16. SHORT_LIQUIDATION_CASCADE
-    if (shortLiqs.length >= 8 && shortLiqVol > 300000 && this.shouldFireEvent(symbol, "SHORT_LIQUIDATION_CASCADE", 30000)) {
+    // 16. SHORT_LIQUIDATION_CASCADE (Hardened: 10 liqs, 500k vol, 120s cooldown)
+    if (shortLiqs.length >= 10 && shortLiqVol > 500000 && this.shouldFireEvent(symbol, "SHORT_LIQUIDATION_CASCADE", 120000)) {
       events.push({
         id: Math.random().toString(),
         type: "SHORT_LIQUIDATION_CASCADE",
@@ -90,8 +90,8 @@ export class LiquidityEngine extends EventEmitter {
       const fr = state.latestFunding.fundingRate;
       const pctChange = state.metrics.sweepScore;
       
-      // 17. SHORT_SQUEEZE
-      if (fr < -0.0008 && pctChange > 40 && this.shouldFireEvent(symbol, "SHORT_SQUEEZE", 45000)) {
+      // 17. SHORT_SQUEEZE (Hardened: -0.1% funding, 60 sweepScore, 300s cooldown)
+      if (fr < -0.001 && pctChange > 60 && this.shouldFireEvent(symbol, "SHORT_SQUEEZE", 300000)) {
         events.push({
           id: Math.random().toString(),
           type: "SHORT_SQUEEZE",
@@ -103,8 +103,8 @@ export class LiquidityEngine extends EventEmitter {
         });
       }
       
-      // 18. LONG_SQUEEZE
-      if (fr > 0.0008 && pctChange > 40 && state.ltp < state.previousLtp && this.shouldFireEvent(symbol, "LONG_SQUEEZE", 45000)) {
+      // 18. LONG_SQUEEZE (Hardened: +0.1% funding, 60 sweepScore, 300s cooldown)
+      if (fr > 0.001 && pctChange > 60 && state.ltp < state.previousLtp && this.shouldFireEvent(symbol, "LONG_SQUEEZE", 300000)) {
         events.push({
           id: Math.random().toString(),
           type: "LONG_SQUEEZE",
@@ -120,16 +120,24 @@ export class LiquidityEngine extends EventEmitter {
     // ─── 2. Orderbook Absorption & Sweeps (SSS Priority) ───
     
     // 13. ABSORPTION (Extreme Buy/Sell Absorption)
-    if (state.metrics.absorptionScore > 40 && this.shouldFireEvent(symbol, "ABSORPTION", 10000)) {
-      const trades = state.tradeWindow.values().slice(-100);
-      const buyVol = trades.filter(t => t.side === "BUY").reduce((s, t) => s + t.quantity, 0);
-      const sellVol = trades.filter(t => t.side === "SELL").reduce((s, t) => s + t.quantity, 0);
-      const type = buyVol > sellVol ? "BUY_ABSORPTION" : "SELL_ABSORPTION";
+    // Hardened: require substantial volume (>= 2% book depth) and 60s cooldown. SSS requires >= 5% book depth and > 80 score.
+    const bookDepth = state.metrics.bidDepth + state.metrics.askDepth;
+    const tradesForAbs = state.tradeWindow.values().slice(-100);
+    const buyVol = tradesForAbs.filter(t => t.side === "BUY").reduce((s, t) => s + t.quantity, 0);
+    const sellVol = tradesForAbs.filter(t => t.side === "SELL").reduce((s, t) => s + t.quantity, 0);
+    const totalVol = buyVol + sellVol;
+    const type = buyVol > sellVol ? "BUY_ABSORPTION" : "SELL_ABSORPTION";
+
+    if (state.metrics.absorptionScore > 40 && 
+        bookDepth > 0 && 
+        totalVol >= bookDepth * 0.02 && 
+        this.shouldFireEvent(symbol, "ABSORPTION", 60000)) {
       
+      const isExtreme = state.metrics.absorptionScore > 80 && totalVol >= bookDepth * 0.05;
       events.push({
         id: Math.random().toString(),
         type,
-        priority: state.metrics.absorptionScore > 70 ? "SSS" : "S",
+        priority: isExtreme ? "SSS" : "S",
         symbol,
         timestamp: now,
         message: `${type === "BUY_ABSORPTION" ? "Buy Absorption" : "Sell Absorption"} detected`,
@@ -139,6 +147,7 @@ export class LiquidityEngine extends EventEmitter {
 
     // 2. LIQUIDITY SWEEP (Buy/Sell Side Sweeps)
     // Breaks above/below local extreme then rejects back inside range
+    // Hardened: Requires sweepScore >= 65, min 30-tick range >= 0.08%, and 60s cooldown
     const ltpWindow = state.ltpWindow.values();
     if (ltpWindow.length >= 30) {
       const prices = ltpWindow.map(x => x.price);
@@ -147,9 +156,14 @@ export class LiquidityEngine extends EventEmitter {
       
       const localHigh = Math.max(...prices.slice(0, -1));
       const localLow = Math.min(...prices.slice(0, -1));
+      const rangePct = (localHigh - localLow) / (localLow || 1);
 
       // Buy-side Sweep
-      if (prevPrice >= localHigh && lastPrice < localHigh && this.shouldFireEvent(symbol, "BUY_SIDE_SWEEP", 15000)) {
+      if (prevPrice >= localHigh && 
+          lastPrice < localHigh && 
+          state.metrics.sweepScore >= 65 && 
+          rangePct >= 0.0008 && 
+          this.shouldFireEvent(symbol, "BUY_SIDE_SWEEP", 60000)) {
         events.push({
           id: Math.random().toString(),
           type: "BUY_SIDE_SWEEP",
@@ -162,7 +176,11 @@ export class LiquidityEngine extends EventEmitter {
       }
       
       // Sell-side Sweep
-      if (prevPrice <= localLow && lastPrice > localLow && this.shouldFireEvent(symbol, "SELL_SIDE_SWEEP", 15000)) {
+      if (prevPrice <= localLow && 
+          lastPrice > localLow && 
+          state.metrics.sweepScore >= 65 && 
+          rangePct >= 0.0008 && 
+          this.shouldFireEvent(symbol, "SELL_SIDE_SWEEP", 60000)) {
         events.push({
           id: Math.random().toString(),
           type: "SELL_SIDE_SWEEP",
@@ -453,7 +471,8 @@ export class LiquidityEngine extends EventEmitter {
       
       // Broadcast extreme high-priority events to Telegram
       if (ev.priority === "SSS" || ev.priority === "SS") {
-        const text = `🚨 <b>[${ev.priority}] ${ev.symbol} Liquidity Alert</b>\n\n<b>Type:</b> ${ev.type.replace(/_/g, " ")}\n<b>Message:</b> ${ev.message}`;
+        const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+        const text = `🚨 <b>[${ev.priority}] ${esc(ev.symbol)} Liquidity Alert</b>\n\n<b>Type:</b> ${esc(ev.type.replace(/_/g, " "))}\n<b>Message:</b> ${esc(ev.message)}`;
         broadcastTelegramAlert(text).catch(err => console.error("Failed to broadcast telegram alert", err));
       }
     }

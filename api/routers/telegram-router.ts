@@ -13,12 +13,13 @@ export const telegramRouter = createRouter({
       .select({
         telegramBotToken: users.telegramBotToken,
         telegramChatId: users.telegramChatId,
+        telegramLiquidityAlertsEnabled: users.telegramLiquidityAlertsEnabled,
       })
       .from(users)
       .where(eq(users.id, ctx.user.id))
       .limit(1);
 
-    return user[0] || { telegramBotToken: null, telegramChatId: null };
+    return user[0] || { telegramBotToken: null, telegramChatId: null, telegramLiquidityAlertsEnabled: true };
   }),
 
   // ─── Save Telegram Settings ───
@@ -27,6 +28,7 @@ export const telegramRouter = createRouter({
       z.object({
         telegramBotToken: z.string().nullable(),
         telegramChatId: z.string().nullable(),
+        telegramLiquidityAlertsEnabled: z.boolean(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -36,6 +38,7 @@ export const telegramRouter = createRouter({
         .set({
           telegramBotToken: input.telegramBotToken,
           telegramChatId: input.telegramChatId,
+          telegramLiquidityAlertsEnabled: input.telegramLiquidityAlertsEnabled,
           updatedAt: new Date(),
         })
         .where(eq(users.id, ctx.user.id));

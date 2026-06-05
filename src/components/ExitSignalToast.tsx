@@ -1,4 +1,4 @@
-import { useRef } from "react";
+import { useRef, useMemo, useEffect } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
 
@@ -28,76 +28,85 @@ export function ExitSignalToast({ userId }: Props) {
   // Deduplicate: only fire one toast per positionId until dismissed
   const shownRef = useRef(new Set<number>());
 
-  trpc.trading.exitSignalStream.useSubscription(
-    { userId },
-    {
-      onData: (payload: unknown) => {
-        const data = payload as ExitSignalPayload;
-        if (!data?.decision?.shouldExit) return;
-        if (shownRef.current.has(data.positionId)) return;
-        shownRef.current.add(data.positionId);
+  const userInput = useMemo(() => ({ userId }), [userId]);
 
-        const { decision, symbol, strategyType, currentPrice, positionId } = data;
+  const onDataRef = useRef<(payload: unknown) => void>(() => {});
+  useEffect(() => {
+    onDataRef.current = (payload: unknown) => {
+      const data = payload as ExitSignalPayload;
+      if (!data?.decision?.shouldExit) return;
+      if (shownRef.current.has(data.positionId)) return;
+      shownRef.current.add(data.positionId);
 
-        toast.success(`Exit signal — ${symbol}`, {
-          description: (
-            <div className="text-xs space-y-1 mt-1">
-              <div className="flex justify-between gap-4">
-                <span className="text-zinc-400">Strategy</span>
-                <span className="capitalize font-medium">{strategyType}</span>
-              </div>
-              <div className="flex justify-between gap-4">
-                <span className="text-zinc-400">Unrealized PnL</span>
-                <span className="text-green-400 tabular-nums">
-                  +{decision.unrealizedPnl.toFixed(6)} USDT
-                </span>
-              </div>
-              <div className="flex justify-between gap-4">
-                <span className="text-zinc-400">Total fees</span>
-                <span className="text-red-400 tabular-nums">
-                  -{decision.totalFees.toFixed(6)} USDT
-                </span>
-              </div>
-              <div className="flex justify-between gap-4 border-t border-zinc-700 pt-1">
-                <span className="text-zinc-400">Net after fees</span>
-                <span className="text-green-300 font-semibold tabular-nums">
-                  +{decision.feeAdjustedPnl.toFixed(6)} USDT
-                </span>
-              </div>
+      const { decision, symbol, strategyType, currentPrice, positionId } = data;
+
+      toast.success(`Exit signal — ${symbol}`, {
+        description: (
+          <div className="text-xs space-y-1 mt-1">
+            <div className="flex justify-between gap-4">
+              <span className="text-zinc-400">Strategy</span>
+              <span className="capitalize font-medium">{strategyType}</span>
             </div>
-          ) as unknown as string,
-          action: {
-            label: "Close position",
-            onClick: () => {
-              closePosition.mutate(
-                {
-                  id: positionId,
-                  closePrice: String(currentPrice),
-                  realizedPnl: String(decision.feeAdjustedPnl),
+            <div className="flex justify-between gap-4">
+              <span className="text-zinc-400">Unrealized PnL</span>
+              <span className="text-green-400 tabular-nums">
+                +{decision.unrealizedPnl.toFixed(6)} USDT
+              </span>
+            </div>
+            <div className="flex justify-between gap-4">
+              <span className="text-zinc-400">Total fees</span>
+              <span className="text-red-400 tabular-nums">
+                -{decision.totalFees.toFixed(6)} USDT
+              </span>
+            </div>
+            <div className="flex justify-between gap-4 border-t border-zinc-700 pt-1">
+              <span className="text-zinc-400">Net after fees</span>
+              <span className="text-green-300 font-semibold tabular-nums">
+                +{decision.feeAdjustedPnl.toFixed(6)} USDT
+              </span>
+            </div>
+          </div>
+        ) as unknown as string,
+        action: {
+          label: "Close position",
+          onClick: () => {
+            closePosition.mutate(
+              {
+                id: positionId,
+                closePrice: String(currentPrice),
+                realizedPnl: String(decision.feeAdjustedPnl),
+              },
+              {
+                onSuccess: () => {
+                  utils.trading.portfolio.invalidate();
+                  utils.trading.positions.invalidate();
+                  shownRef.current.delete(positionId);
+                  toast.success(`Position ${symbol} closed`);
                 },
-                {
-                  onSuccess: () => {
-                    utils.trading.portfolio.invalidate();
-                    utils.trading.positions.invalidate();
-                    shownRef.current.delete(positionId);
-                    toast.success(`Position ${symbol} closed`);
-                  },
-                  onError: (err) => {
-                    toast.error("Close failed", { description: err.message });
-                  },
-                }
-              );
-            },
+                onError: (err) => {
+                  toast.error("Close failed", { description: err.message });
+                },
+              }
+            );
           },
-          duration: 30_000,
-          onDismiss: () => shownRef.current.delete(data.positionId),
-          onAutoClose: () => shownRef.current.delete(data.positionId),
-        });
-      },
-      onError: (err) => {
-        console.error("[ExitSignalToast] stream error:", err);
-      },
-    }
+        },
+        duration: 30_000,
+        onDismiss: () => shownRef.current.delete(data.positionId),
+        onAutoClose: () => shownRef.current.delete(data.positionId),
+      });
+    };
+  }, [closePosition, utils]);
+
+  const streamOpts = useRef({
+    onData: (payload: unknown) => onDataRef.current(payload),
+    onError: (err: unknown) => {
+      console.error("[ExitSignalToast] stream error:", err);
+    },
+  });
+
+  trpc.trading.exitSignalStream.useSubscription(
+    userInput,
+    streamOpts.current
   );
 
   return null;

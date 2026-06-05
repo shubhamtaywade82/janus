@@ -52,6 +52,7 @@ export const users = pgTable("users", {
   lastSignInAt: timestamp("lastSignInAt").defaultNow().notNull(),
   telegramBotToken: varchar("telegram_bot_token", { length: 255 }),
   telegramChatId: varchar("telegram_chat_id", { length: 50 }),
+  telegramLiquidityAlertsEnabled: boolean("telegram_liquidity_alerts_enabled").default(true).notNull(),
 });
 
 export type User = typeof users.$inferSelect;
@@ -420,3 +421,60 @@ export const accountSnapshots = pgTable(
 );
 
 export type AccountSnapshot = typeof accountSnapshots.$inferSelect;
+
+// ─── Open Interest Data (Binance Futures, polled every 30s) ───
+export const openInterestData = pgTable(
+  "open_interest_data",
+  {
+    id: serial("id").primaryKey(),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    openInterest: decimal("open_interest", { precision: 24, scale: 4 }).notNull(),
+    quoteOI: decimal("quote_oi", { precision: 24, scale: 4 }),
+    timestamp: timestamp("timestamp").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    symbolTimestampIdx: index("idx_oi_symbol_timestamp").on(table.symbol, table.timestamp),
+  })
+);
+
+export type OpenInterestData = typeof openInterestData.$inferSelect;
+
+// ─── Funding Rate History (persisted from @markPrice WS stream) ───
+export const fundingRateHistory = pgTable(
+  "funding_rate_history",
+  {
+    id: serial("id").primaryKey(),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    fundingRate: decimal("funding_rate", { precision: 18, scale: 8 }).notNull(),
+    markPrice: decimal("mark_price", { precision: 18, scale: 8 }).notNull(),
+    nextFundingTime: timestamp("next_funding_time").notNull(),
+    timestamp: timestamp("timestamp").defaultNow().notNull(),
+  },
+  (table) => ({
+    symbolTimestampIdx: index("idx_funding_symbol_timestamp").on(table.symbol, table.timestamp),
+  })
+);
+
+export type FundingRateHistory = typeof fundingRateHistory.$inferSelect;
+
+// ─── Liquidation Events (persisted from @forceOrder WS stream) ───
+export const liquidationEvents = pgTable(
+  "liquidation_events",
+  {
+    id: serial("id").primaryKey(),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    side: varchar("side", { length: 10 }).notNull(), // BUY = short liq, SELL = long liq
+    price: decimal("price", { precision: 18, scale: 8 }).notNull(),
+    quantity: decimal("quantity", { precision: 18, scale: 8 }).notNull(),
+    filledQty: decimal("filled_qty", { precision: 18, scale: 8 }),
+    status: varchar("status", { length: 20 }),
+    tradeTime: timestamp("trade_time").notNull(),
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    symbolTradeTimeIdx: index("idx_liquidation_symbol_time").on(table.symbol, table.tradeTime),
+  })
+);
+
+export type LiquidationEvent = typeof liquidationEvents.$inferSelect;

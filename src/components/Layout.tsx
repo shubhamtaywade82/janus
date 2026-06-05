@@ -15,6 +15,7 @@ import {
   Settings,
   Shield,
   Bell,
+  Brain,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import SettingsModal from "./SettingsModal";
@@ -24,6 +25,7 @@ import type { AlertRule, AlertLog } from "./AlertsModal";
 const navItems = [
   { path: "/", label: "Dashboard", icon: TrendingUp },
   { path: "/signals", label: "Signals", icon: Signal },
+  { path: "/ai-analysis", label: "AI Analysis", icon: Brain },
   { path: "/portfolio", label: "Portfolio", icon: Wallet },
   { path: "/risk", label: "Risk", icon: Shield },
   { path: "/logs", label: "Logs", icon: ScrollText },
@@ -197,12 +199,19 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
     { staleTime: 0 }
   );
 
-  // Subscribe to signal stream via WebSockets
-  trpc.signal.stream.useSubscription(undefined, {
-    onData: () => {
+  const onDataRef = useRef<() => void>(() => {});
+  useEffect(() => {
+    onDataRef.current = () => {
       refetch();
-    },
+    };
+  }, [refetch]);
+
+  const streamOpts = useRef({
+    onData: () => onDataRef.current(),
   });
+
+  // Subscribe to signal stream via WebSockets
+  trpc.signal.stream.useSubscription(undefined, streamOpts.current);
 
   useEffect(() => {
     if (!signals || !Array.isArray(signals)) return;

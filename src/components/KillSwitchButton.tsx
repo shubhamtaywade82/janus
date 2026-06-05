@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useState, useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
 import { ShieldAlert, ShieldCheck } from "lucide-react";
@@ -18,8 +18,9 @@ export function KillSwitchButton() {
     onError: (err) => toast.error("Kill switch error", { description: err.message }),
   });
 
-  trpc.autoExecutor.killSwitchStream.useSubscription(undefined, {
-    onData: (event: unknown) => {
+  const onDataRef = useRef<(event: unknown) => void>(() => {});
+  useEffect(() => {
+    onDataRef.current = (event: unknown) => {
       const e = event as { event: string; state?: { reason: string } };
       if (e.event === "triggered") {
         toast.error(`⛔ Kill switch triggered: ${e.state?.reason}`, { duration: 0 });
@@ -27,8 +28,14 @@ export function KillSwitchButton() {
         toast.success("✅ Kill switch reset — trading resumed");
       }
       refetch();
-    },
+    };
+  }, [refetch]);
+
+  const streamOpts = useRef({
+    onData: (event: unknown) => onDataRef.current(event),
   });
+
+  trpc.autoExecutor.killSwitchStream.useSubscription(undefined, streamOpts.current);
 
   const isActive = status?.isActive ?? false;
 

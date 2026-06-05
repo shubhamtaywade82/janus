@@ -421,6 +421,38 @@ export const marketRouter = createRouter({
       };
     }),
 
+  // ─── CVD History (tick-level, from in-memory cvdWindow) ───
+  cvdHistory: publicQuery
+    .input(z.object({ symbol: z.string().default("BTCUSDT") }))
+    .query(({ input }) => {
+      const state = marketStateManager.get(input.symbol.toUpperCase());
+      if (!state) return { points: [] as { ts: number; delta: number; cumulative: number }[] };
+      return {
+        points: state.cvdWindow.values().map((t) => ({
+          ts: t.timestamp,
+          delta: t.delta,
+          cumulative: t.cumulative,
+        })),
+      };
+    }),
+
+  // ─── CVD Stream (fires on each new trade tick) ───
+  cvdStream: publicQuery
+    .input(z.object({ symbol: z.string().default("BTCUSDT") }))
+    .subscription(({ input }) => {
+      return observable<{ ts: number; delta: number; cumulative: number }>((emit) => {
+        const sym = input.symbol.toUpperCase();
+        const onTrade = () => {
+          const state = marketStateManager.get(sym);
+          if (!state) return;
+          const last = state.cvdWindow.values().at(-1);
+          if (last) emit.next({ ts: last.timestamp, delta: last.delta, cumulative: last.cumulative });
+        };
+        marketEvents.on(`${sym}:trade`, onTrade);
+        return () => { marketEvents.off(`${sym}:trade`, onTrade); };
+      });
+    }),
+
   // ─── Get Live State & Derived Metrics for All Supported Symbols ───
   allLiveStates: publicQuery
     .query(() => {
