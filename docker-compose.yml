@@ -1,0 +1,72 @@
+version: "3.9"
+
+services:
+  janus:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3010:3010"
+    environment:
+      - NODE_ENV=production
+      # Override these via a .env file or Docker secrets — never hardcode here
+      - DATABASE_URL=${DATABASE_URL}
+      - APP_ID=${APP_ID}
+      - APP_SECRET=${APP_SECRET}
+      - AUTH_URL=${AUTH_URL}
+      - AUTH_PLATFORM_URL=${AUTH_PLATFORM_URL}
+      - OWNER_UNION_ID=${OWNER_UNION_ID}
+      - PLACE_ORDERS=${PLACE_ORDERS:-false}
+      - AUTO_EXECUTE=${AUTO_EXECUTE:-false}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - OLLAMA_ENDPOINT=${OLLAMA_ENDPOINT:-http://localhost:11434}
+      - LOG_LEVEL=${LOG_LEVEL:-info}
+    volumes:
+      - ./logs:/app/logs          # persist logs across restarts
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost:3010/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-janus_production}
+      POSTGRES_USER: ${POSTGRES_USER:-janus}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data    # data survives container restarts
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-janus}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # Optional: daily DB backups to a local directory
+  pgbackup:
+    image: postgres:16-alpine
+    restart: "no"
+    profiles: ["backup"]
+    environment:
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - ./backups:/backups
+    entrypoint: >
+      sh -c "pg_dump -h postgres -U ${POSTGRES_USER:-janus} ${POSTGRES_DB:-janus_production}
+             | gzip > /backups/janus_$$(date +%Y%m%d_%H%M%S).sql.gz
+             && echo 'Backup complete'"
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+volumes:
+  pgdata:
+    driver: local

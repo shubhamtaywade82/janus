@@ -144,13 +144,10 @@ initCoinDCXPrivateWs().catch((err) => {
   console.error("[coindcx-ws] Failed to initialize private WS:", err);
 });
 
-// Reconcile DB open positions against live exchange on startup.
-// Any DB-open position with no corresponding live exchange position gets marked closed
-// so stale rows don't block the auto-executor's duplicate-position check.
-import { reconcilePositionsOnBoot } from "./services/position-reconciler";
-reconcilePositionsOnBoot().catch((err) => {
-  console.error("[reconciler] Boot reconciliation failed:", err);
-});
+// Continuous position reconciliation: runs immediately on boot, then every 5 min.
+// Marks stale DB positions closed, corrects size mismatches, and alerts on orphans.
+import { positionReconciler } from "./services/position-reconciler";
+positionReconciler.start();
 
 // Start auto signal analysis loop with regime detection enabled
 import { startAutoAnalysis } from "./routers/signal-router";
@@ -181,17 +178,45 @@ import { startLiquidationMonitor, stopLiquidationMonitor } from "./services/liqu
 startLiquidationMonitor(10_000);
 
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
-// Ensures background services are cleanly stopped on SIGTERM (Docker/k8s) and SIGINT (Ctrl-C).
+// Called on SIGTERM, SIGINT, uncaughtException, and unhandledRejection.
+// Stops all background services before exit so PM2/Docker can restart cleanly.
 import { stopTelegramCommandBot } from "./services/telegram-bot";
+import { globalKillSwitch } from "./services/kill-switch";
 
-function shutdown(signal: string) {
+let _shutdownInProgress = false;
+
+async function shutdown(signal: string, exitCode = 0): Promise<void> {
+  if (_shutdownInProgress) return;
+  _shutdownInProgress = true;
+
   console.log(`[boot] ${signal} received — shutting down gracefully`);
+
+  // 1. Halt new orders immediately
+  globalKillSwitch.trigger("manual", `shutdown_${signal}`);
+
+  // 2. Stop all background services
   alertEngine.stop();
+  positionReconciler.stop();
   stopTelegramCommandBot();
   stopLiquidationMonitor();
   positionLifecycleManager.stop?.().catch?.(() => {});
-  process.exit(0);
+
+  // 3. Brief pause for in-flight DB writes to complete
+  await new Promise((r) => setTimeout(r, 500));
+
+  process.exit(exitCode);
 }
 
 process.once("SIGTERM", () => shutdown("SIGTERM"));
 process.once("SIGINT",  () => shutdown("SIGINT"));
+
+// Crash handlers — log the error and exit so PM2/Docker restarts the process
+process.on("uncaughtException", (err: Error) => {
+  console.error("[boot] uncaughtException:", err);
+  shutdown("uncaughtException", 1).catch(() => process.exit(1));
+});
+
+process.on("unhandledRejection", (reason: unknown) => {
+  console.error("[boot] unhandledRejection:", reason);
+  shutdown("unhandledRejection", 1).catch(() => process.exit(1));
+});

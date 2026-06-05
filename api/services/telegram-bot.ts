@@ -373,6 +373,50 @@ async function pollUpdates(): Promise<void> {
 
 // ─── Public lifecycle ─────────────────────────────────────────────────────────
 
+// ─── Heartbeat ────────────────────────────────────────────────────────────────
+// Sent every 6 hours so the operator knows the bot is alive without doing anything.
+
+let heartbeatInterval: ReturnType<typeof setInterval> | null = null;
+
+async function sendHeartbeat(): Promise<void> {
+  const creds = await getBotCredentials();
+  if (!creds) return;
+
+  try {
+    const db = getDb();
+    const openPositions = await db
+      .select({ id: positions.id, symbol: positions.symbol, unrealizedPnl: positions.unrealizedPnl })
+      .from(positions)
+      .where(and(eq(positions.userId, 1), eq(positions.status, "open")));
+
+    const todayMidnight = new Date();
+    todayMidnight.setUTCHours(0, 0, 0, 0);
+    const todayRows = await db
+      .select({ realizedPnl: positions.realizedPnl })
+      .from(positions)
+      .where(and(eq(positions.userId, 1), eq(positions.status, "closed"), gte(positions.closedAt, todayMidnight)));
+
+    const todayPnl = todayRows.reduce((s, r) => s + parseFloat(r.realizedPnl ?? "0"), 0);
+    const unrealized = openPositions.reduce((s, p) => s + parseFloat(p.unrealizedPnl ?? "0"), 0);
+    const uptimeSec = Math.floor((Date.now() - _bootTime) / 1000);
+    const hours = Math.floor(uptimeSec / 3600);
+    const mins = Math.floor((uptimeSec % 3600) / 60);
+    const killStr = globalKillSwitch.isActive ? "🔴 KILL SWITCH ACTIVE" : "🟢 trading enabled";
+
+    const text =
+      `💓 <b>Heartbeat</b>\n\n` +
+      `Uptime: ${hours}h ${mins}m\n` +
+      `Open positions: ${openPositions.length}\n` +
+      `Unrealized PnL: ${unrealized >= 0 ? "+" : ""}${unrealized.toFixed(2)} USDT\n` +
+      `Today realized: ${todayPnl >= 0 ? "+" : ""}${todayPnl.toFixed(2)} USDT\n` +
+      `Status: ${killStr}`;
+
+    await sendTelegramMessage({ botToken: creds.botToken, chatId: creds.chatId, text, parseMode: "HTML" });
+  } catch (err) {
+    console.error("[telegram-bot] Heartbeat failed:", err);
+  }
+}
+
 export function startTelegramCommandBot(): void {
   // HMR guard — prevent double-init during Vite hot reloads
   const g = globalThis as Record<string, unknown>;
@@ -391,14 +435,23 @@ export function startTelegramCommandBot(): void {
     pollUpdates().catch(() => {}); // swallow top-level errors
   }, 3_000);
 
+  // Heartbeat every 6 hours
+  heartbeatInterval = setInterval(() => {
+    sendHeartbeat().catch(() => {});
+  }, 6 * 60 * 60_000);
+
   g["__telegramCommandBot__"] = pollInterval;
-  console.log("[telegram-bot] Command bot started (polling every 3s)");
+  console.log("[telegram-bot] Command bot started (polling every 3s, heartbeat every 6h)");
 }
 
 export function stopTelegramCommandBot(): void {
   if (pollInterval) {
     clearInterval(pollInterval);
     pollInterval = null;
+  }
+  if (heartbeatInterval) {
+    clearInterval(heartbeatInterval);
+    heartbeatInterval = null;
   }
   const g = globalThis as Record<string, unknown>;
   delete g["__telegramCommandBot__"];
