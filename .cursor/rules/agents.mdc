@@ -1,0 +1,26 @@
+---
+description: Directs all AI agents to read and maintain the repo knowledge base (AGENTS.md)
+alwaysApply: true
+---
+
+# Agent Guidelines & Memory Protocol
+
+Every AI agent working on this repository MUST read and adhere to the guidelines documented in [AGENTS.md](file:///home/nemesis/project/trading-workspace/janus/AGENTS.md).
+
+## Instructions for Agents
+
+1. **Onboarding / Start of Task**:
+   * Always read the root [AGENTS.md](file:///home/nemesis/project/trading-workspace/janus/AGENTS.md) file to align on current architecture, active constraints, and recent system changes.
+
+2. **Paper vs. Live Mode Separation**:
+   * Keep Paper Mode and Live Mode data and gates strictly separated.
+   * Paper mode queries must check `eq(positions.isPaper, true)` and use `getPaperWallet` for balances.
+   * Live mode queries must check `eq(positions.isPaper, false)` and pull live exchange data.
+
+3. **Symbol Formatting & Math**:
+   * Align database symbols (`B-BTC_USDT`) with Binance ticker formats (`BTCUSDT`) when streaming or comparing prices.
+   * Calculate Real-time ROE percentage dynamically using: `(pnl / margin) * 100` instead of reading static DB fields.
+
+4. **Task Completion / Update Memory**:
+   * Before declaring a task finished, update **Section 5 (Agent Memory Log & Changelog)** in [AGENTS.md](file:///home/nemesis/project/trading-workspace/janus/AGENTS.md).
+   * Document what was changed, any new gotchas discovered, and state of active configurations.

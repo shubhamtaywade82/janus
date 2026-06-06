@@ -167,6 +167,7 @@ export class AutoExecutor {
           action: "skip",
           reason: `Execution Error: ${err.message}`,
           signal: { direction: signal.direction, compositeScore: signal.compositeScore, strategy: "" },
+          ts: Date.now(),
         });
       }
     }

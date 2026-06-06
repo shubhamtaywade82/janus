@@ -215,7 +215,10 @@ export function subscribeToSymbol(symbol: string) {
         const prevTicker = tickerStateCache.get(symbol) ?? {};
         const liveTickerFromTrade = { ...prevTicker, symbol: data.s ?? symbol, lastPrice: String(data.p) };
         tickerStateCache.set(symbol, liveTickerFromTrade);
-        latestTickerCache.set(symbol, { lastPrice: parseFloat(String(data.p)), symbol: data.s ?? symbol });
+        const priceVal = parseFloat(String(data.p));
+        if (priceVal > 0 && !isNaN(priceVal)) {
+          latestTickerCache.set(symbol, { lastPrice: priceVal, symbol: data.s ?? symbol });
+        }
         marketEvents.emit(`${symbol}:ticker`, liveTickerFromTrade);
 
         // Save trade to DB
@@ -255,7 +258,10 @@ export function subscribeToSymbol(symbol: string) {
 
         // Merge 24h stats into the shared ticker state so live trade emissions keep them
         tickerStateCache.set(symbol, { ...formattedTicker });
-        latestTickerCache.set(symbol, { lastPrice: parseFloat(data.c), symbol: data.s });
+        const priceVal = parseFloat(data.c);
+        if (priceVal > 0 && !isNaN(priceVal)) {
+          latestTickerCache.set(symbol, { lastPrice: priceVal, symbol: data.s });
+        }
         marketEvents.emit(`${symbol}:ticker`, formattedTicker);
 
         // Update in-memory state manager LTP

@@ -30,8 +30,11 @@ const PositionRow = ({
   onClose: (pos: any, currentPrice: number, pnl: number) => void;
   isClosing: boolean;
 }) => {
-  const currentPrice = livePrice ?? parseFloat(position.currentPrice || "0");
   const entryPrice = parseFloat(position.entryPrice || "0");
+  const backendPrice = parseFloat(position.currentPrice || "0");
+  const livePriceVal = (livePrice && livePrice > 0 && !isNaN(livePrice)) ? livePrice : null;
+  const dbPriceVal = (backendPrice > 0 && !isNaN(backendPrice)) ? backendPrice : null;
+  const currentPrice = livePriceVal ?? dbPriceVal ?? entryPrice;
   const size = parseFloat(position.size || "0");
   const marginCurrency = position.marginCurrency || "USDT";
 
@@ -42,7 +45,8 @@ const PositionRow = ({
         : (entryPrice - currentPrice) * size)
     : parseFloat(position.unrealizedPnl || "0");
   const isProfit = pnl >= 0;
-  const roe = parseFloat(position.roe || "0");
+  const margin = parseFloat(position.margin || "0");
+  const roe = margin > 0 ? (pnl / margin) * 100 : parseFloat(position.roe || "0");
 
   const priceFlash = useFlash(currentPrice);
   const pnlFlashRow = useFlash(pnl);
@@ -226,7 +230,10 @@ const SymbolTicker = memo(({ symbol, onPrice }: { symbol: string; onPrice: (sym:
   // Keep options object stable — never recreated after mount
   const optsRef = useRef({
     onData(t: any) {
-      if (t?.lastPrice) onPriceRef.current(symbol, parseFloat(t.lastPrice));
+      const price = parseFloat(t?.lastPrice);
+      if (price > 0 && !isNaN(price)) {
+        onPriceRef.current(symbol, price);
+      }
     },
   });
 
@@ -345,6 +352,7 @@ export default function Portfolio() {
 
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const handlePrice = useCallback((sym: string, price: number) => {
+    if (price <= 0 || isNaN(price)) return;
     setLivePrices((prev) => prev[sym] === price ? prev : { ...prev, [sym]: price });
   }, []);
 
@@ -409,8 +417,10 @@ export default function Portfolio() {
 
   // Paper portfolio computed values
   const paperUnrealizedPnl = paperPositions.reduce((sum: number, p: any) => {
-    const lp = livePrices[p.symbol] ?? parseFloat(p.currentPrice || "0");
+    const livePriceVal = livePrices[p.symbol];
+    const dbPriceVal = parseFloat(p.currentPrice || "0");
     const entry = parseFloat(p.entryPrice || "0");
+    const lp = (livePriceVal && livePriceVal > 0) ? livePriceVal : ((dbPriceVal && dbPriceVal > 0) ? dbPriceVal : entry);
     const size = parseFloat(p.size || "0");
     return sum + (p.side === "long" ? (lp - entry) * size : (entry - lp) * size);
   }, 0);
@@ -422,8 +432,10 @@ export default function Portfolio() {
 
   const liveTotalUnrealizedPnl = openPositions.reduce((sum: number, p: any) => {
     if (p.isPaper) return sum;
-    const lp = livePrices[p.symbol] ?? 0;
+    const livePriceVal = livePrices[p.symbol];
+    const dbPriceVal = parseFloat(p.currentPrice || "0");
     const entry = parseFloat(p.entryPrice || "0");
+    const lp = (livePriceVal && livePriceVal > 0) ? livePriceVal : ((dbPriceVal && dbPriceVal > 0) ? dbPriceVal : 0);
     const size = parseFloat(p.size || "0");
     // Use live price for real-time calc; fall back to backend unrealizedPnl (exchange-reported or mark-price based)
     const raw = lp > 0

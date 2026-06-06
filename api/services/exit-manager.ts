@@ -32,7 +32,7 @@ export function evaluateExitCondition(
   const totalFees = entryFee + exitFee;
   const feeAdjustedPnl = unrealizedPnl - totalFees;
 
-  let shouldExit = feeAdjustedPnl > 0;
+  let shouldExit = false;
   let reason =
     feeAdjustedPnl > 0
       ? `PnL ${unrealizedPnl.toFixed(6)} > fees ${totalFees.toFixed(6)}`
