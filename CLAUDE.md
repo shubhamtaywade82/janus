@@ -160,7 +160,10 @@ Position Manager (30s assessment cycle)
 │   ├── auth-router.ts             # Auth tRPC endpoints
 │   │
 │   ├── oauth/                     # OAuth2 flow
-│   │   └── auth.ts                # Token exchange, JWT session, platform user API
+│   │   ├── auth.ts                # Token exchange, JWT session, platform user API
+│   │   ├── platform.ts            # OAuth platform user profile API client
+│   │   ├── session.ts             # JWT session management helpers
+│   │   └── types.ts               # OAuth type definitions
 │   │
 │   ├── queries/
 │   │   ├── connection.ts          # getDb() — single Drizzle client instance
@@ -169,7 +172,9 @@ Position Manager (30s assessment cycle)
 │   ├── lib/
 │   │   ├── env.ts                 # Typed env vars — throws in prod if missing
 │   │   ├── cookies.ts             # Cookie read/write helpers
-│   │   └── http.ts                # Lightweight fetch wrapper
+│   │   ├── http.ts                # Lightweight fetch wrapper
+│   │   ├── crypto.ts              # AES-256-GCM field-level encryption for stored API credentials (ENCRYPTION_KEY)
+│   │   └── vite.ts                # Static file serving helper for Vite dev server
 │   │
 │   ├── routers/                   # tRPC domain routers
 │   │   ├── market-router.ts       # OHLC, order book, signals, price-action analysis
@@ -183,7 +188,9 @@ Position Manager (30s assessment cycle)
 │   │   ├── telegram-router.ts     # Telegram bot config + test message
 │   │   ├── alerts-router.ts       # User alert rules CRUD + system/user alert streams
 │   │   ├── export-router.ts       # Export account state + trade history
-│   │   └── health-router.ts       # Liveness/health snapshot (DB, feeds, kill switch, PM)
+│   │   ├── health-router.ts       # Liveness/health snapshot (DB, feeds, kill switch, PM)
+│   │   ├── brain-router.ts        # AI Brain Hono router (mounted at /api/brain)
+│   │   └── brain-trpc-router.ts   # AI Brain tRPC router (trpc.brain.*)
 │   │
 │   ├── brain/                     # Autonomous AI Brain (LLM decision loop, shadow-mode)
 │   │   ├── brain-orchestrator.ts  # BrainOrchestrator — main decide loop (shadowMode default)
@@ -218,6 +225,17 @@ Position Manager (30s assessment cycle)
 │       ├── feed-health.ts         # Feed status tracker + feedHealthEvents EventEmitter
 │       ├── liquidation-monitor.ts # Alerts/auto-reduce when within 5%/2% of liq price
 │       ├── ring-buffer.ts         # Fixed-capacity circular buffer
+│       ├── correlation-guard.ts   # Prevents building correlated positions across symbols
+│       ├── execution-providers.ts # Order execution backend abstraction layer
+│       ├── knn-supertrend.ts      # KNN-based supertrend algorithm for regime detection
+│       ├── liquidity-engine.ts    # Advanced liquidity analysis (sweep detection, absorption)
+│       ├── llm-events.ts          # EventEmitter for LLM state changes (key rotation, backoff)
+│       ├── ollama.ts              # Ollama HTTP client wrapper (generate + chat completions)
+│       ├── paper-wallet.ts        # Paper trading balance tracking (in-memory, DB-backed)
+│       ├── performance-tracker.ts # Trade performance metrics engine (win rate, Sharpe, etc.)
+│       ├── regime-detector.ts     # Market regime classification (trending/ranging/volatile)
+│       ├── strategies.ts          # Strategy implementation library (entry/exit logic per regime)
+│       ├── trading-account.ts     # Unified trading account abstraction (live + paper)
 │       │
 │       └── position-manager/      # AI position lifecycle system (self-contained)
 │           ├── types.ts           # All types: ManagedPosition, PositionAction (const union), etc.
@@ -245,6 +263,7 @@ Position Manager (30s assessment cycle)
 │   ├── schema.ts                  # All PostgreSQL table definitions (Drizzle)
 │   ├── position-manager-schema.ts # Position manager tables (separate — additive)
 │   ├── relations.ts               # Drizzle relation definitions
+│   ├── seed.ts                    # Database seeding script (mock trading data for dev)
 │   └── migrations/                # Generated SQL migration files
 │
 ├── src/                           # React frontend
@@ -254,7 +273,17 @@ Position Manager (30s assessment cycle)
 │   ├── components/                # App-level components (Layout, AuthLayout, modals)
 │   ├── components/ui/             # shadcn/ui primitives (do not modify)
 │   ├── hooks/                     # useAuth, use-mobile
-│   ├── pages/                     # Dashboard, Signals, Portfolio, Logs, RiskMetrics
+│   ├── pages/                     # Route-level page components:
+│   │   ├── Dashboard.tsx          # Main trading dashboard
+│   │   ├── Signals.tsx            # Confluence signal viewer
+│   │   ├── Portfolio.tsx          # Portfolio + PnL overview
+│   │   ├── Logs.tsx               # System logs viewer
+│   │   ├── RiskMetrics.tsx        # Risk engine stats + drawdown
+│   │   ├── AiAnalysis.tsx         # AI analysis and recommendations
+│   │   ├── BrainDashboard.tsx     # AI Brain decision/episode viewer
+│   │   ├── Home.tsx               # Home/index page
+│   │   ├── Login.tsx              # OAuth login page
+│   │   └── NotFound.tsx           # 404 page
 │   └── lib/utils.ts               # cn() helper
 │
 └── scratch/                       # Throwaway scripts — never import in production
@@ -283,6 +312,12 @@ OWNER_UNION_ID=      # First user to log in gets role=admin
 # ── Trading safety ────────────────────────────────────────────────
 PLACE_ORDERS=false   # Must be "true" to send real orders to CoinDCX
 AUTO_EXECUTE=false   # Must be "true" to enable the auto-executor
+PAPER_TRADING=false  # "true" = all positions created as paper (DB-only, no exchange orders)
+USE_TESTNET=false    # "true" = route Binance market data to testnet endpoints
+
+# ── Security ──────────────────────────────────────────────────────
+ENCRYPTION_KEY=      # 32-byte hex key for AES-256-GCM encryption of stored API credentials
+                     # Required in production — throws at startup if missing
 
 # ── LLM / AI (entry signal advisor) ─────────────────────────────
 OLLAMA_ENDPOINT=http://localhost:11434   # Local Ollama base URL
@@ -790,7 +825,7 @@ PM_OLLAMA_CLOUD_KEY_3=<key>
 
 The position manager is **already wired**:
 
-- `api/boot.ts:191` — `positionLifecycleManager.start()` is called ~5s after boot (after `globalLlmAdvisor.init()`).
+- `api/boot.ts:192` — `positionLifecycleManager.start()` is called ~5s after boot (after `globalLlmAdvisor.init()`).
 - `api/router.ts` — registered as `positionManager: positionManagerRouter`.
 
 Its 3 tables (`ai_assessments`, `position_snapshots`, `position_action_logs`) are created by `npm run db:push` (drizzle scans the whole `db/` directory).
@@ -835,7 +870,7 @@ positionManagerBus.on("position:lifecycle-changed", (id, from, to) => { ... })
 
 ## AI Brain (Autonomous Decision Loop)
 
-`api/brain/` — an autonomous LLM-driven trading brain, separate from the Position Manager. Mounted as a Hono router at `/api/brain` (not tRPC). Started in `boot.ts` via `initVectorStore()` + `startBrainScheduler()`.
+`api/brain/` — an autonomous LLM-driven trading brain, separate from the Position Manager. Available via **both** a Hono router at `/api/brain` (HTTP/SSE endpoints) and a tRPC router (`trpc.brain.*`). Started in `boot.ts` via `initVectorStore()` + `startBrainScheduler()`.
 
 | File | Purpose |
 |---|---|
@@ -873,8 +908,9 @@ All routers registered in `api/router.ts` under `appRouter`:
 | `alerts` | alerts-router.ts | User alert rules CRUD + system/user alert streams |
 | `exports` | export-router.ts | Export account state + trade history |
 | `health` | health-router.ts | Liveness/health snapshot |
+| `brain` | brain-trpc-router.ts | AI Brain episodes, reflections, decision stream (tRPC) |
 
-> **AI Brain** is NOT a tRPC router — it is a plain Hono router mounted at `/api/brain` (see `api/boot.ts`). Endpoints: `POST /decide`, `GET /episodes`, `GET /strategies`, `GET /reflections`, `POST /evolution/run`, `POST /trigger-signal`, `GET /mode`, `GET /logs/stream` (SSE).
+> **AI Brain** is available via **two protocols**: a Hono router at `/api/brain` (HTTP/SSE — `POST /decide`, `GET /episodes`, `GET /strategies`, `GET /reflections`, `POST /evolution/run`, `POST /trigger-signal`, `GET /mode`, `GET /logs/stream`) and a tRPC router registered as `brain` (`trpc.brain.episodes`, `trpc.brain.reflections`, `trpc.brain.decisionStream`, etc.).
 
 ### Procedure types
 

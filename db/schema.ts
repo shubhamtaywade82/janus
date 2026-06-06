@@ -11,7 +11,9 @@ import {
   boolean,
   index,
   unique,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // ─── Enums (PostgreSQL custom types) ───
 export const roleEnum = pgEnum("role", ["user", "admin"]);
@@ -153,6 +155,9 @@ export const positions = pgTable(
   (table) => ({
     userIdStatusIdx: index("idx_positions_user_status").on(table.userId, table.status),
     symbolIdx: index("idx_positions_symbol").on(table.symbol),
+    uqOpenPosition: uniqueIndex("uq_positions_open")
+      .on(table.userId, table.symbol, table.side)
+      .where(sql`${table.status} = 'open'`),
   })
 );
 
@@ -805,3 +810,15 @@ export const paperEquitySnapshots = pgTable("paper_equity_snapshots", {
 });
 
 export type PaperEquitySnapshot = typeof paperEquitySnapshots.$inferSelect;
+
+// ─── Kill Switch State (single-row table for atomic halt persistence across restarts) ───
+export const killSwitchState = pgTable("kill_switch_state", {
+  key: varchar("key", { length: 10 }).primaryKey().default("global"),
+  isActive: boolean("is_active").default(false).notNull(),
+  type: varchar("type", { length: 30 }),
+  reason: text("reason"),
+  triggeredAt: decimal("triggered_at", { precision: 16, scale: 0 }), // epoch ms
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type KillSwitchStateRow = typeof killSwitchState.$inferSelect;

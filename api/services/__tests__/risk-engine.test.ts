@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { RiskEngine, type RiskSession } from "../risk-engine";
 
 function makeSession(overrides: Partial<RiskSession> = {}): RiskSession {
@@ -107,6 +107,17 @@ describe("RiskEngine.checkTradeAllowed", () => {
     });
     expect(result.approved).toBe(false);
     expect(result.reason).toContain("margin");
+  });
+
+  it("bypasses all checks when isManualOverride=true", () => {
+    const session = makeSession({ realizedPnl: -1000, inCooldown: true, cooldownUntil: Date.now() + 99_999 });
+    const result = engine.checkTradeAllowed(session, {
+      notional: 9999,
+      walletBalance: 1,
+      usedMargin: 9999,
+      isManualOverride: true,
+    });
+    expect(result.approved).toBe(true);
   });
 });
 

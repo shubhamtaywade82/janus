@@ -1,3 +1,5 @@
+> **Archive notice**: This document is an early implementation plan and is no longer the canonical reference. For the current AI Brain specification, see [`AI_BRAIN_CONSOLIDATED.md`](./AI_BRAIN_CONSOLIDATED.md).
+
 # Janus AI Brain: Step-by-Step Implementation Plan
 
 This document details the step-by-step technical implementation plan for integrating the LLM-powered governed orchestration layer ("AI Brain") into the Janus PostgreSQL + Drizzle ORM codebase.
