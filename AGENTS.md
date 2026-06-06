@@ -87,6 +87,20 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **Candidate Rule Storage**: Fixed `brain-reflection.ts` to save LLM-extracted rules as `brain_candidate_rules` with `status="candidate"` instead of auto-appending them to active strategy prompts (which the expert reviews flagged as dangerous). Rules require backtest validation before promotion.
 * **Evolution Gating**: Added `MIN_EPISODES_FOR_EVOLUTION = 500` gate to `brain-evolution.ts`. The nightly 02:00 evolution job skips until the episode corpus is large enough for statistically meaningful strategy mutation.
 
+### [2026-06-06] LLM BrainOrchestrator — Full Autonomous Decision Engine
+* **LLM-Powered Reasoning**: Rewrote `api/brain/brain-orchestrator.ts` to use Ollama (qwen3:4b-q8) with structured JSON output. The Brain gathers **all available context**: market snapshot, portfolio state, regime classification, episodic memory (pgvector similarity search), risk session, and signal metadata. Responds with `verdict`, `confidence`, `rationale`, `riskNotes`, and parameter adjustments.
+* **Brain Authority in AutoExecutor**: Wired Brain verdict into the execution path in `auto-executor.ts`. When `brainGateEnabled=true` and `brainShadowMode=false`:
+  - `EXIT_NOW` → trade vetoed (skip with `brain_veto` gate)
+  - `CAUTION` → trade skipped (skip with `brain_caution` gate)
+  - `REDUCE_RISK` → proceeds with Brain-adjusted size, stop-loss, and take-profit
+  - `APPROVE` → proceeds normally
+* **Deterministic Fallback**: If Ollama times out or returns bad JSON, the Brain falls back to the rule-based heuristic (drawdown, cooldown, regime, spread, CVD). Never crashes the execution path.
+* **Config-Driven Authority**: Three flags in `auto_executor_config` control behavior:
+  - `brainShadowMode` (default true) → log only, zero execution authority
+  - `brainGateEnabled` → Brain can veto/modify trades after Governor approval
+  - `brainDriverEnabled` → reserved for future autonomous signal generation
+* **Governor Remains Final Gate**: Even when Brain has authority, the Governor runs a final safety check. Brain cannot override kill switch, max drawdown, or position limits. Architecture: `Signal → Governor → Brain → Governor → Executor`.
+
 ### [2026-06-06] Price Feed Robustness, Risk Engine Overrides & Default Leverage
 * **Price Feed Safeguards**: Added zero and NaN filters to `latestTickerCache` and `markPriceCache` updates in `streaming.ts` and `coindcx-ws.ts` to prevent transient socket hiccups from seeding bad values.
 * **Pricing Fallback Chains**: Modified position mapping and portfolio metrics on both the frontend (`Portfolio.tsx`) and backend (`trading-router.ts`) to fall back to the position's entry price if all real-time market feeds report 0 or NaN.

@@ -380,12 +380,44 @@ export class AutoExecutor {
       return this.skip(signal, govOutcome.reason, govOutcome.gate);
     }
 
-    // ─── Brain Shadow Evaluation (non-blocking, advisory only) ───
-    // Fire brain evaluation in parallel — never blocks the critical execution path.
-    const brainPromise = brainOrchestrator.evaluate(signal, 1).catch((err) => {
-      console.warn('[Auto-Executor] Brain shadow evaluation failed:', err.message);
-      return null;
-    });
+    // ─── Brain Evaluation ───
+    // When brainGateEnabled=true, the Brain has real authority to veto/modify trades.
+    // When shadowMode=true, it logs only and runs in parallel.
+    const brainConfig = await brainOrchestrator.getConfig(1);
+    const brainHasAuthority = brainConfig.gateEnabled && !brainConfig.shadowMode;
+
+    let brainResult: Awaited<ReturnType<typeof brainOrchestrator.evaluate>> | null = null;
+
+    if (brainHasAuthority) {
+      // Blocking: Brain verdict affects execution
+      console.log(`[Auto-Executor] Brain authority active — awaiting verdict for ${symbol}...`);
+      brainResult = await brainOrchestrator.evaluate(signal, 1).catch((err) => {
+        console.warn('[Auto-Executor] Brain evaluation failed:', err.message);
+        return null;
+      });
+
+      if (brainResult) {
+        if (brainResult.verdict === "EXIT_NOW") {
+          return this.skip(signal, `Brain veto: ${brainResult.rationale}`, "brain_veto", { llmDecision: { decision: "skip", confidence: brainResult.confidence * 100, reasoning: brainResult.rationale, keyUsed: "brain" } });
+        }
+        if (brainResult.verdict === "CAUTION") {
+          return this.skip(signal, `Brain caution: ${brainResult.rationale}`, "brain_caution", { llmDecision: { decision: "skip", confidence: brainResult.confidence * 100, reasoning: brainResult.rationale, keyUsed: "brain" } });
+        }
+        if (brainResult.verdict === "REDUCE_RISK") {
+          console.log(`[Auto-Executor] Brain reduce_risk for ${symbol}: ${brainResult.rationale}`);
+          // Adjustments applied below after LLM advisor
+        }
+        // APPROVE → proceed normally
+      }
+    } else {
+      // Shadow mode: fire-and-forget logging only
+      const brainPromise = brainOrchestrator.evaluate(signal, 1).catch((err) => {
+        console.warn('[Auto-Executor] Brain shadow evaluation failed:', err.message);
+        return null;
+      });
+      // Store promise for later update (handled at execute/skip)
+      (signal as any)._brainPromise = brainPromise;
+    }
 
     // Gate 9: LLM Advisor (optional)
     let sizeMult = 1.0;
@@ -490,7 +522,13 @@ export class AutoExecutor {
     const balanceCap = isManualOverride
       ? Infinity
       : (walletFree || session.startingBalance) * allocationPct;
-    const notional = Math.min(sizeUsdt * sizeMult, balanceCap);
+    let notional = Math.min(sizeUsdt * sizeMult, balanceCap);
+
+    // Apply Brain adjustments if authority is enabled
+    if (brainHasAuthority && brainResult?.adjustedSizeUsdt) {
+      notional = Math.min(brainResult.adjustedSizeUsdt, balanceCap);
+      console.log(`[Auto-Executor] Brain adjusted size: ${notional} USDT (was ${Math.min(sizeUsdt * sizeMult, balanceCap)})`);
+    }
 
     // Leverage: if useStrategyLeverage=true, use strategy's maxLeverage; else use defaultLeverage
     // Hard cap at 10× regardless of strategy config to prevent over-leveraged positions (unless manual override specifies leverage)
@@ -532,8 +570,20 @@ export class AutoExecutor {
       console.warn(`[auto-executor] Failed to fetch instrument info for precision mapping:`, err);
     }
     const size = rawSize;
-    const slPct = slPctOverride ?? (sigMetadata?.stopLossPct ? parseFloat(String(sigMetadata.stopLossPct)) : parseFloat(config.stopLossPct ?? "0.015"));
-    const tp1Pct = tp1PctOverride ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
+    let slPct = slPctOverride ?? (sigMetadata?.stopLossPct ? parseFloat(String(sigMetadata.stopLossPct)) : parseFloat(config.stopLossPct ?? "0.015"));
+    let tp1Pct = tp1PctOverride ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
+
+    // Apply Brain adjustments to SL/TP
+    if (brainHasAuthority && brainResult) {
+      if (brainResult.adjustedSlPct !== undefined) {
+        slPct = brainResult.adjustedSlPct;
+        console.log(`[Auto-Executor] Brain adjusted SL: ${(slPct * 100).toFixed(2)}%`);
+      }
+      if (brainResult.adjustedTpPct !== undefined) {
+        tp1Pct = brainResult.adjustedTpPct;
+        console.log(`[Auto-Executor] Brain adjusted TP: ${(tp1Pct * 100).toFixed(2)}%`);
+      }
+    }
 
     const stopLoss = side === "long"
       ? currentPrice * (1 - slPct)
