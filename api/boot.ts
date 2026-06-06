@@ -54,6 +54,9 @@ if (!env.isProduction) {
 }
 app.get(Paths.oauthCallback, createOAuthCallbackHandler());
 
+import { brainRouter } from "./routers/brain-router";
+app.route("/api/brain", brainRouter);
+
 // tRPC handler - allow method override for batch POST requests
 app.use("/api/trpc/*", async (c) => {
   return fetchRequestHandler({
