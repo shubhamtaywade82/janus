@@ -3,7 +3,7 @@ import { marketStateManager } from "../market-state";
 import { detectSwings } from "../price-action";
 import { getDb } from "../../queries/connection";
 import { marketData } from "@db/schema";
-import { eq, and, gte, desc } from "drizzle-orm";
+import { eq, and, gte } from "drizzle-orm";
 
 // ─── Stop Loss Calculator ────────────────────────────────────────────────────
 // Modes: ATR (default), SWING (structure-based), VWAP, PERCENTAGE

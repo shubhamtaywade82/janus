@@ -31,7 +31,7 @@ export async function getUsdtInrRate(): Promise<number> {
         console.log(`[coindcx] USDT/INR rate updated: ${cachedConversionRate}`);
       }
     }
-  } catch (err) {
+  } catch {
     console.error("[coindcx] Failed to fetch USDT/INR rate, using cached:", cachedConversionRate);
   }
   return cachedConversionRate;

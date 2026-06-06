@@ -3,6 +3,7 @@ import { Brain, Zap, GitBranch, Lightbulb, RefreshCw, Terminal, Trash2, PanelRig
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
+import { BrainControlPanel } from "@/components/BrainControlPanel";
 
 export default function BrainDashboard() {
   const [episodes, setEpisodes] = useState<any[]>([]);
@@ -18,7 +19,6 @@ export default function BrainDashboard() {
   const [triggerSymbol, setTriggerSymbol] = useState("B-BTC_USDT");
   const [triggerDirection, setTriggerDirection] = useState<"long" | "short">("long");
   const [triggerScore, setTriggerScore] = useState(85);
-  const [triggerCapital, setTriggerCapital] = useState("50");
   const [triggerSl, setTriggerSl] = useState("1.5");
   const [triggerTp, setTriggerTp] = useState("1.5");
   const [triggerTrailing, setTriggerTrailing] = useState(true);
@@ -31,21 +31,26 @@ export default function BrainDashboard() {
   const [capitalMode, setCapitalMode] = useState<"pct" | "fixed">("pct");
   const [triggerCapitalPct, setTriggerCapitalPct] = useState(30);
   const [triggerCapitalFixed, setTriggerCapitalFixed] = useState("50");
-  const [triggerLeverage, setTriggerLeverage] = useState("3");
+  const [triggerLeverage, setTriggerLeverage] = useState("10");
 
   // Fetch paper wallet details if in paper mode
   const { data: paperWalletData } = trpc.autoExecutor.paperWallet.useQuery(
-    { userId: 1 },
+    undefined,
     { enabled: tradingMode === "paper", refetchInterval: 5000 }
   );
 
   // Fetch live portfolio details if in live mode
   const { data: livePortfolioData } = trpc.trading.portfolio.useQuery(
-    { userId: 1 },
+    undefined,
     { enabled: tradingMode === "live", refetchInterval: 5000 }
   );
 
-  const usdtInrRate = livePortfolioData ? parseFloat(livePortfolioData.usdtInrRate || "89.0") : 89.0;
+  // Live brain reasoning — refresh the episode list when the brain makes a new decision.
+  const fetchBrainDataRef = useRef<(() => void) | null>(null);
+  trpc.brain.decisionStream.useSubscription(undefined, {
+    onData: () => { fetchBrainDataRef.current?.(); },
+  });
+
   const isPaper = tradingMode === "paper";
 
   const availableEquity = useMemo(() => {
@@ -56,16 +61,6 @@ export default function BrainDashboard() {
     }
   }, [isPaper, paperWalletData, livePortfolioData]);
 
-  const availableToTrade = useMemo(() => {
-    if (isPaper) {
-      return paperWalletData?.balance ?? 10000;
-    } else {
-      if (!livePortfolioData) return 0;
-      const rawAvail = parseFloat(livePortfolioData.availableInr || "0");
-      const isCcyInr = livePortfolioData.walletCurrency === "INR";
-      return isCcyInr ? rawAvail / usdtInrRate : rawAvail;
-    }
-  }, [isPaper, paperWalletData, livePortfolioData, usdtInrRate]);
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
   const SYMBOLS = [
@@ -90,6 +85,7 @@ export default function BrainDashboard() {
   };
 
   const fetchBrainData = async () => {
+    fetchBrainDataRef.current = fetchBrainData;
     setIsLoading(true);
     try {
       const [episodesRes, reflectionsRes, strategiesRes] = await Promise.all([
@@ -156,7 +152,7 @@ export default function BrainDashboard() {
       await res.json();
       toast.success("Evaluation complete!");
       fetchBrainData();
-    } catch (e) {
+    } catch {
       toast.error("Brain evaluation failed.");
     }
   };
@@ -168,7 +164,7 @@ export default function BrainDashboard() {
       if (!res.ok) throw new Error("Request failed");
       toast.success("Evolution process completed!");
       fetchBrainData();
-    } catch (e) {
+    } catch {
       toast.error("Brain evolution failed.");
     }
   };
@@ -299,6 +295,9 @@ export default function BrainDashboard() {
           </button>
         </div>
       </div>
+
+      {/* Brain participation controls + live executor decision feed */}
+      <BrainControlPanel />
 
       {/* Signal Trigger Panel */}
       {triggerOpen && (
@@ -484,7 +483,7 @@ export default function BrainDashboard() {
                 value={triggerLeverage}
                 onChange={(e) => setTriggerLeverage(e.target.value)}
                 className="w-full px-2 py-1.5 rounded bg-[#09090b] border border-[#27272a] text-xs text-zinc-200 focus:border-emerald-500/50 outline-none"
-                placeholder="3"
+                placeholder="10"
               />
             </div>
             {/* Spacer */}

@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { EMA, emaCrossUp, emaCrossDown } from "../indicators/ema.js";
 import { RSI, isOverbought, isOversold } from "../indicators/rsi.js";
 import { ATR } from "../indicators/atr.js";

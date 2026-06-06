@@ -282,13 +282,12 @@ class AlertEngine {
 
     alertEngineEvents.emit("system-alert", event);
 
-    const highSignalTypes = new Set([
-      "bos", "choch", "knn_bias_flip", "supertrend_flip",
-      "direction_flip", "gated_flip", "knn_rejection",
-    ]);
-    if (highSignalTypes.has(type)) {
-      broadcastTelegramAlert(`📡 <b>${symbol}</b> ${message}`).catch(() => {});
-    }
+    // Push every emitted transition to Telegram — these are the bot's source-of-truth
+    // signals and may go unseen in the UI. SYSTEM_DEDUP_MS (above) already throttles
+    // per symbol:type; broadcastTelegramAlert adds a global rate limit + respects the
+    // user's Telegram config / enable flag.
+    const dirTag = direction === "bullish" ? "🟢" : direction === "bearish" ? "🔴" : "⚪";
+    broadcastTelegramAlert(`📡 ${dirTag} <b>${symbol}</b> [${type}] ${message}`).catch(() => {});
   }
 
   // Called from signal-router when a symbol is removed from tracking

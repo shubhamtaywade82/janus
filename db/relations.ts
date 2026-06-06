@@ -37,7 +37,7 @@ export const signalsRelations = relations(signals, ({ many }) => ({
   positions: many(positions),
 }));
 
-export const systemLogsRelations = relations(systemLogs, ({}) => ({}));
+export const systemLogsRelations = relations(systemLogs, () => ({}));
 
 export const exchangeCredentialsRelations = relations(exchangeCredentials, ({ one }) => ({
   user: one(users, {

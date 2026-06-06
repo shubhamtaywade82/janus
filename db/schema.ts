@@ -326,6 +326,10 @@ export const autoExecutorConfig = pgTable("auto_executor_config", {
   capitalAllocationPct: decimal("capital_allocation_pct", { precision: 5, scale: 3 }).default("0.100"), // fraction of free balance per trade, e.g. 0.100 = 10%
   useStrategyLeverage: boolean("use_strategy_leverage").default(true).notNull(), // true = use STRATEGY_CONFIGS[strategy].maxLeverage, false = use defaultLeverage
   paperStartingBalance: decimal("paper_starting_balance", { precision: 12, scale: 2 }).default("10000"),
+  // AI Brain participation in the autonomous loop
+  brainDriverEnabled: boolean("brain_driver_enabled").default(false).notNull(), // brain autonomously proposes/opens trades
+  brainGateEnabled: boolean("brain_gate_enabled").default(false).notNull(),     // brain acts as an extra confirmation gate on confluence signals
+  brainShadowMode: boolean("brain_shadow_mode").default(true).notNull(),        // true = log only (governor skipped, no execution)
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -348,6 +352,30 @@ export const equitySnapshots = pgTable("equity_snapshots", {
 }));
 
 export type EquitySnapshot = typeof equitySnapshots.$inferSelect;
+
+// ─── Executor Decisions (structured, queryable, restart-surviving decision log) ───
+// Every auto-executor decision (execute or gate-level skip) is persisted here so the
+// frontend can show WHY the bot did or did not trade. Distinct from system_logs (free text).
+export const executorDecisions = pgTable("executor_decisions", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id").notNull().default(1),
+  symbol: varchar("symbol", { length: 32 }).notNull(),
+  action: varchar("action", { length: 16 }).notNull(), // "execute" | "skip"
+  gate: varchar("gate", { length: 48 }),               // gate that produced the outcome (e.g. "risk", "llm", "dedup", "executed")
+  reason: text("reason").notNull(),
+  direction: varchar("direction", { length: 16 }),
+  compositeScore: decimal("composite_score", { precision: 6, scale: 2 }),
+  strategy: varchar("strategy", { length: 32 }),
+  llmDecision: jsonb("llm_decision"),
+  signalId: integer("signal_id"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+},
+(table) => ({
+  userTimeIdx: index("idx_executor_decisions_user_time").on(table.userId, table.createdAt),
+  symbolTimeIdx: index("idx_executor_decisions_symbol_time").on(table.symbol, table.createdAt),
+}));
+
+export type ExecutorDecisionRow = typeof executorDecisions.$inferSelect;
 
 // ─── Trading Accounts (unified live/paper/backtest wallet model) ───
 export const tradingAccounts = pgTable(

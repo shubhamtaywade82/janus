@@ -2,14 +2,12 @@ import { z } from "zod";
 import { createRouter, authedQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { llmApiKeys, systemLogs } from "@db/schema";
-import { eq, desc, asc, and } from "drizzle-orm";
+import { eq, desc, asc, and, gte } from "drizzle-orm";
 import { observable } from "@trpc/server/observable";
 import { globalLlmAdvisor } from "../services/llm-advisor";
-import { EventEmitter } from "events";
-
-// Local event bus for LLM decisions (fed by auto-executor)
-export const llmDecisionEvents = new EventEmitter();
-llmDecisionEvents.setMaxListeners(20);
+import { llmDecisionEvents } from "../services/llm-events";
+// Re-export the shared bus (defined in the service layer) for backward compat.
+export { llmDecisionEvents };
 
 export const llmRouter = createRouter({
   // ─── List all keys for a user ───
@@ -148,6 +146,28 @@ export const llmRouter = createRouter({
         .where(eq(systemLogs.component, "llm-advisor"))
         .orderBy(desc(systemLogs.createdAt))
         .limit(input.limit);
+    }),
+
+  // ─── Accept-rate over recent decisions (execute / reduce_size vs skip) ───
+  acceptRate: authedQuery
+    .input(z.object({ windowMinutes: z.number().min(1).max(1440).default(120) }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const since = new Date(Date.now() - input.windowMinutes * 60_000);
+      const rows = await db
+        .select({ message: systemLogs.message })
+        .from(systemLogs)
+        .where(and(eq(systemLogs.component, "llm-advisor"), gte(systemLogs.createdAt, since)))
+        .catch(() => []);
+      let execute = 0, reduce = 0, skip = 0;
+      for (const r of rows) {
+        const m = r.message ?? "";
+        if (m.includes(": execute")) execute++;
+        else if (m.includes(": reduce_size")) reduce++;
+        else if (m.includes(": skip")) skip++;
+      }
+      const total = execute + reduce + skip;
+      return { total, execute, reduce, skip, acceptRate: total ? (execute + reduce) / total : 0 };
     }),
 
   // ─── Live stream of LLM decision events ───

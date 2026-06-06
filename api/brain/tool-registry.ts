@@ -36,8 +36,8 @@ export const toolRegistry = {
   getMarketSnapshot: (symbol: string): MarketSnapshot => {
     const state = marketStateManager.getOrInitializeState(symbol);
     const orderBook = state.orderBook;
-    const bidPrice = orderBook?.bids?.[0]?.[0] ? parseFloat(orderBook.bids[0][0]) : state.ltp;
-    const askPrice = orderBook?.asks?.[0]?.[0] ? parseFloat(orderBook.asks[0][0]) : state.ltp;
+    const bidPrice = orderBook?.bids?.[0]?.[0] ? Number(orderBook.bids[0][0]) : state.ltp;
+    const askPrice = orderBook?.asks?.[0]?.[0] ? Number(orderBook.asks[0][0]) : state.ltp;
 
     return {
       symbol: state.symbol,

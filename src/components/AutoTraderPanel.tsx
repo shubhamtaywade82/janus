@@ -7,11 +7,11 @@ import { KillSwitchButton } from "./KillSwitchButton";
 
 const ALL_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"];
 
-export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
+export function AutoTraderPanel(_props: { userId?: number }) {
   const [expanded, setExpanded] = useState(false);
   const [synced, setSynced] = useState(false);
 
-  const { data: config, refetch } = trpc.autoExecutor.getConfig.useQuery({ userId }, {
+  const { data: config, refetch } = trpc.autoExecutor.getConfig.useQuery(undefined, {
     refetchInterval: 15_000,
   });
   const { data: status } = trpc.autoExecutor.status.useQuery(undefined, {
@@ -19,7 +19,7 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
   });
 
   const { data: paperWallet, refetch: refetchPaperWallet } = trpc.autoExecutor.paperWallet.useQuery(
-    { userId },
+    undefined,
     { refetchInterval: 10_000, enabled: status?.isPaperMode ?? true }
   );
 
@@ -70,12 +70,12 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
   }, [config, synced]);
 
   const handleSave = () => {
-    saveConfig.mutate({ userId, ...form, defaultSizeUsdt: form.defaultSizeUsdt });
+    saveConfig.mutate({ ...form, defaultSizeUsdt: form.defaultSizeUsdt });
   };
 
   const handleToggle = () => {
     const newEnabled = !(config?.enabled ?? false);
-    saveConfig.mutate({ userId, enabled: newEnabled });
+    saveConfig.mutate({ enabled: newEnabled });
   };
 
   const isEnabled = config?.enabled ?? false;
@@ -158,7 +158,7 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
           <div className="flex items-center justify-between text-[9px] mb-1">
             <span className="text-[#52525b]">Paper Balance</span>
             <button
-              onClick={() => resetPaper.mutate({ userId, newBalance: parseFloat(config?.paperStartingBalance ?? "10000") })}
+              onClick={() => resetPaper.mutate({ newBalance: parseFloat(config?.paperStartingBalance ?? "10000") })}
               className="text-[#52525b] hover:text-[#f4f4f5] underline"
             >
               Reset

@@ -42,7 +42,7 @@ async function seed() {
   console.log(`Inserted ${openPos.length} open positions.`);
 
   // Insert mock trades
-  const mockTrades = await db.insert(trades).values([
+  await db.insert(trades).values([
     {
       userId: 1,
       positionId: openPos[0].id,

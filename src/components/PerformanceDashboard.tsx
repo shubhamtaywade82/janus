@@ -183,13 +183,13 @@ function StatCardLarge({
   );
 }
 
-export function PerformanceDashboard({ userId = 1, isFullPage = false }: { userId?: number; isFullPage?: boolean }) {
-  const { data: metrics } = trpc.autoExecutor.metrics.useQuery({ userId }, {
+export function PerformanceDashboard({ isFullPage = false }: { userId?: number; isFullPage?: boolean }) {
+  const { data: metrics } = trpc.autoExecutor.metrics.useQuery(undefined, {
     refetchInterval: 30_000,
   });
 
   const { data: equityCurve } = trpc.autoExecutor.equityCurve.useQuery(
-    { userId, limit: 200 },
+    { limit: 200 },
     { refetchInterval: 30_000 }
   );
 

@@ -36,7 +36,7 @@ regimeEvents.setMaxListeners(20);
 
 // ─── Regime → Strategy mapping ───
 export const REGIME_STRATEGY_MAP: Record<RegimeType, StrategyType> = {
-  ranging_tight:   "scalping",        // ADX<15 + tight spread → confluence scalping
+  ranging_tight:   "scalping_micro",  // ADX<15 + tight spread → scalp microstructure
   ranging:         "bb_reversion",    // ADX<20 normal → mean-revert to BB middle
   reversal:        "momentum_reversal", // RSI extreme → catch exhaustion
   intraday_trend:  "intraday",         // ADX 20-30 → EMA + momentum

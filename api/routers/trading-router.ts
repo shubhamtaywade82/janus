@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createRouter, publicQuery, authedQuery } from "../middleware";
+import { createRouter, authedQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { positions, trades, exchangeCredentials, futuresWallets } from "@db/schema";
 import { desc, eq, and } from "drizzle-orm";
@@ -20,7 +20,7 @@ import {
 import { TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
 import { tradingEvents, initCoinDCXPrivateWs, userBalancesCache, userPositionsCache, markPriceCache } from "../services/coindcx-ws";
-import { startExitMonitor, stopExitMonitor, getFeeBreakevenMap } from "../services/exit-manager";
+import { getFeeBreakevenMap, startExitMonitor, stopExitMonitor } from "../services/exit-manager";
 import { latestTickerCache, subscribeToSymbol } from "../services/streaming";
 import { globalRiskEngine, getOrCreateSession, sessions, riskEvents } from "../services/risk-engine";
 import { registerPositionForTrailing, unregisterPosition } from "../services/trailing-stop";
@@ -821,6 +821,7 @@ export const tradingRouter = createRouter({
             stopLoss: parseFloat(input.stopLoss),
             strategyType: input.strategyType as import("../services/strategy-config").StrategyType,
             userId,
+            size: newSize,
           });
         }
       } else {
@@ -855,6 +856,7 @@ export const tradingRouter = createRouter({
             stopLoss: parseFloat(input.stopLoss),
             strategyType: input.strategyType as import("../services/strategy-config").StrategyType,
             userId,
+            size: parseFloat(input.size),
           });
         }
       }
@@ -896,6 +898,40 @@ export const tradingRouter = createRouter({
 
       if (pos[0].isPaper) {
         await releasePaperMargin(userId, parseFloat(pos[0].margin), parseFloat(input.realizedPnl), pos[0].id);
+      } else {
+        // Place live exit order
+        const creds = await db
+          .select()
+          .from(exchangeCredentials)
+          .where(and(eq(exchangeCredentials.userId, userId), eq(exchangeCredentials.exchange, "coindcx")))
+          .limit(1);
+
+        if (creds[0]) {
+          try {
+            const decrypted = decryptCreds(creds[0]);
+            const coindcxSym = `B-${pos[0].symbol.replace("USDT", "_USDT")}`;
+
+            console.log(`[trading-router] Placing manual live close order for ${pos[0].symbol}`);
+            const order = await createFuturesOrder(
+              decrypted,
+              {
+                market: coindcxSym,
+                side: pos[0].side === "long" ? "sell" : "buy", // Close: opposite side
+                order_type: "market",
+                total_quantity: parseFloat(pos[0].size),
+                price: parseFloat(input.closePrice),
+                leverage: pos[0].leverage,
+              }
+            );
+            console.log(`[trading-router] Live manual close order placed: ${order?.id}`);
+          } catch (err: any) {
+            console.error(`[trading-router] Manual close order failed for ${pos[0].symbol}: ${err.message}`);
+            throw new TRPCError({
+              code: "INTERNAL_SERVER_ERROR",
+              message: `Failed to close position on exchange: ${err.message}`,
+            });
+          }
+        }
       }
 
       // Update risk session so circuit breakers fire correctly

@@ -13,17 +13,19 @@ export type PositionLifecycleState =
   | "EXITING"
   | "CLOSED";
 
-export enum PositionAction {
-  KEEP_OPEN = "KEEP_OPEN",
-  MOVE_TO_BREAKEVEN = "MOVE_TO_BREAKEVEN",
-  TRAIL_SL = "TRAIL_SL",
-  PARTIAL_EXIT = "PARTIAL_EXIT",
-  FULL_EXIT = "FULL_EXIT",
-  REDUCE_SIZE = "REDUCE_SIZE",
-  SCALE_IN = "SCALE_IN",
-  EXTEND_TP = "EXTEND_TP",
-  TIGHTEN_TP = "TIGHTEN_TP",
-}
+export const PositionAction = {
+  KEEP_OPEN: "KEEP_OPEN",
+  MOVE_TO_BREAKEVEN: "MOVE_TO_BREAKEVEN",
+  TRAIL_SL: "TRAIL_SL",
+  PARTIAL_EXIT: "PARTIAL_EXIT",
+  FULL_EXIT: "FULL_EXIT",
+  REDUCE_SIZE: "REDUCE_SIZE",
+  SCALE_IN: "SCALE_IN",
+  EXTEND_TP: "EXTEND_TP",
+  TIGHTEN_TP: "TIGHTEN_TP",
+} as const;
+
+export type PositionAction = (typeof PositionAction)[keyof typeof PositionAction];
 
 export type Bias =
   | "STRONG_BULLISH"

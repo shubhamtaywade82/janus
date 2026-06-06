@@ -22,8 +22,9 @@
 
 import { getDb } from "../../queries/connection";
 import { llmApiKeys } from "@db/schema";
-import { eq, asc, like } from "drizzle-orm";
-import type { AiRecommendation, PositionAction } from "./types";
+import { eq, asc } from "drizzle-orm";
+import type { AiRecommendation } from "./types";
+import { PositionAction } from "./types";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -194,10 +195,7 @@ async function callWithRotation(
 
 // ─── Response parsing ────────────────────────────────────────────────────────
 
-const VALID_ACTIONS: PositionAction[] = [
-  "KEEP_OPEN", "MOVE_TO_BREAKEVEN", "TRAIL_SL", "PARTIAL_EXIT",
-  "FULL_EXIT", "REDUCE_SIZE", "SCALE_IN", "EXTEND_TP", "TIGHTEN_TP",
-];
+const VALID_ACTIONS: PositionAction[] = Object.values(PositionAction);
 
 function parseResponse(
   raw: string,
@@ -225,7 +223,7 @@ function parseResponse(
   const action: PositionAction =
     VALID_ACTIONS.includes(parsed.action as PositionAction)
       ? (parsed.action as PositionAction)
-      : "KEEP_OPEN";
+      : PositionAction.KEEP_OPEN;
 
   return {
     action,

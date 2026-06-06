@@ -282,7 +282,7 @@ export default function Portfolio() {
 
   // Initial fetch
   const { data: initialPortfolio } = trpc.trading.portfolio.useQuery(
-    { userId: 1 },
+    undefined,
     { staleTime: Infinity }
   );
   useEffect(() => {
@@ -313,7 +313,7 @@ export default function Portfolio() {
     onData: (data: any) => onPortfolioData.current(data),
   });
 
-  trpc.trading.portfolioStream.useSubscription({ userId: 1 }, portfolioStreamOpts.current);
+  trpc.trading.portfolioStream.useSubscription(undefined, portfolioStreamOpts.current);
 
   const { data: conversion } = trpc.trading.currencyConversion.useQuery(
     undefined,
@@ -322,13 +322,13 @@ export default function Portfolio() {
 
   // Query historical positions only when viewing non-open filters
   const { data: dbPositions } = trpc.trading.positions.useQuery(
-    { userId: 1, status: statusFilter as any },
+    { status: statusFilter as any },
     { enabled: statusFilter !== "open" && statusFilter !== "equity_curve", refetchInterval: 10000 }
   );
 
   // Always-on direct DB query for paper positions — independent of portfolioStream
   const { data: allDbOpenPositions } = trpc.trading.positions.useQuery(
-    { userId: 1, status: "open" },
+    { status: "open" },
     { refetchInterval: 5000 }
   );
   const paperPositions = (allDbOpenPositions || []).filter((p: any) => p.isPaper);
@@ -336,7 +336,7 @@ export default function Portfolio() {
 
   // Paper wallet stats from auto-executor
   const { data: paperWalletData } = trpc.autoExecutor.paperWallet.useQuery(
-    { userId: 1 },
+    undefined,
     { refetchInterval: 5000 }
   );
 
@@ -366,15 +366,15 @@ export default function Portfolio() {
 
   // Query historical positions and trades for tax metrics
   const { data: closedPositions } = trpc.trading.positions.useQuery(
-    { userId: 1, status: "closed" },
+    { status: "closed" },
     { refetchInterval: 30000 }
   );
   const { data: liquidatedPositions } = trpc.trading.positions.useQuery(
-    { userId: 1, status: "liquidated" },
+    { status: "liquidated" },
     { refetchInterval: 30000 }
   );
   const { data: tradeHistory } = trpc.trading.trades.useQuery(
-    { userId: 1 },
+    {},
     { refetchInterval: 30000 }
   );
 
@@ -823,7 +823,7 @@ export default function Portfolio() {
                       position={pos}
                       livePrice={livePrices[pos.symbol]}
                       onClose={handleClosePosition}
-                      isClosing={closePosition.isLoading && closePosition.variables?.id === pos.id}
+                      isClosing={closePosition.isPending && closePosition.variables?.id === pos.id}
                     />
                   ))}
                   {(!allPositions || allPositions.length === 0) && (

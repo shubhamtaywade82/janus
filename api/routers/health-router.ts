@@ -74,7 +74,7 @@ export const healthRouter = createRouter({
     const tickerCount = latestTickerCache.size;
 
     // ── Kill switch ──
-    const killSwitchActive = globalKillSwitch.isTriggered;
+    const killSwitchActive = globalKillSwitch.isActive;
 
     // ── Position manager ──
     let openPositionCount = 0;

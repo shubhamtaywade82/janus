@@ -1,5 +1,3 @@
-import type { TradeSignal } from "../signals/trade-signal.js";
-import type { Portfolio } from "../portfolio/portfolio.js";
 
 export interface RiskDecision {
   approved: boolean;

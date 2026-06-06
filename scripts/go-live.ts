@@ -43,9 +43,9 @@ const YELLOW = "\x1b[33m";
 const RESET = "\x1b[0m";
 const BOLD  = "\x1b[1m";
 
-function pass(msg: string) { console.log(`  ${GREEN}✔${RESET} ${msg}`); }
-function fail(msg: string) { console.log(`  ${RED}✘${RESET} ${msg}`); }
-function warn(msg: string) { console.log(`  ${YELLOW}⚠${RESET} ${msg}`); }
+function _pass(msg: string) { console.log(`  ${GREEN}✔${RESET} ${msg}`); }
+function _fail(msg: string) { console.log(`  ${RED}✘${RESET} ${msg}`); }
+function _warn(msg: string) { console.log(`  ${YELLOW}⚠${RESET} ${msg}`); }
 
 // ── Helpers ─────────────────────────────────────────────────────────────────
 

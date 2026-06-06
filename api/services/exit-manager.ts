@@ -2,6 +2,10 @@ import { tradingEvents, markPriceCache } from "./coindcx-ws";
 import { latestTickerCache } from "./streaming";
 import { STRATEGY_CONFIGS, type StrategyType } from "./strategy-config";
 import { SUPPORTED_PAIRS } from "./binance";
+import { getDb } from "../queries/connection";
+import { positions } from "@db/schema";
+import { eq, and } from "drizzle-orm";
+import { env } from "../lib/env";
 
 export interface ExitDecision {
   shouldExit: boolean;
@@ -80,6 +84,7 @@ interface MonitoredPosition {
 }
 
 const activeMonitors = new Map<number, ReturnType<typeof setInterval>>();
+const closingPositions = new Set<number>();
 
 export function startExitMonitor(userId: number, positions: MonitoredPosition[]) {
   stopExitMonitor(userId);
@@ -93,37 +98,46 @@ export function startExitMonitor(userId: number, positions: MonitoredPosition[])
   }, Infinity);
 
   const interval = setInterval(() => {
-    for (const pos of positions) {
-      const config = STRATEGY_CONFIGS[pos.strategyType];
-      const binanceSym = pos.symbol.toUpperCase();
+    try {
+      for (const pos of positions) {
+        try {
+          const config = STRATEGY_CONFIGS[pos.strategyType];
+          const binanceSym = pos.symbol.toUpperCase();
 
-      // CoinDCX mark price takes priority over Binance last price
-      const markKey = `B-${binanceSym.replace("USDT", "_USDT")}`;
-      const currentPrice =
-        markPriceCache?.get(markKey) ??
-        latestTickerCache.get(binanceSym)?.lastPrice;
+          // CoinDCX mark price takes priority over Binance last price
+          const markKey = `B-${binanceSym.replace("USDT", "_USDT")}`;
+          const currentPrice =
+            markPriceCache?.get(markKey) ??
+            latestTickerCache.get(binanceSym)?.lastPrice;
 
-      if (!currentPrice || currentPrice <= 0) continue;
+          if (!currentPrice || currentPrice <= 0) continue;
 
-      const decision = evaluateExitCondition(
-        pos.side,
-        pos.entryPrice,
-        currentPrice,
-        pos.size,
-        config.takerFeeRate,
-        pos.stopLoss,
-        pos.takeProfit
-      );
+          const decision = evaluateExitCondition(
+            pos.side,
+            pos.entryPrice,
+            currentPrice,
+            pos.size,
+            config.takerFeeRate,
+            pos.stopLoss,
+            pos.takeProfit
+          );
 
-      if (decision.shouldExit) {
-        tradingEvents.emit(`exit-signal:${userId}`, {
-          positionId: pos.id,
-          symbol: pos.symbol,
-          strategyType: pos.strategyType,
-          currentPrice,
-          decision,
-        });
+          if (decision.shouldExit && !closingPositions.has(pos.id)) {
+            closingPositions.add(pos.id);
+            tradingEvents.emit(`exit-signal:${userId}`, {
+              positionId: pos.id,
+              symbol: pos.symbol,
+              strategyType: pos.strategyType,
+              currentPrice,
+              decision,
+            });
+          }
+        } catch (posErr) {
+          console.error(`[exit-manager] Error evaluating position ${pos.symbol}:`, posErr);
+        }
       }
+    } catch (loopErr) {
+      console.error("[exit-manager] Fatal error in exit monitor loop:", loopErr);
     }
   }, minInterval);
 
@@ -136,6 +150,74 @@ export function stopExitMonitor(userId: number) {
     clearInterval(existing);
     activeMonitors.delete(userId);
   }
+}
+
+let daemonInterval: ReturnType<typeof setInterval> | null = null;
+
+export function startDaemon() {
+  if (daemonInterval) return;
+
+  const syncAndMonitor = async () => {
+    try {
+      const db = getDb();
+      const isPaperMode = env.paperTrading || !env.placeOrders;
+
+      // Load all open positions
+      const openPositions = await db
+        .select()
+        .from(positions)
+        .where(
+          and(
+            eq(positions.status, "open"),
+            eq(positions.isPaper, isPaperMode)
+          )
+        );
+
+      // Group positions by userId
+      const userPositions = new Map<number, MonitoredPosition[]>();
+      for (const p of openPositions) {
+        const userId = p.userId;
+        if (!userPositions.has(userId)) {
+          userPositions.set(userId, []);
+        }
+        userPositions.get(userId)!.push({
+          id: p.id,
+          symbol: p.symbol,
+          side: p.side as "long" | "short",
+          entryPrice: parseFloat(p.entryPrice),
+          size: parseFloat(p.size),
+          strategyType: (p.strategyType ?? "intraday") as any,
+          stopLoss: p.stopLoss ? parseFloat(p.stopLoss) : null,
+          takeProfit: p.takeProfit ? parseFloat(p.takeProfit) : null,
+        });
+      }
+
+      // Sync closingPositions set (clean up IDs that are no longer open)
+      const openPosIds = new Set(openPositions.map(p => p.id));
+      for (const posId of closingPositions) {
+        if (!openPosIds.has(posId)) {
+          closingPositions.delete(posId);
+        }
+      }
+
+      // Call startExitMonitor for each user with open positions
+      for (const [userId, monitored] of userPositions.entries()) {
+        startExitMonitor(userId, monitored);
+      }
+
+      // Stop exit monitor for users who no longer have open positions
+      for (const userId of activeMonitors.keys()) {
+        if (!userPositions.has(userId)) {
+          stopExitMonitor(userId);
+        }
+      }
+    } catch (err: any) {
+      console.error("[exit-manager] Background sync daemon error:", err);
+    }
+  };
+
+  syncAndMonitor();
+  daemonInterval = setInterval(syncAndMonitor, 5000);
 }
 
 // ─── Fee Breakeven Map ───

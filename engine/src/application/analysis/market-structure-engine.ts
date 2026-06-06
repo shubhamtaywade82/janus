@@ -1,4 +1,3 @@
-import { nanoid } from "nanoid";
 import type { Candle, CandleInterval } from "../../domain/market-data/candle.js";
 import type {
   SwingPoint, StructureBreak, TimeframeAnalysis, MarketStructure, Trend, Momentum,

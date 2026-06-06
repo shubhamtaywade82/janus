@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineSeries, LineStyle, createSeriesMarkers } from "lightweight-charts";
-import type { UTCTimestamp, SeriesMarker, Time } from "lightweight-charts";
+import type { UTCTimestamp, SeriesMarker, Time, ISeriesApi } from "lightweight-charts";
 import { OrderBlockPrimitive } from "@/lib/chart/primitives/OrderBlockPrimitive";
 import { FVGPrimitive } from "@/lib/chart/primitives/FVGPrimitive";
 import { StructurePrimitive } from "@/lib/chart/primitives/StructurePrimitive";
@@ -34,6 +34,8 @@ import { EMA_COLORS, SMA_COLORS } from "@/components/IndicatorPanel";
 import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, calcNW, calcMACD, calcStochRSI, calcPSAR, calcIchimoku, calcADX, calcZScore, calcVolumeProfile, calcKeltner, calcDonchian, calcTTMSqueeze } from "@/lib/chart/indicators";
 import { detectMACDSignals, detectADXSignals, detectDirectionFlips, detectStochCross, detectZScoreSignals, detectIchimokuSignals, detectDonchianBreakout, detectNWBandTag, detectVWAPSignals, detectRSIDivergence, detectCVDDivergence } from "@/lib/chart/indicator-signals";
 import type { PriceActionData } from "@/lib/chart/pa-types";
+import { checkIndicatorAlerts, checkSMCAlerts, ALERT_DEFAULTS } from "@/lib/chart/alert-engine";
+import type { AlertConfig, AlertEvent } from "@/lib/chart/alert-engine";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { formatPrice, formatQty, getPriceDecimals } from "@/utils/precision";
 
@@ -514,7 +516,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
           from: range.from,
           to: range.to
         }));
-      } catch (err) {}
+      } catch {}
 
       // Show "go live" button when right edge is > 3 bars behind the last loaded bar
       const lastIdx = dataRef.current.length - 1;
@@ -1720,7 +1722,6 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
 
   // Recalculate vertical coordinates of active positions on the canvas
   const updatePositionsCoordinates = useCallback(() => {
-    const chart = chartRef.current;
     const series = candlestickSeriesRef.current;
     const newCoords: Record<number, { entryY: number | null; liqY: number | null }> = {};
     
@@ -1771,7 +1772,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     return () => {
       try {
         chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleScrollZoom);
-      } catch (err) {
+      } catch {
         // Safe check
       }
     };
@@ -2956,6 +2957,69 @@ const Dashboard = () => {
   const prevPaDataRef = useRef<any>(null);
   const prevKlinesLenRef = useRef(0);
 
+  // ─── Chart alert engine — drives toasts from AlertConfigPanel toggles ───
+  const [alertCfg, setAlertCfg] = useState<AlertConfig>(() => {
+    try {
+      const s = localStorage.getItem("janus_alert_cfg");
+      return s ? { ...ALERT_DEFAULTS, ...JSON.parse(s) } : ALERT_DEFAULTS;
+    } catch { return ALERT_DEFAULTS; }
+  });
+  const alertCfgRef = useRef(alertCfg);
+  useEffect(() => { alertCfgRef.current = alertCfg; }, [alertCfg]);
+
+  // Dedup recently-shown events (guards React re-renders / re-subscribes)
+  const alertDedupRef = useRef<Set<string>>(new Set());
+  const emitAlerts = useCallback((events: AlertEvent[]) => {
+    for (const ev of events) {
+      const key = `${ev.type}:${ev.direction}:${ev.timestamp}`;
+      if (alertDedupRef.current.has(key)) continue;
+      alertDedupRef.current.add(key);
+      if (alertDedupRef.current.size > 300) {
+        const oldest = alertDedupRef.current.values().next().value;
+        if (oldest) alertDedupRef.current.delete(oldest);
+      }
+      const fn = ev.direction === "bullish" ? toast.success
+        : ev.direction === "bearish" ? toast.error : toast.info;
+      fn(`${ev.emoji} ${ev.symbol} · ${ev.message}`, { duration: 6000 });
+    }
+  }, []);
+
+  // The backend analysis loop emits + Telegrams these transitions for ALL symbols
+  // (EMA cross, SuperTrend flip, RSI, KNN flip/rejection/regime, BOS, CHoCH) and they
+  // surface globally via systemAlertStream (Layout.tsx) — the bot's source of truth.
+  // To avoid duplicate/divergent toasts, the chart only fires the indicators the
+  // backend does NOT emit: BB Breakout, VWAP Cross, OB Touch, FVG Fill, Liq Sweep.
+  const frontendOnly = useCallback((cfg: AlertConfig): AlertConfig => {
+    const FRONTEND_KEYS = new Set<keyof AlertConfig>([
+      "bbBreakout", "vwapCross", "obTouch", "fvgFill", "liqSweep",
+    ]);
+    const masked = { ...cfg };
+    (Object.keys(masked) as (keyof AlertConfig)[]).forEach((k) => {
+      if (!FRONTEND_KEYS.has(k)) masked[k] = false;
+    });
+    return masked;
+  }, []);
+
+  // Reset per-symbol alert tracking on symbol/interval switch
+  const lastClosedOpenTimeRef = useRef<number | null>(null);
+  useEffect(() => {
+    lastClosedOpenTimeRef.current = null;
+  }, [selectedSymbol, interval]);
+
+  // Chart-local indicator alerts — fire once per CLOSED candle (not on live ticks)
+  useEffect(() => {
+    if (!indicatorCfg || klines.length < 4) return;
+    const closedOpenTime = klines[klines.length - 2].openTime; // last closed candle
+    if (lastClosedOpenTimeRef.current === null) {
+      lastClosedOpenTimeRef.current = closedOpenTime; // prime — no burst on load
+      return;
+    }
+    if (closedOpenTime <= lastClosedOpenTimeRef.current) return; // no new close yet
+    lastClosedOpenTimeRef.current = closedOpenTime;
+    // slice off the forming candle so detectors evaluate the just-closed one
+    emitAlerts(checkIndicatorAlerts(klines.slice(0, -1), frontendOnly(alertCfgRef.current), indicatorCfg, selectedSymbol));
+  }, [klines, indicatorCfg, selectedSymbol, emitAlerts, frontendOnly]);
+
   const [overlayToggles, setOverlayToggles] = useState<OverlayToggles>(() => {
     try {
       const saved = localStorage.getItem("janus_chart_overlays");
@@ -3158,7 +3222,7 @@ const Dashboard = () => {
   // Fetch portfolio for open positions
   const [portfolio, setPortfolio] = useState<any>(null);
   const { data: initialPortfolio } = trpc.trading.portfolio.useQuery(
-    { userId: 1 },
+    undefined,
     { staleTime: Infinity }
   );
   useEffect(() => {
@@ -3178,10 +3242,8 @@ const Dashboard = () => {
     onData: (data: any) => portfolioCallbackRef.current(data),
   });
 
-  const portfolioStreamInput = useMemo(() => ({ userId: 1 }), []);
-
   trpc.trading.portfolioStream.useSubscription(
-    portfolioStreamInput,
+    undefined,
     portfolioStreamOpts.current
   );
 
@@ -3191,7 +3253,7 @@ const Dashboard = () => {
   );
 
   const { data: instrInfo } = trpc.trading.instrumentInfo.useQuery(
-    { userId: 1, symbol: selectedSymbol },
+    { symbol: selectedSymbol },
     { staleTime: 60_000, refetchOnWindowFocus: false }
   );
 
@@ -3217,8 +3279,16 @@ const Dashboard = () => {
   const lastPrice = tickerData ? parseFloat(tickerData.lastPrice) : 0;
   const priceChange = tickerData ? parseFloat(tickerData.priceChangePercent) : 0;
 
-  // Track previous PA data ref for chart overlay diffing
+  // Track previous PA data ref for chart overlay diffing + fire SMC alerts on change
   useEffect(() => {
+    if (paData) {
+      const prev = prevPaDataRef.current;
+      if (prev) {
+        const cp = klines.length > 0 ? parseFloat(klines[klines.length - 1].close) : lastPrice;
+        // OB Touch / FVG Fill / Liq Sweep only — BOS/CHoCH come from backend systemAlertStream
+        emitAlerts(checkSMCAlerts(paData, prev, cp, selectedSymbol, frontendOnly(alertCfgRef.current)));
+      }
+    }
     prevPaDataRef.current = paData ?? prevPaDataRef.current;
   }, [paData]);
 
@@ -3324,7 +3394,7 @@ const Dashboard = () => {
               <RegimeIndicator symbol={selectedSymbol} />
               <ChartOverlayPanel onChange={setOverlayToggles} />
               <IndicatorPanel onChange={setIndicatorCfg} />
-              <AlertConfigPanel onChange={() => {}} />
+              <AlertConfigPanel onChange={setAlertCfg} />
               <div className="h-3 w-px bg-[#27272a]" />
               <span className="text-[10px] text-[#71717a]">
                 H: {tickerData ? parseFloat(tickerData.highPrice).toFixed(2) : "--"}

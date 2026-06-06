@@ -50,7 +50,7 @@ export function LlmActivityFeed() {
   });
 
   // Load configuration to check if LLM Advisor is active
-  const { data: config } = trpc.autoExecutor.getConfig.useQuery({ userId: 1 }, {
+  const { data: config } = trpc.autoExecutor.getConfig.useQuery(undefined, {
     refetchInterval: 15_000,
   });
   const isLlmActive = config?.useLlmAdvisor ?? false;

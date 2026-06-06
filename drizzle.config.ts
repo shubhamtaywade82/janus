@@ -22,7 +22,7 @@ const dbCredentials = connectionString.includes("run/postgresql")
     };
 
 export default defineConfig({
-  schema: "./db/schema.ts",
+  schema: ["./db/schema.ts", "./db/position-manager-schema.ts"],
   out: "./db/migrations",
   dialect: "postgresql",
   dbCredentials,

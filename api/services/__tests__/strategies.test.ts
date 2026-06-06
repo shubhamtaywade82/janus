@@ -92,7 +92,6 @@ describe("Technical Indicators", () => {
 });
 
 describe("Strategy Rules Evaluation", () => {
-  const dummyPrices = Array.from({ length: 60 }, () => 100);
 
   it("should evaluate Grid Strategy", () => {
     // Fill prices with range behavior: 90 to 110

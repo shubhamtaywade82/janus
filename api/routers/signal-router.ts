@@ -551,14 +551,9 @@ async function getConfluenceInput(binanceSymbol: string) {
 
 // ─── Per-symbol strategy + timing state ───
 const symbolStrategyMap = new Map<string, StrategyType>();
-const symbolLastAnalyzedAt = new Map<string, number>();
 
-let autoAnalysisTimer: ReturnType<typeof setTimeout> | null = null;
 let activeStrategyType: StrategyType = "intraday";
 let autoRegimeDetect = true;
-let lastRegimeDetectAt = 0;
-const REGIME_DETECT_INTERVAL_MS = 60_000;
-const MIN_LOOP_MS = 2_000;
 
 // ─── Helper utilities for the Engine ───
 

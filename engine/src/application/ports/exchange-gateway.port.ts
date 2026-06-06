@@ -1,7 +1,6 @@
 import type { OrderbookSnapshot } from "../../domain/market-data/orderbook.js";
 import type { Order } from "../../domain/orders/order.js";
 import type { Fill } from "../../domain/fills/fill.js";
-import type { Position } from "../../domain/positions/position.js";
 import type { Side, OrderType } from "../../domain/common/types.js";
 
 export interface PlaceOrderInput {

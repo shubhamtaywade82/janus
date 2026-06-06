@@ -131,7 +131,7 @@ export function checkIndicatorAlerts(
   // ─── VWAP Cross ───
   if (cfg.vwapCross) {
     const vwap = calcVWAP(times, highs, lows, closes, volumes);
-    const [vp, vc] = [vwap[n-1], vwap[n]];
+    const [vp, vc] = [vwap.vwap[n-1], vwap.vwap[n]];
     const prevClose = closes[n-1];
     if (vp !== null && vc !== null) {
       if (prevClose < vp && price > vc)

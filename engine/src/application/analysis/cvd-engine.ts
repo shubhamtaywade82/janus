@@ -85,7 +85,6 @@ export class CvdEngine {
 
     const priceHigherLow = priceLow2 > priceLow1;
     const cvdHigherLow = cvdLow2 > cvdLow1;
-    const priceLowerHigh = priceHigh2 < priceHigh1;
     const cvdLowerHigh = cvdHigh2 < cvdHigh1;
 
     let trend: CvdAnalysis["trend"] = "NEUTRAL";

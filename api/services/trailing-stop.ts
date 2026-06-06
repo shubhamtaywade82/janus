@@ -4,7 +4,7 @@ import { type StrategyType } from "./strategy-config";
 import { getDb } from "../queries/connection";
 import { positions } from "@db/schema";
 import { eq, and } from "drizzle-orm";
-import { detectSwings, computeAtrArray, type SwingPoint, type Kline } from "./price-action";
+import { detectSwings, computeAtrArray, type Kline } from "./price-action";
 
 // Default trail % per strategy type
 export const TRAIL_PCT: Record<StrategyType, number> = {
@@ -28,6 +28,7 @@ export interface TrackedPosition {
   stopLoss: number;
   strategyType: StrategyType;
   userId: number;
+  size: number;
 }
 
 const trackedPositions = new Map<number, TrackedPosition>();
@@ -63,6 +64,24 @@ marketEvents.on("kline-update", (symbol: string, kline: any) => {
   }
 });
 
+// Clean up kline buffers and tracked positions when exits happen
+tradingEvents.on("position-closed", (posId: number, symbol: string) => {
+  trackedPositions.delete(posId);
+  // Optional: Clean up buffer if no other positions are open for this symbol
+  let stillTracking = false;
+  for (const p of trackedPositions.values()) {
+    if (p.symbol === symbol) {
+      stillTracking = true;
+      break;
+    }
+  }
+  if (!stillTracking) {
+    klineBufferCache.delete(symbol);
+  }
+});
+
+// ─── Core Calculations ───
+
 export function calcNewTrailingStop(
   side: "long" | "short",
   currentStop: number,
@@ -73,43 +92,57 @@ export function calcNewTrailingStop(
 ): number {
   let newStop = currentStop;
   
-  if (klines.length >= 20) {
-    // 1. Market Structure Exit
-    const swings = detectSwings(klines, 5);
-    if (side === "long") {
-      // Find the most recent Swing Low that is > entryPrice
-      const recentLows = swings.filter(s => s.type === "low" && s.price > entryPrice).sort((a, b) => b.time - a.time);
-      if (recentLows.length > 0) {
-        newStop = Math.max(currentStop, recentLows[0].price);
-      } else {
-        // Fallback to Chandelier Exit (ATR)
-        const atrs = computeAtrArray(klines, 14);
-        const atr = atrs[atrs.length - 1];
-        const highestHigh = Math.max(...klines.slice(-14).map(k => k.high));
-        const chandelierStop = highestHigh - (atr * 2.5);
-        newStop = Math.max(currentStop, chandelierStop, currentPrice * (1 - trailPct));
-      }
-    } else {
-      // Find the most recent Swing High that is < entryPrice
-      const recentHighs = swings.filter(s => s.type === "high" && s.price < entryPrice).sort((a, b) => b.time - a.time);
-      if (recentHighs.length > 0) {
-        newStop = Math.min(currentStop, recentHighs[0].price);
-      } else {
-        // Fallback to Chandelier Exit (ATR)
-        const atrs = computeAtrArray(klines, 14);
-        const atr = atrs[atrs.length - 1];
-        const lowestLow = Math.min(...klines.slice(-14).map(k => k.low));
-        const chandelierStop = lowestLow + (atr * 2.5);
-        newStop = Math.min(currentStop, chandelierStop, currentPrice * (1 + trailPct));
+  if (side === "long") {
+    // 1. Swing High / Low Logic (if klines are available)
+    if (klines.length >= 10) {
+      const swings = detectSwings(klines);
+      const activeSwings = swings.filter((s) => s.type === "low");
+      if (activeSwings.length > 0) {
+        const lastSwingLow = activeSwings[activeSwings.length - 1].price;
+        // Don't shift SL down
+        newStop = Math.max(currentStop, lastSwingLow);
       }
     }
+    
+    // 2. Average True Range (ATR) trailing stop
+    if (klines.length >= 14) {
+      const atrArray = computeAtrArray(klines, 14);
+      const lastAtr = atrArray[atrArray.length - 1] ?? 0;
+      if (lastAtr > 0) {
+        const atrStop = currentPrice - lastAtr * 2.0;
+        newStop = Math.max(newStop, atrStop);
+      }
+    }
+
+    // 3. Percentage Trailing Stop (Fallback/Standard)
+    // Ratchet trailing: only updates when price moves up.
+    const pctStop = currentPrice * (1 - trailPct);
+    newStop = Math.max(newStop, pctStop);
+    
   } else {
-    // Basic Ratchet
-    if (side === "long") {
-      newStop = Math.max(currentStop, currentPrice * (1 - trailPct));
-    } else {
-      newStop = Math.min(currentStop, currentPrice * (1 + trailPct));
+    // Short side swing points
+    if (klines.length >= 10) {
+      const swings = detectSwings(klines);
+      const activeSwings = swings.filter((s) => s.type === "high");
+      if (activeSwings.length > 0) {
+        const lastSwingHigh = activeSwings[activeSwings.length - 1].price;
+        newStop = Math.min(currentStop, lastSwingHigh);
+      }
     }
+
+    // ATR for short
+    if (klines.length >= 14) {
+      const atrArray = computeAtrArray(klines, 14);
+      const lastAtr = atrArray[atrArray.length - 1] ?? 0;
+      if (lastAtr > 0) {
+        const atrStop = currentPrice + lastAtr * 2.0;
+        newStop = Math.min(newStop, atrStop);
+      }
+    }
+
+    // Percentage Trailing for short
+    const pctStop = currentPrice * (1 + trailPct);
+    newStop = Math.min(newStop, pctStop);
   }
 
   // 2. Fee-Aware Breakeven Logic (1:1 RR based on static trailPct risk)
@@ -158,52 +191,73 @@ export function syncTrailingStopLoss(positionId: number, newStopLoss: number): v
 function ensureTrailingEngine() {
   if (trailingTimer) return;
   trailingTimer = setInterval(async () => {
-    if (trackedPositions.size === 0) return;
-    const db = getDb();
+    try {
+      if (trackedPositions.size === 0) return;
+      const db = getDb();
 
-    for (const [posId, pos] of trackedPositions) {
-      // Price: CoinDCX mark price (accurate) → Binance last price (fallback)
-      const markKey = `B-${pos.symbol.replace("USDT", "_USDT")}`;
-      let currentPrice = markPriceCache.get(markKey) ?? 0;
-      if (currentPrice <= 0) {
-        currentPrice = latestTickerCache.get(pos.symbol)?.lastPrice ?? 0;
+      for (const [posId, pos] of trackedPositions) {
+        try {
+          // Price: CoinDCX mark price (accurate) → Binance last price (fallback)
+          const markKey = `B-${pos.symbol.replace("USDT", "_USDT")}`;
+          let currentPrice = markPriceCache.get(markKey) ?? 0;
+          if (currentPrice <= 0) {
+            currentPrice = latestTickerCache.get(pos.symbol)?.lastPrice ?? 0;
+          }
+
+          if (!currentPrice || currentPrice <= 0) continue;
+
+          const trailPct = TRAIL_PCT[pos.strategyType];
+          
+          // Check stop-out first
+          if (shouldStopOut(pos.side, currentPrice, pos.stopLoss)) {
+            // Calculate unrealized PnL using the correct position size
+            const unrealizedPnl = pos.side === "long"
+              ? (currentPrice - pos.entryPrice) * pos.size
+              : (pos.entryPrice - currentPrice) * pos.size;
+
+            // Approximate fees for trailing stop out
+            const entryFee = pos.entryPrice * pos.size * TAKER_FEE;
+            const exitFee = currentPrice * pos.size * TAKER_FEE;
+            const totalFees = entryFee + exitFee;
+            const feeAdjustedPnl = unrealizedPnl - totalFees;
+
+            tradingEvents.emit(`exit-signal:${pos.userId}`, {
+              positionId: pos.id,
+              symbol: pos.symbol,
+              strategyType: pos.strategyType,
+              currentPrice,
+              triggerType: "trailing_stop",
+              decision: {
+                shouldExit: true,
+                unrealizedPnl,
+                entryFee,
+                exitFee,
+                totalFees,
+                feeAdjustedPnl,
+                reason: `Trailing stop hit — price ${currentPrice.toFixed(4)} crossed stop ${pos.stopLoss.toFixed(4)}`,
+              },
+            });
+            trackedPositions.delete(posId);
+            continue;
+          }
+
+          // Ratchet stop
+          const klines = klineBufferCache.get(pos.symbol) || [];
+          const newStop = calcNewTrailingStop(pos.side, pos.stopLoss, currentPrice, trailPct, klines, pos.entryPrice);
+          
+          if (Math.abs(newStop - pos.stopLoss) > 1e-8) {
+            pos.stopLoss = newStop;
+            await db.update(positions)
+              .set({ stopLoss: String(newStop), updatedAt: new Date() })
+              .where(and(eq(positions.id, posId), eq(positions.status, "open")))
+              .catch(() => {});
+          }
+        } catch (posErr) {
+          console.error(`[trailing-stop] Error processing position ${posId} (${pos.symbol}):`, posErr);
+        }
       }
-
-      if (!currentPrice || currentPrice <= 0) continue;
-
-      const trailPct = TRAIL_PCT[pos.strategyType];
-      
-      // Check stop-out first
-      if (shouldStopOut(pos.side, currentPrice, pos.stopLoss)) {
-        tradingEvents.emit(`exit-signal:${pos.userId}`, {
-          positionId: pos.id,
-          symbol: pos.symbol,
-          strategyType: pos.strategyType,
-          currentPrice,
-          triggerType: "trailing_stop",
-          decision: {
-            shouldExit: true,
-            unrealizedPnl: pos.side === "long"
-              ? (currentPrice - pos.entryPrice) * 1
-              : (pos.entryPrice - currentPrice) * 1,
-            reason: `Trailing stop hit — price ${currentPrice.toFixed(4)} crossed stop ${pos.stopLoss.toFixed(4)}`,
-          },
-        });
-        trackedPositions.delete(posId);
-        continue;
-      }
-
-      // Ratchet stop
-      const klines = klineBufferCache.get(pos.symbol) || [];
-      const newStop = calcNewTrailingStop(pos.side, pos.stopLoss, currentPrice, trailPct, klines, pos.entryPrice);
-      
-      if (Math.abs(newStop - pos.stopLoss) > 1e-8) {
-        pos.stopLoss = newStop;
-        db.update(positions)
-          .set({ stopLoss: String(newStop), updatedAt: new Date() })
-          .where(and(eq(positions.id, posId), eq(positions.status, "open")))
-          .catch(() => {});
-      }
+    } catch (loopErr) {
+      console.error("[trailing-stop] Fatal error in trailing stop loop:", loopErr);
     }
   }, 2_000);
 }

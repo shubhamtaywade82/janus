@@ -17,7 +17,7 @@
 import { EventEmitter } from "events";
 import { getDb } from "../queries/connection";
 import { users, positions } from "@db/schema";
-import { eq, and, gte, sql } from "drizzle-orm";
+import { eq, and, gte } from "drizzle-orm";
 import { globalKillSwitch } from "./kill-switch";
 import { sendTelegramMessage } from "./telegram";
 import { env } from "../lib/env";

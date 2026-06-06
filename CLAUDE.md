@@ -101,6 +101,8 @@ npm run db:push      # Push schema directly to DB (dev shortcut — no migration
 │  3. Binance streaming WS per symbol ──► depth, trades, klines  │
 │  4. LLM Advisor init ──► loads keys, starts refresh loop       │
 │  5. Position Manager ──► AI lifecycle loop on open positions   │
+│  6. Position reconciler, exit-manager, alert-engine,           │
+│     telegram-bot, liquidation-monitor, AI Brain scheduler      │
 └──────────────────────────────┬─────────────────────────────────┘
                                │ Drizzle ORM
 ┌──────────────────────────────▼─────────────────────────────────┐
@@ -178,7 +180,21 @@ Position Manager (30s assessment cycle)
 │   │   ├── llm-router.ts          # LLM key management, test, decision stream
 │   │   ├── position-manager-router.ts  # AI position lifecycle status + stream
 │   │   ├── logs-router.ts         # system_logs query
-│   │   └── telegram-router.ts     # Telegram bot config + test message
+│   │   ├── telegram-router.ts     # Telegram bot config + test message
+│   │   ├── alerts-router.ts       # User alert rules CRUD + system/user alert streams
+│   │   ├── export-router.ts       # Export account state + trade history
+│   │   └── health-router.ts       # Liveness/health snapshot (DB, feeds, kill switch, PM)
+│   │
+│   ├── brain/                     # Autonomous AI Brain (LLM decision loop, shadow-mode)
+│   │   ├── brain-orchestrator.ts  # BrainOrchestrator — main decide loop (shadowMode default)
+│   │   ├── brain-memory.ts        # Qdrant vector store — episode embeddings (getEmbedding)
+│   │   ├── brain-reflection.ts    # Post-trade reflection — learns from episode + realized PnL
+│   │   ├── brain-evolution.ts     # Backtests + evolves stored strategies
+│   │   ├── brain-governor.ts      # Approves/sizes brain decisions (risk gate)
+│   │   ├── brain-scheduler.ts     # Background scheduler (15-min tick: reflect/evolve)
+│   │   ├── tool-registry.ts       # MarketSnapshot + tools exposed to the LLM
+│   │   ├── paper-adapter.ts       # ExecutionAdapter — paper execution for brain
+│   │   └── schemas.ts             # brainDecisionSchema (zod) + BrainDecision type
 │   │
 │   └── services/                  # Core business logic
 │       ├── market-state.ts        # MarketStateManager + RingBuffer per symbol
@@ -194,10 +210,17 @@ Position Manager (30s assessment cycle)
 │       ├── strategy-config.ts     # STRATEGY_CONFIGS per regime
 │       ├── llm-advisor.ts         # Multi-provider LLM client (entry signal filter)
 │       ├── telegram.ts            # Telegram notification service
+│       ├── telegram-bot.ts        # Polling command bot (/status /pause /resume) for operators
+│       ├── exit-manager.ts        # SL/TP exit-condition daemon + fee-breakeven map
+│       ├── position-reconciler.ts # Reconciles DB positions vs exchange every 5 min
+│       ├── alert-engine.ts        # Backend alert evaluation (user rules + system events)
+│       ├── kill-switch.ts         # globalKillSwitch — persistent emergency halt (cwd state file)
+│       ├── feed-health.ts         # Feed status tracker + feedHealthEvents EventEmitter
+│       ├── liquidation-monitor.ts # Alerts/auto-reduce when within 5%/2% of liq price
 │       ├── ring-buffer.ts         # Fixed-capacity circular buffer
 │       │
 │       └── position-manager/      # AI position lifecycle system (self-contained)
-│           ├── types.ts           # All types: ManagedPosition, PositionAction enum, etc.
+│           ├── types.ts           # All types: ManagedPosition, PositionAction (const union), etc.
 │           ├── event-bus.ts       # Typed EventEmitter (positionManagerBus)
 │           ├── position-store.ts  # In-memory hot state (no DB reads on hot path)
 │           ├── market-context.ts  # MarketContextBuilder (EMA/RSI/ATR/CVD/confluence)
@@ -278,6 +301,10 @@ PM_OLLAMA_CLOUD_KEY_3=<key>
 
 # ── Bot automation ────────────────────────────────────────────────
 BOT_AUTO_START=false # Auto-start executor on server boot
+
+# ── AI Brain (autonomous LLM decision loop) ──────────────────────
+QDRANT_URL=http://localhost:6333   # Vector store for episode memory (defaults to localhost)
+OPENAI_API_KEY=                    # Embeddings for brain-memory (getEmbedding)
 ```
 
 ---
@@ -761,22 +788,12 @@ PM_OLLAMA_CLOUD_KEY_3=<key>
 
 ### Activating the position manager
 
-The position manager is self-contained but not yet wired to `boot.ts` or `router.ts`. Add these when ready:
+The position manager is **already wired**:
 
-```ts
-// api/boot.ts — after globalLlmAdvisor.init()
-import { positionLifecycleManager } from "./services/position-manager/index";
-setTimeout(() => positionLifecycleManager.start().catch(console.error), 5_000);
+- `api/boot.ts:191` — `positionLifecycleManager.start()` is called ~5s after boot (after `globalLlmAdvisor.init()`).
+- `api/router.ts` — registered as `positionManager: positionManagerRouter`.
 
-// api/router.ts — inside appRouter
-import { positionManagerRouter } from "./routers/position-manager-router";
-// positionManager: positionManagerRouter
-```
-
-```bash
-# Create the 3 new DB tables
-npm run db:push
-```
+Its 3 tables (`ai_assessments`, `position_snapshots`, `position_action_logs`) are created by `npm run db:push` (drizzle scans the whole `db/` directory).
 
 ### tRPC endpoints (`trpc.positionManager.*`)
 
@@ -816,6 +833,26 @@ positionManagerBus.on("position:lifecycle-changed", (id, from, to) => { ... })
 
 ---
 
+## AI Brain (Autonomous Decision Loop)
+
+`api/brain/` — an autonomous LLM-driven trading brain, separate from the Position Manager. Mounted as a Hono router at `/api/brain` (not tRPC). Started in `boot.ts` via `initVectorStore()` + `startBrainScheduler()`.
+
+| File | Purpose |
+|---|---|
+| `brain-orchestrator.ts` | `BrainOrchestrator` — main decide loop. Defaults to **shadow mode** (logs decisions, does not execute). |
+| `brain-memory.ts` | Qdrant vector store (`QDRANT_URL`, collection `janus_episodes`); `getEmbedding()` uses `OPENAI_API_KEY`. |
+| `brain-reflection.ts` | After a trade closes, reflects on the episode + realized PnL to produce learnings. |
+| `brain-evolution.ts` | Backtests stored strategies on history and evolves them. |
+| `brain-governor.ts` | Risk gate — approves/sizes brain decisions before execution. |
+| `brain-scheduler.ts` | Background scheduler — 15-min tick driving reflection/evolution. |
+| `tool-registry.ts` | `MarketSnapshot` + the tool surface exposed to the LLM. |
+| `paper-adapter.ts` | `ExecutionAdapter` implementation for paper execution. |
+| `schemas.ts` | `brainDecisionSchema` (zod) + `BrainDecision` type. Decision modes: hold / enter / scale_in / scale_out / exit / pause. |
+
+Frontend: `src/pages/BrainDashboard.tsx` consumes the `/api/brain/*` endpoints (including `/logs/stream` SSE).
+
+---
+
 ## tRPC Routers Reference
 
 All routers registered in `api/router.ts` under `appRouter`:
@@ -832,7 +869,12 @@ All routers registered in `api/router.ts` under `appRouter`:
 | `llm` | llm-router.ts | LLM key management, test, decision stream |
 | `logs` | logs-router.ts | system_logs query |
 | `telegram` | telegram-router.ts | Telegram config + test message |
-| `positionManager` | position-manager-router.ts | AI lifecycle status, config, stream *(add to router.ts)* |
+| `positionManager` | position-manager-router.ts | AI lifecycle status, config, stream |
+| `alerts` | alerts-router.ts | User alert rules CRUD + system/user alert streams |
+| `exports` | export-router.ts | Export account state + trade history |
+| `health` | health-router.ts | Liveness/health snapshot |
+
+> **AI Brain** is NOT a tRPC router — it is a plain Hono router mounted at `/api/brain` (see `api/boot.ts`). Endpoints: `POST /decide`, `GET /episodes`, `GET /strategies`, `GET /reflections`, `POST /evolution/run`, `POST /trigger-signal`, `GET /mode`, `GET /logs/stream` (SSE).
 
 ### Procedure types
 
@@ -974,7 +1016,7 @@ Canonical tracked instruments: `SUPPORTED_PAIRS` array in `api/services/binance.
 ## Known Quirks & Gotchas
 
 **Authentication & security**
-- `publicQuery` is used on most trading routes. `userId` is caller-supplied, not session-derived. This is a known security gap — do not widen it.
+- Trading / risk / portfolio routes now use `authedQuery` and derive `userId` from `ctx.user.id` (session), NOT from caller input. The old "caller-supplied userId" gap is closed for those routes. When adding endpoints, take `userId` from `ctx.user.id` — do not accept it as input.
 
 **Database**
 - `README.md` says MySQL. The codebase uses PostgreSQL. Ignore the README.
@@ -1020,7 +1062,7 @@ The production server:
 2. Mounts tRPC at `/api/trpc/*`
 3. Handles OAuth callback at `/api/oauth/callback`
 4. Attaches WebSocket server to the same HTTP port
-5. Starts all background services (CoinDCX WS, signal analysis, LLM advisor, position manager)
+5. Starts all background services (CoinDCX WS, signal analysis, LLM advisor, position manager, position reconciler, exit-manager, alert-engine, telegram command bot, liquidation monitor, AI Brain)
 
 ### Database migrations
 

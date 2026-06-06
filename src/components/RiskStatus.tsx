@@ -7,14 +7,14 @@ interface Props {
   userId: number;
 }
 
-export function RiskStatus({ userId }: Props) {
+export function RiskStatus(_props: Props) {
   const { data: risk, refetch } = trpc.trading.riskStatus.useQuery(
-    { userId },
+    undefined,
     { refetchInterval: 10_000 }
   );
 
   trpc.trading.riskAlertStream.useSubscription(
-    { userId },
+    undefined,
     {
       onData: (payload: unknown) => {
         const d = payload as { type: string; message: string };

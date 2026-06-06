@@ -27,8 +27,18 @@ export class KillSwitch {
     try {
       if (fs.existsSync(STATE_FILE)) {
         const data = fs.readFileSync(STATE_FILE, "utf-8");
-        this.state = JSON.parse(data);
-        if (this.state) {
+        const loaded = JSON.parse(data) as KillState | null;
+        // Shutdown triggers are restart artifacts — the previous process tripped
+        // the switch on SIGINT/SIGTERM purely to halt in-flight trading while
+        // exiting. They must NOT block trading on the next boot. Only real safety
+        // halts (drawdown, margin_breach, feed_failure, api_error, operator manual)
+        // should persist across a restart.
+        if (loaded && loaded.reason?.startsWith("shutdown_")) {
+          console.log(`[kill-switch] Ignoring persisted shutdown artifact (reason="${loaded.reason}") — clearing.`);
+          this.state = null;
+          this.saveState();
+        } else if (loaded) {
+          this.state = loaded;
           console.log(`[kill-switch] Loaded persistent state: type=${this.state.type} reason="${this.state.reason}"`);
         }
       }

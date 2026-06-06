@@ -1,4 +1,4 @@
-import { useRef, useMemo, useEffect } from "react";
+import { useRef, useEffect } from "react";
 import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
 
@@ -22,13 +22,12 @@ interface Props {
   userId: number;
 }
 
-export function ExitSignalToast({ userId }: Props) {
+export function ExitSignalToast(_props: Props) {
   const closePosition = trpc.trading.closePosition.useMutation();
   const utils = trpc.useUtils();
   // Deduplicate: only fire one toast per positionId until dismissed
   const shownRef = useRef(new Set<number>());
 
-  const userInput = useMemo(() => ({ userId }), [userId]);
 
   const onDataRef = useRef<(payload: unknown) => void>(() => {});
   useEffect(() => {
@@ -111,14 +110,14 @@ export function ExitSignalToast({ userId }: Props) {
   });
 
   trpc.trading.exitSignalStream.useSubscription(
-    userInput,
+    undefined,
     streamOpts.current
   );
 
   const prevPositionsRef = useRef<any[]>([]);
 
   trpc.trading.portfolioStream.useSubscription(
-    userInput,
+    undefined,
     {
       onData: async (data: any) => {
         const openPositions = data?.positions || [];

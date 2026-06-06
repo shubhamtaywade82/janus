@@ -1,4 +1,4 @@
-import type { BalanceSnapshot, PlaceOrderResult, PositionSnapshot } from "../../../application/ports/exchange-gateway.port.js";
+import type { BalanceSnapshot, PositionSnapshot } from "../../../application/ports/exchange-gateway.port.js";
 import type { Fill } from "../../../domain/fills/fill.js";
 import type { Order } from "../../../domain/orders/order.js";
 

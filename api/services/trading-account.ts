@@ -20,9 +20,9 @@ import {
   accountLedger,
   accountSnapshots,
   positions,
-  TradingAccount,
 } from "@db/schema";
 import { and, eq, desc } from "drizzle-orm";
+import type { TradingAccount } from "@db/schema";
 
 export type AccountMode = "live" | "paper" | "backtest";
 

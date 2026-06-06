@@ -21,16 +21,12 @@ const RiskMetrics = () => {
   const [portfolio, setPortfolio] = useState<any>(null);
 
   const { data: usdtWallet } = trpc.trading.futuresWallet.useQuery({
-    userId: 1,
     marginCurrency: "USDT",
   });
   const { data: inrWallet } = trpc.trading.futuresWallet.useQuery({
-    userId: 1,
     marginCurrency: "INR",
   });
-  const { data: crossMargin } = trpc.trading.crossMarginDetails.useQuery({
-    userId: 1,
-  });
+  const { data: crossMargin } = trpc.trading.crossMarginDetails.useQuery(undefined);
 
   const portfolioCallbackRef = useRef<(data: any) => void>(() => {});
   useEffect(() => {
@@ -47,7 +43,7 @@ const RiskMetrics = () => {
   });
 
   trpc.trading.portfolioStream.useSubscription(
-    { userId: 1 },
+    undefined,
     portfolioStreamOpts.current
   );
 
