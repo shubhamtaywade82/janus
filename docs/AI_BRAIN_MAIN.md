@@ -1,3 +1,5 @@
+> **Archive notice**: This document is an early design memo and is no longer the canonical reference. For the current AI Brain specification, see [`AI_BRAIN_CONSOLIDATED.md`](./AI_BRAIN_CONSOLIDATED.md).
+
 ## Direct decision
 
 Add the brain as a **separate orchestration layer** that sits above your existing Janus services.

@@ -1,3 +1,5 @@
+> **Archive notice**: This document is an advisory review and is no longer the canonical reference. For the current AI Brain specification, see [`AI_BRAIN_CONSOLIDATED.md`](./AI_BRAIN_CONSOLIDATED.md).
+
 I re-checked the repository and one important thing has changed since the earlier reviews:
 
 **You already started implementing the Brain architecture documentation inside the repository.**

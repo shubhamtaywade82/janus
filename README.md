@@ -19,7 +19,7 @@ graph TD
     subgraph BE["Backend (Hono 4 + Node.js)"]
         HTTP["HTTP :3010"]
         WS["WebSocket :3011 dev / :3010 prod"]
-        Routers["13 tRPC Routers"]
+        Routers["14 tRPC Routers"]
         HTTP --> Routers
         WS --> Routers
     end
@@ -142,7 +142,9 @@ Binance WS (public)  +  CoinDCX WS (private)
 │   ├── lib/
 │   │   ├── env.ts                     # Typed env vars (throws in prod if missing)
 │   │   ├── cookies.ts                 # Cookie read/write helpers
-│   │   └── http.ts                    # Lightweight fetch wrapper
+│   │   ├── http.ts                    # Lightweight fetch wrapper
+│   │   ├── crypto.ts                  # AES-256-GCM field-level encryption (ENCRYPTION_KEY)
+│   │   └── vite.ts                    # Static file serving helper for Vite dev server
 │   │
 │   ├── routers/
 │   │   ├── market-router.ts           # OHLC, order book, price-action analysis
@@ -157,7 +159,19 @@ Binance WS (public)  +  CoinDCX WS (private)
 │   │   ├── telegram-router.ts         # Telegram bot config + test message
 │   │   ├── export-router.ts           # CSV/JSON data export
 │   │   ├── health-router.ts           # System health + feed status
-│   │   └── brain-router.ts            # AI Brain ReAct loop (HTTP /api/brain)
+│   │   ├── brain-router.ts            # AI Brain Hono router (HTTP /api/brain)
+│   │   └── brain-trpc-router.ts       # AI Brain tRPC router (trpc.brain.*)
+│   │
+│   ├── brain/                         # Autonomous AI Brain (LLM decision loop, shadow-mode)
+│   │   ├── brain-orchestrator.ts      # BrainOrchestrator — main decide loop (shadowMode default)
+│   │   ├── brain-memory.ts            # Qdrant vector store — episode embeddings (getEmbedding)
+│   │   ├── brain-reflection.ts        # Post-trade reflection — learns from episode + realized PnL
+│   │   ├── brain-evolution.ts         # Backtests + evolves stored strategies
+│   │   ├── brain-governor.ts          # Approves/sizes brain decisions (risk gate)
+│   │   ├── brain-scheduler.ts         # Background scheduler (15-min tick: reflect/evolve)
+│   │   ├── tool-registry.ts           # MarketSnapshot + tools exposed to the LLM
+│   │   ├── paper-adapter.ts           # ExecutionAdapter — paper execution for brain
+│   │   └── schemas.ts                 # brainDecisionSchema (zod) + BrainDecision type
 │   │
 │   └── services/
 │       ├── market-state.ts            # MarketStateManager + RingBuffer per symbol
@@ -178,33 +192,34 @@ Binance WS (public)  +  CoinDCX WS (private)
 │       ├── telegram.ts                # Telegram notification service
 │       ├── telegram-bot.ts            # Polling command bot (/status /pause /resume)
 │       ├── ring-buffer.ts             # Fixed-capacity circular buffer
+│       ├── correlation-guard.ts       # Prevents building correlated positions
+│       ├── execution-providers.ts     # Order execution backend abstraction
+│       ├── knn-supertrend.ts          # KNN-based supertrend algorithm
+│       ├── liquidity-engine.ts        # Advanced liquidity analysis (sweep, absorption)
+│       ├── llm-events.ts              # EventEmitter for LLM state changes
+│       ├── ollama.ts                  # Ollama HTTP client wrapper
+│       ├── paper-wallet.ts            # Paper trading balance tracking
+│       ├── performance-tracker.ts     # Trade performance metrics (win rate, Sharpe, etc.)
+│       ├── regime-detector.ts         # Market regime classification
+│       ├── strategies.ts              # Strategy implementation library per regime
+│       ├── trading-account.ts         # Unified trading account abstraction (live + paper)
 │       │
-│       ├── position-manager/          # AI position lifecycle (self-contained)
-│       │   ├── index.ts               # Singleton export + wiring
-│       │   ├── types.ts               # PositionAction enum, ManagedPosition, config
-│       │   ├── event-bus.ts           # Typed EventEmitter (positionManagerBus)
-│       │   ├── position-store.ts      # In-memory hot state (O(1) lookup)
-│       │   ├── market-context.ts      # MarketContextBuilder (EMA/RSI/ATR/CVD)
-│       │   ├── bias-evaluator.ts      # STRONG_BULLISH → STRONG_BEARISH scorer
-│       │   ├── sl-calculator.ts       # SL: ATR → Swing → mid-price → percentage
-│       │   ├── tp-calculator.ts       # TP1/TP2/TP3 using R-multiples + EMA anchors
-│       │   ├── protection-manager.ts  # Auto-place SL/TP on unprotected positions
-│       │   ├── ai-advisor.ts          # AI call + 7-rule code fallback
-│       │   ├── llm-client.ts          # Paper → local Ollama; Live → cloud 3-key rotation
-│       │   ├── policy-guard.ts        # Validates AI actions against risk rules
-│       │   ├── opportunity-cost.ts    # Every 10min: KEEP / REDUCE / EXIT verdict
-│       │   ├── execution-manager.ts   # Maps action → exchange call / DB update
-│       │   └── position-lifecycle.ts  # Main orchestrator (sync + assess + act loops)
-│       │
-│       └── brain/                     # AI Brain — ReAct loop + memory (self-contained)
-│           ├── brain-orchestrator.ts  # ReAct executor (observe → think → act → reflect)
-│           ├── brain-memory.ts        # Vector store: past trades, strategies, outcomes
-│           ├── brain-scheduler.ts     # Periodic reflection + strategy evolution
-│           ├── brain-evolution.ts     # Learn from outcomes, generate rules
-│           ├── brain-reflection.ts    # Post-trade analysis: lessons learned
-│           ├── brain-governor.ts      # Risk constraints on brain outputs
-│           ├── tool-registry.ts       # Available tools (market snapshot, portfolio, etc.)
-│           └── schemas.ts             # Zod schemas for brain decision validation
+│       └── position-manager/          # AI position lifecycle (self-contained)
+│           ├── index.ts               # Singleton export + wiring
+│           ├── types.ts               # PositionAction enum, ManagedPosition, config
+│           ├── event-bus.ts           # Typed EventEmitter (positionManagerBus)
+│           ├── position-store.ts      # In-memory hot state (O(1) lookup)
+│           ├── market-context.ts      # MarketContextBuilder (EMA/RSI/ATR/CVD)
+│           ├── bias-evaluator.ts      # STRONG_BULLISH → STRONG_BEARISH scorer
+│           ├── sl-calculator.ts       # SL: ATR → Swing → mid-price → percentage
+│           ├── tp-calculator.ts       # TP1/TP2/TP3 using R-multiples + EMA anchors
+│           ├── protection-manager.ts  # Auto-place SL/TP on unprotected positions
+│           ├── ai-advisor.ts          # AI call + 7-rule code fallback
+│           ├── llm-client.ts          # Paper → local Ollama; Live → cloud 3-key rotation
+│           ├── policy-guard.ts        # Validates AI actions against risk rules
+│           ├── opportunity-cost.ts    # Every 10min: KEEP / REDUCE / EXIT verdict
+│           ├── execution-manager.ts   # Maps action → exchange call / DB update
+│           └── position-lifecycle.ts  # Main orchestrator (sync + assess + act loops)
 │
 ├── contracts/
 │   ├── constants.ts                   # Session config, ErrorMessages, Paths
@@ -225,7 +240,7 @@ Binance WS (public)  +  CoinDCX WS (private)
 │   ├── components/ui/                 # shadcn/ui primitives — do not modify
 │   ├── hooks/                         # useAuth, use-mobile
 │   ├── pages/                         # Dashboard, Signals, Portfolio, AiAnalysis,
-│   │                                  # BrainDashboard, RiskMetrics, Logs, Login
+│   │                                  # BrainDashboard, RiskMetrics, Logs, Login, Home, NotFound
 │   └── lib/utils.ts                   # cn() helper (clsx + tailwind-merge)
 │
 └── scratch/                           # Throwaway scripts — never import in production
@@ -268,6 +283,7 @@ All services start on boot inside `api/boot.ts`. Graceful shutdown (SIGTERM/SIGI
 | `telegram` | `config`, `testMessage` | Telegram bot setup + test |
 | `exports` | `exportPositions`, `exportTrades`, `exportLogs` | CSV/JSON data export |
 | `health` | `status`, `dbCheck`, `feedHealth` | System health + feed status |
+| `brain` | `episodes`, `reflections`, `decisionStream` | AI Brain episodes, reflections, decision stream |
 
 ---
 
@@ -327,6 +343,11 @@ OWNER_UNION_ID=<admin-union-id>            # first login becomes admin
 PLACE_ORDERS=false      # set to "true" to send real orders to CoinDCX
 AUTO_EXECUTE=false      # set to "true" to enable the auto-executor
 BOT_AUTO_START=false    # set to "true" to auto-start executor on boot
+PAPER_TRADING=false     # set to "true" to force all positions as paper (no exchange orders)
+USE_TESTNET=false       # set to "true" to route Binance data to testnet endpoints
+
+# ── Security ──────────────────────────────────────────────────────
+ENCRYPTION_KEY=         # 32-byte hex key for AES-256-GCM API credential encryption (required in prod)
 
 # ── LLM — Entry Signal Advisor ─────────────────────────────────────
 OLLAMA_ENDPOINT=http://localhost:11434
