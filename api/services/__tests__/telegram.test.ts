@@ -12,7 +12,6 @@ describe("sendTelegramMessage rate limiting", () => {
   });
 
   it("drops second message sent within MIN_SEND_INTERVAL_MS", async () => {
-    const calls: string[] = [];
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       status: 200,
