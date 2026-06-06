@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { observable } from "@trpc/server/observable";
-import { createRouter, publicQuery } from "../middleware";
+import { createRouter, authedQuery } from "../middleware";
 import { analyzeAll, klinesFromBinance } from "../services/price-action";
 import { subscribeToSymbol, unsubscribeFromSymbol, marketEvents } from "../services/streaming";
 import type { LiquidityEvent } from "../services/liquidity-engine";
@@ -67,12 +67,12 @@ function resampleFromOneMin(
 
 export const marketRouter = createRouter({
   // ─── Get supported trading pairs ───
-  pairs: publicQuery.query(() => {
+  pairs: authedQuery.query(() => {
     return SUPPORTED_PAIRS;
   }),
 
   // ─── Fetch OHLC Klines from Binance ───
-  klines: publicQuery
+  klines: authedQuery
     .input(
       z.object({
         symbol: z.string().default("BTCUSDT"),
@@ -148,7 +148,7 @@ export const marketRouter = createRouter({
 
   // ─── Fetch 24h ticker stats ───
   // ─── SMC / ICT Price Action Analysis ───
-  priceAction: publicQuery
+  priceAction: authedQuery
     .input(z.object({
       symbol:   z.string().default("BTCUSDT"),
       interval: z.string().default("1m"),
@@ -188,7 +188,7 @@ export const marketRouter = createRouter({
       return analyzeAll(klines);
     }),
 
-  ticker24h: publicQuery
+  ticker24h: authedQuery
     .input(
       z.object({
         symbol: z.string().optional(),
@@ -203,7 +203,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Fetch order book depth ───
-  orderBook: publicQuery
+  orderBook: authedQuery
     .input(
       z.object({
         symbol: z.string().default("BTCUSDT"),
@@ -231,7 +231,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Fetch recent trades ───
-  recentTrades: publicQuery
+  recentTrades: authedQuery
     .input(
       z.object({
         symbol: z.string().default("BTCUSDT"),
@@ -260,7 +260,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Fetch aggregated trades ───
-  aggTrades: publicQuery
+  aggTrades: authedQuery
     .input(
       z.object({
         symbol: z.string().default("BTCUSDT"),
@@ -276,7 +276,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Fetch mark price ───
-  markPrice: publicQuery
+  markPrice: authedQuery
     .input(z.object({ symbol: z.string().default("BTCUSDT") }))
     .query(async ({ input }) => {
       try {
@@ -287,7 +287,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Fetch funding rate ───
-  fundingRate: publicQuery
+  fundingRate: authedQuery
     .input(z.object({ symbol: z.string().default("BTCUSDT") }))
     .query(async ({ input }) => {
       try {
@@ -298,7 +298,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Get cached market data ───
-  cachedKlines: publicQuery
+  cachedKlines: authedQuery
     .input(
       z.object({
         symbol: z.string().default("BTCUSDT"),
@@ -323,7 +323,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Order Book Subscription ───
-  orderBookStream: publicQuery
+  orderBookStream: authedQuery
     .input(z.object({ symbol: z.string().default("BTCUSDT") }))
     .subscription(({ input }) => {
       return observable((emit) => {
@@ -339,7 +339,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Recent Trades Subscription ───
-  recentTradesStream: publicQuery
+  recentTradesStream: authedQuery
     .input(z.object({ symbol: z.string().default("BTCUSDT") }))
     .subscription(({ input }) => {
       return observable((emit) => {
@@ -355,7 +355,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Ticker Subscription ───
-  tickerStream: publicQuery
+  tickerStream: authedQuery
     .input(z.object({ symbol: z.string().default("BTCUSDT") }))
     .subscription(({ input }) => {
       return observable((emit) => {
@@ -371,7 +371,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Kline Subscription ───
-  klineStream: publicQuery
+  klineStream: authedQuery
     .input(z.object({ symbol: z.string().default("BTCUSDT") }))
     .subscription(({ input }) => {
       return observable((emit) => {
@@ -387,7 +387,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Liquidity Event Stream ───
-  liquidityEventStream: publicQuery
+  liquidityEventStream: authedQuery
     .input(z.object({ symbol: z.string().default("BTCUSDT") }))
     .subscription(({ input }) => {
       return observable<LiquidityEvent>((emit) => {
@@ -402,7 +402,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Get Live State & Derived Metrics from Memory ───
-  liveState: publicQuery
+  liveState: authedQuery
     .input(z.object({ symbol: z.string().default("BTCUSDT") }))
     .query(({ input }) => {
       const state = marketStateManager.get(input.symbol);
@@ -422,7 +422,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── CVD History (tick-level, from in-memory cvdWindow) ───
-  cvdHistory: publicQuery
+  cvdHistory: authedQuery
     .input(z.object({ symbol: z.string().default("BTCUSDT") }))
     .query(({ input }) => {
       const state = marketStateManager.get(input.symbol.toUpperCase());
@@ -437,7 +437,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── CVD Stream (fires on each new trade tick) ───
-  cvdStream: publicQuery
+  cvdStream: authedQuery
     .input(z.object({ symbol: z.string().default("BTCUSDT") }))
     .subscription(({ input }) => {
       return observable<{ ts: number; delta: number; cumulative: number }>((emit) => {
@@ -454,7 +454,7 @@ export const marketRouter = createRouter({
     }),
 
   // ─── Get Live State & Derived Metrics for All Supported Symbols ───
-  allLiveStates: publicQuery
+  allLiveStates: authedQuery
     .query(() => {
       const results: Record<string, any> = {};
       for (const pair of SUPPORTED_PAIRS) {

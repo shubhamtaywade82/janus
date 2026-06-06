@@ -160,6 +160,12 @@ if (env.isProduction) {
   console.log(`[ws] Production WebSocket Server attached to HTTP port ${port}`);
 }
 
+// Restore persisted state from DB before starting any trading services
+import { loadRiskSessionsFromDb } from "./services/risk-engine";
+import { globalKillSwitch } from "./services/kill-switch";
+loadRiskSessionsFromDb().catch((err) => console.error("[risk-engine] Failed to restore sessions from DB:", err));
+globalKillSwitch.initFromDb().catch((err) => console.error("[kill-switch] Failed to restore state from DB:", err));
+
 // Start CoinDCX Private WebSocket client
 import { initCoinDCXPrivateWs } from "./services/coindcx-ws";
 initCoinDCXPrivateWs().catch((err) => {
@@ -219,7 +225,7 @@ startLiquidationMonitor(10_000);
 // Called on SIGTERM, SIGINT, uncaughtException, and unhandledRejection.
 // Stops all background services before exit so PM2/Docker can restart cleanly.
 import { stopTelegramCommandBot } from "./services/telegram-bot";
-import { globalKillSwitch } from "./services/kill-switch";
+// globalKillSwitch already imported above for DB state init
 
 let _shutdownInProgress = false;
 

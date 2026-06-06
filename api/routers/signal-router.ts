@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createRouter, publicQuery } from "../middleware";
+import { createRouter, authedQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import {
   fundingRateHistory,
@@ -1712,7 +1712,7 @@ export function startAutoAnalysis(strategyType: StrategyType = "intraday", autoS
 
 export const signalRouter = createRouter({
   // ─── Get latest signals ───
-  latest: publicQuery
+  latest: authedQuery
     .input(
       z.object({
         symbol: z.string().optional(),
@@ -1765,7 +1765,7 @@ export const signalRouter = createRouter({
     }),
 
   // ─── Get gated signals only ───
-  gated: publicQuery
+  gated: authedQuery
     .input(z.object({ limit: z.number().default(10) }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -1778,7 +1778,7 @@ export const signalRouter = createRouter({
     }),
 
   // ─── Institutional Level Structured Query ───
-  comprehensiveAnalysis: publicQuery
+  comprehensiveAnalysis: authedQuery
     .input(
       z.object({
         symbol: z.string().default("BTCUSDT"),
@@ -1990,7 +1990,7 @@ export const signalRouter = createRouter({
       };
     }),
 
-  evaluate: publicQuery
+  evaluate: authedQuery
     .input(
       z.object({
         symbol: z.string(),
@@ -2035,7 +2035,7 @@ export const signalRouter = createRouter({
       return inserted;
     }),
 
-  forceRegimeEvaluation: publicQuery
+  forceRegimeEvaluation: authedQuery
     .input(z.object({ symbol: z.string() }))
     .mutation(async ({ input }) => {
       const regime = await detectRegimeForSymbol(input.symbol);
@@ -2053,7 +2053,7 @@ export const signalRouter = createRouter({
       return regime;
     }),
 
-  getSymbolStrategy: publicQuery
+  getSymbolStrategy: authedQuery
     .input(z.object({ symbol: z.string() }))
     .query(({ input }) => {
       return {
@@ -2062,7 +2062,7 @@ export const signalRouter = createRouter({
       };
     }),
 
-  setManualStrategy: publicQuery
+  setManualStrategy: authedQuery
     .input(
       z.object({
         strategy: z.enum(["scalping", "intraday", "swing", "grid", "momentum_reversal", "bb_reversion", "ml_sizing", "scalping_micro"]),
@@ -2080,7 +2080,7 @@ export const signalRouter = createRouter({
       return { success: true, strategy: activeStrategyType, autoRegime: autoRegimeDetect };
     }),
 
-  analyze: publicQuery
+  analyze: authedQuery
     .input(z.object({ symbol: z.string() }))
     .query(async ({ input }) => {
       const binanceSymbol = input.symbol.toUpperCase();
@@ -2103,7 +2103,7 @@ export const signalRouter = createRouter({
       return analysis;
     }),
 
-  analyzeAll: publicQuery.query(async () => {
+  analyzeAll: authedQuery.query(async () => {
     const results = [];
     for (const pair of SUPPORTED_PAIRS) {
       try {
@@ -2131,7 +2131,7 @@ export const signalRouter = createRouter({
     return results;
   }),
 
-  history: publicQuery
+  history: authedQuery
     .input(
       z.object({
         symbol: z.string(),
@@ -2148,7 +2148,7 @@ export const signalRouter = createRouter({
         .limit(input.limit);
     }),
 
-  stats: publicQuery.query(async () => {
+  stats: authedQuery.query(async () => {
     const db = getDb();
     const allSignals = await db.select().from(signals).orderBy(desc(signals.createdAt)).limit(500);
     
@@ -2175,7 +2175,7 @@ export const signalRouter = createRouter({
     };
   }),
 
-  stream: publicQuery.subscription(() => {
+  stream: authedQuery.subscription(() => {
     return observable<{ updatedAt: number }>((emit) => {
       const onUpdate = () => emit.next({ updatedAt: Date.now() });
       signalEvents.on("update", onUpdate);
@@ -2183,7 +2183,7 @@ export const signalRouter = createRouter({
     });
   }),
 
-  regimeStatus: publicQuery
+  regimeStatus: authedQuery
     .input(z.object({ symbol: z.string().optional() }).optional())
     .query(({ input }) => {
       if (input?.symbol) {
@@ -2210,7 +2210,7 @@ export const signalRouter = createRouter({
       return { symbols: all, fallbackStrategy: activeStrategyType, autoRegime: autoRegimeDetect };
     }),
 
-  regimeStream: publicQuery.subscription(() => {
+  regimeStream: authedQuery.subscription(() => {
     return observable((emit) => {
       const onSwitch = (data: unknown) => emit.next(data);
       signalEvents.on("strategy-switch", onSwitch);
@@ -2218,7 +2218,7 @@ export const signalRouter = createRouter({
     });
   }),
 
-  knnLatest: publicQuery
+  knnLatest: authedQuery
     .input(z.object({ symbol: z.string().optional() }))
     .query(({ input }) => {
       if (input.symbol) {
@@ -2228,7 +2228,7 @@ export const signalRouter = createRouter({
       return Object.fromEntries(knnSnapshotCache.entries()) as Record<string, KnnSupertrendSnapshot>;
     }),
 
-  knnStream: publicQuery.subscription(() => {
+  knnStream: authedQuery.subscription(() => {
     return observable<{ symbol: string; snapshot: KnnSupertrendSnapshot }>((emit) => {
       const onSnapshot = (data: { symbol: string; snapshot: KnnSupertrendSnapshot }) => emit.next(data);
       signalEvents.on("knn-snapshot", onSnapshot);

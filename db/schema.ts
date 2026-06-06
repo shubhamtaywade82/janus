@@ -11,7 +11,9 @@ import {
   boolean,
   index,
   unique,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
+import { sql } from "drizzle-orm";
 
 // ─── Enums (PostgreSQL custom types) ───
 export const roleEnum = pgEnum("role", ["user", "admin"]);
@@ -153,6 +155,9 @@ export const positions = pgTable(
   (table) => ({
     userIdStatusIdx: index("idx_positions_user_status").on(table.userId, table.status),
     symbolIdx: index("idx_positions_symbol").on(table.symbol),
+    uqOpenPosition: uniqueIndex("uq_positions_open")
+      .on(table.userId, table.symbol, table.side)
+      .where(sql`${table.status} = 'open'`),
   })
 );
 
@@ -748,3 +753,38 @@ export const paperEquitySnapshots = pgTable("paper_equity_snapshots", {
 });
 
 export type PaperEquitySnapshot = typeof paperEquitySnapshots.$inferSelect;
+
+// ─── Risk Sessions (daily trading circuit-breaker state, persisted across restarts) ───
+export const riskSessions = pgTable(
+  "risk_sessions",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    date: varchar("date", { length: 10 }).notNull(), // YYYY-MM-DD UTC
+    startingBalance: decimal("starting_balance", { precision: 18, scale: 8 }).default("0").notNull(),
+    realizedPnl: decimal("realized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
+    tradeCount: integer("trade_count").default(0).notNull(),
+    consecutiveLosses: integer("consecutive_losses").default(0).notNull(),
+    inCooldown: boolean("in_cooldown").default(false).notNull(),
+    cooldownUntil: timestamp("cooldown_until"),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    uqRiskSessionUserDate: unique("uq_risk_session_user_date").on(table.userId, table.date),
+    userDateIdx: index("idx_risk_sessions_user_date").on(table.userId, table.date),
+  })
+);
+
+export type RiskSessionRow = typeof riskSessions.$inferSelect;
+
+// ─── Kill Switch State (single-row table for atomic halt persistence across restarts) ───
+export const killSwitchState = pgTable("kill_switch_state", {
+  key: varchar("key", { length: 10 }).primaryKey().default("global"),
+  isActive: boolean("is_active").default(false).notNull(),
+  type: varchar("type", { length: 30 }),
+  reason: text("reason"),
+  triggeredAt: decimal("triggered_at", { precision: 16, scale: 0 }), // epoch ms
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type KillSwitchStateRow = typeof killSwitchState.$inferSelect;
