@@ -22,7 +22,7 @@ import { observable } from "@trpc/server/observable";
 import { tradingEvents, initCoinDCXPrivateWs, userBalancesCache, userPositionsCache, markPriceCache } from "../services/coindcx-ws";
 import { getFeeBreakevenMap, startExitMonitor, stopExitMonitor } from "../services/exit-manager";
 import { latestTickerCache, subscribeToSymbol } from "../services/streaming";
-import { globalRiskEngine, getOrCreateSession, sessions, riskEvents } from "../services/risk-engine";
+import { globalRiskEngine, getOrCreateSession, updateSession, sessions, riskEvents } from "../services/risk-engine";
 import { registerPositionForTrailing, unregisterPosition } from "../services/trailing-stop";
 import { globalKillSwitch } from "../services/kill-switch";
 import { releasePaperMargin } from "../services/paper-wallet";
@@ -938,7 +938,7 @@ export const tradingRouter = createRouter({
       const pnl = parseFloat(input.realizedPnl);
       const session = getOrCreateSession(userId, 0);
       const updatedSession = globalRiskEngine.recordTrade(session, { pnl });
-      sessions.set(userId, updatedSession);
+      updateSession(updatedSession);
 
       unregisterPosition(input.id);
       tradingEvents.emit(`portfolio-update:${userId}`);

@@ -1,4 +1,7 @@
 import { EventEmitter } from "events";
+import { getDb } from "../queries/connection";
+import { riskSessions } from "@db/schema";
+import { eq, and } from "drizzle-orm";
 
 export const riskEvents = new EventEmitter();
 riskEvents.setMaxListeners(20);
@@ -138,7 +141,7 @@ export const DEFAULT_RISK_CONFIG: RiskConfig = {
   marginHealthHaltPct: 0.85,
 };
 
-// In-memory session store — keyed by userId, resets daily at UTC midnight
+// In-memory session store — L1 cache keyed by userId, persisted to DB as L2
 export const sessions = new Map<number, RiskSession>();
 
 export function getOrCreateSession(userId: number, walletBalance: number): RiskSession {
@@ -162,6 +165,64 @@ export function getOrCreateSession(userId: number, walletBalance: number): RiskS
 
 export function updateSession(session: RiskSession) {
   sessions.set(session.userId, session);
+  _persistSessionToDb(session).catch((err) =>
+    console.error("[risk-engine] Failed to persist session to DB:", err)
+  );
+}
+
+async function _persistSessionToDb(session: RiskSession): Promise<void> {
+  const db = getDb();
+  await db
+    .insert(riskSessions)
+    .values({
+      userId: session.userId,
+      date: session.date,
+      startingBalance: String(session.startingBalance),
+      realizedPnl: String(session.realizedPnl),
+      tradeCount: session.tradeCount,
+      consecutiveLosses: session.consecutiveLosses,
+      inCooldown: session.inCooldown,
+      cooldownUntil: session.cooldownUntil ? new Date(session.cooldownUntil) : null,
+      updatedAt: new Date(),
+    })
+    .onConflictDoUpdate({
+      target: [riskSessions.userId, riskSessions.date],
+      set: {
+        startingBalance: String(session.startingBalance),
+        realizedPnl: String(session.realizedPnl),
+        tradeCount: session.tradeCount,
+        consecutiveLosses: session.consecutiveLosses,
+        inCooldown: session.inCooldown,
+        cooldownUntil: session.cooldownUntil ? new Date(session.cooldownUntil) : null,
+        updatedAt: new Date(),
+      },
+    });
+}
+
+// Called once at startup to reload today's sessions from DB into memory cache.
+export async function loadRiskSessionsFromDb(): Promise<void> {
+  const db = getDb();
+  const today = new Date().toISOString().slice(0, 10);
+  const rows = await db
+    .select()
+    .from(riskSessions)
+    .where(eq(riskSessions.date, today));
+
+  for (const row of rows) {
+    sessions.set(row.userId, {
+      userId: row.userId,
+      date: row.date,
+      startingBalance: parseFloat(row.startingBalance),
+      realizedPnl: parseFloat(row.realizedPnl),
+      tradeCount: row.tradeCount,
+      consecutiveLosses: row.consecutiveLosses,
+      inCooldown: row.inCooldown,
+      cooldownUntil: row.cooldownUntil ? row.cooldownUntil.getTime() : null,
+    });
+  }
+  if (rows.length > 0) {
+    console.log(`[risk-engine] Restored ${rows.length} session(s) from DB for ${today}`);
+  }
 }
 
 export const globalRiskEngine = new RiskEngine(DEFAULT_RISK_CONFIG);
