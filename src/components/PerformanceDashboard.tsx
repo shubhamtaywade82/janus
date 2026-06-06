@@ -183,7 +183,7 @@ function StatCardLarge({
   );
 }
 
-export function PerformanceDashboard({ userId = 1, isFullPage = false }: { userId?: number; isFullPage?: boolean }) {
+export function PerformanceDashboard({ isFullPage = false }: { userId?: number; isFullPage?: boolean }) {
   const { data: metrics } = trpc.autoExecutor.metrics.useQuery(undefined, {
     refetchInterval: 30_000,
   });

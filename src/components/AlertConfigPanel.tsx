@@ -120,7 +120,7 @@ export function AlertConfigPanel({ onChange }: Props) {
           <div className="border-t border-[#27272a] mt-2 pt-2 flex gap-2">
             <button onClick={() => setCfg(ALERT_DEFAULTS)}
               className="text-[9px] text-[#52525b] hover:text-[#f4f4f5]">reset</button>
-            <button onClick={() => setCfg(Object.fromEntries(Object.keys(ALERT_DEFAULTS).map(k => [k, false])) as AlertConfig)}
+            <button onClick={() => setCfg(Object.fromEntries(Object.keys(ALERT_DEFAULTS).map(k => [k, false])) as unknown as AlertConfig)}
               className="text-[9px] text-[#52525b] hover:text-[#f4f4f5]">all off</button>
           </div>
         </div>

@@ -44,7 +44,6 @@ export default function BrainDashboard() {
     { enabled: tradingMode === "live", refetchInterval: 5000 }
   );
 
-  const usdtInrRate = livePortfolioData ? parseFloat(livePortfolioData.usdtInrRate || "89.0") : 89.0;
   const isPaper = tradingMode === "paper";
 
   const availableEquity = useMemo(() => {
@@ -55,16 +54,6 @@ export default function BrainDashboard() {
     }
   }, [isPaper, paperWalletData, livePortfolioData]);
 
-  const availableToTrade = useMemo(() => {
-    if (isPaper) {
-      return paperWalletData?.balance ?? 10000;
-    } else {
-      if (!livePortfolioData) return 0;
-      const rawAvail = parseFloat(livePortfolioData.availableInr || "0");
-      const isCcyInr = livePortfolioData.walletCurrency === "INR";
-      return isCcyInr ? rawAvail / usdtInrRate : rawAvail;
-    }
-  }, [isPaper, paperWalletData, livePortfolioData, usdtInrRate]);
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
   const SYMBOLS = [

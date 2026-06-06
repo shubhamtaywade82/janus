@@ -140,7 +140,7 @@ export function ChartOverlayPanel({ onChange }: Props) {
               className="flex-1 text-[9px] text-[#52525b] hover:text-[#f4f4f5] py-0.5"
             >reset</button>
             <button
-              onClick={() => setToggles(Object.fromEntries(LAYERS.map((l) => [l.key, false])) as OverlayToggles)}
+              onClick={() => setToggles(Object.fromEntries(LAYERS.map((l) => [l.key, false])) as unknown as OverlayToggles)}
               className="flex-1 text-[9px] text-[#52525b] hover:text-[#f4f4f5] py-0.5"
             >clear all</button>
           </div>

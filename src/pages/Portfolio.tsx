@@ -374,7 +374,7 @@ export default function Portfolio() {
     { refetchInterval: 30000 }
   );
   const { data: tradeHistory } = trpc.trading.trades.useQuery(
-    undefined,
+    {},
     { refetchInterval: 30000 }
   );
 

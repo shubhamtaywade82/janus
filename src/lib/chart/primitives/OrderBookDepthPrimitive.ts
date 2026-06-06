@@ -2,7 +2,6 @@ import type { ISeriesPrimitive, SeriesAttachedParameter, Time } from "lightweigh
 import type { CanvasRenderingTarget2D } from "fancy-canvas";
 
 const PROFILE_WIDTH_PCT = 0.18;  // 18% of chart width
-const BAR_GAP = 0.5;
 
 export interface OrderBookDepthData {
   bids: [number, number][];

@@ -117,7 +117,7 @@ export function ExitSignalToast({}: Props) {
   const prevPositionsRef = useRef<any[]>([]);
 
   trpc.trading.portfolioStream.useSubscription(
-    userInput,
+    undefined,
     {
       onData: async (data: any) => {
         const openPositions = data?.positions || [];
