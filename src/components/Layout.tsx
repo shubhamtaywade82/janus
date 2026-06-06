@@ -55,6 +55,29 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
   });
   trpc.alerts.userAlertStream.useSubscription(undefined, userAlertStreamOpts.current);
 
+  // ─── Backend system-alert stream → in-browser toast + badge ───
+  // These are the SAME transitions the bot/strategy reasons about (BOS, CHoCH,
+  // KNN bias flip, SuperTrend flip, rejection, etc.) — emitted by the backend
+  // analysis loop regardless of bot state. Source of truth for "what the bot sees".
+  const SYSTEM_ALERT_EMOJI: Record<string, string> = {
+    bos: "⬆️", choch: "🔄", knn_bias_flip: "🤖", supertrend_flip: "⚡",
+    direction_flip: "↔️", gated_flip: "🎯", knn_rejection: "🛑",
+    ema_cross: "📈", rsi_extreme: "⚠️",
+  };
+  const systemAlertStreamOpts = useRef({
+    onData: (event: { symbol: string; type: string; direction: string | null; message: string }) => {
+      playAlertChime();
+      const sym = event.symbol.replace("B-", "").replace("_", "");
+      const emoji = SYSTEM_ALERT_EMOJI[event.type] ?? "📡";
+      const title = `${emoji} ${sym} · ${event.type.replace(/_/g, " ").toUpperCase()}`;
+      const fn = event.direction === "bullish" ? toast.success
+        : event.direction === "bearish" ? toast.error : toast.info;
+      fn(title, { description: event.message, duration: 6000 });
+      setActiveAlertsCount((prev) => prev + 1);
+    },
+  });
+  trpc.alerts.systemAlertStream.useSubscription(undefined, systemAlertStreamOpts.current);
+
   // ─── Global Signal Stream — direction / gate flip toasts (UI only) ───
   const prevSignalsRef = useRef<Map<string, { direction: string; isGated: boolean; compositeScore: number }>>(new Map());
   const isInitialRef = useRef(true);
