@@ -67,14 +67,14 @@ class AlertEngine {
 
   // ─── Storm cooldown check ──────────────────────────────────────────────────
 
-  private isStormCooled(symbol: string, type: string): boolean {
-    const key = `${symbol}:${type}`;
+  private isStormCooled(symbol: string, type: string, userId: number): boolean {
+    const key = `${userId}:${symbol}:${type}`;
     const last = stormCooldownMap.get(key) ?? 0;
     return Date.now() - last < STORM_COOLDOWN_MS;
   }
 
-  private markStormCooldown(symbol: string, type: string): void {
-    stormCooldownMap.set(`${symbol}:${type}`, Date.now());
+  private markStormCooldown(symbol: string, type: string, userId: number): void {
+    stormCooldownMap.set(`${userId}:${symbol}:${type}`, Date.now());
   }
 
   // ─── User-defined rule evaluation ─────────────────────────────────────────
@@ -96,8 +96,8 @@ class AlertEngine {
       const lastFired = ruleCooldownMap.get(rule.id) ?? 0;
       if (now - lastFired < rule.cooldownSeconds * 1_000) continue;
 
-      // Global storm protection per symbol:type
-      if (this.isStormCooled(rule.symbol, rule.type)) continue;
+      // Per-user storm protection per symbol:type
+      if (this.isStormCooled(rule.symbol, rule.type, rule.userId)) continue;
 
       const state = marketStateManager.get(rule.symbol);
       if (!state) continue;
@@ -106,7 +106,7 @@ class AlertEngine {
       if (!fired) continue;
 
       ruleCooldownMap.set(rule.id, now);
-      this.markStormCooldown(rule.symbol, rule.type);
+      this.markStormCooldown(rule.symbol, rule.type, rule.userId);
       triggered.push({ rule, message });
     }
 

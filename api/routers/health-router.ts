@@ -1,4 +1,4 @@
-import { createRouter, publicQuery } from "../middleware";
+import { createRouter, publicQuery, authedQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { signals } from "@db/schema";
 import { desc } from "drizzle-orm";
@@ -27,8 +27,8 @@ export const healthRouter = createRouter({
     };
   }),
 
-  // Detailed health — all subsystem checks
-  detailed: publicQuery.query(async () => {
+  // Detailed health — all subsystem checks (requires auth — exposes kill-switch state and PnL)
+  detailed: authedQuery.query(async () => {
     const db = getDb();
     const now = Date.now();
 

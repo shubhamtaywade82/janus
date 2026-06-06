@@ -57,3 +57,12 @@ export const env = {
   // Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
   encryptionKey: process.env.ENCRYPTION_KEY ?? "",
 };
+
+// Warn loudly in production if ENCRYPTION_KEY is not set — exchange API credentials will be stored as cleartext.
+if (process.env.NODE_ENV === "production" && !process.env.ENCRYPTION_KEY) {
+  console.error(
+    "[env] CRITICAL: ENCRYPTION_KEY is not set. Exchange API credentials will be stored as plaintext. " +
+    "Generate a key with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\" " +
+    "and set it as ENCRYPTION_KEY in your environment."
+  );
+}
