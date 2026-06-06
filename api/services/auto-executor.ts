@@ -376,6 +376,8 @@ export class AutoExecutor {
 
     // Gate 9: LLM Advisor (optional)
     let sizeMult = 1.0;
+    let slPctOverride: number | undefined;
+    let tp1PctOverride: number | undefined;
     let llmDecision: ExecutorDecision["llmDecision"] | undefined;
     const regimeData = latestRegimeCache.get("BTCUSDT");
 
@@ -419,6 +421,8 @@ export class AutoExecutor {
         return this.skip(signal, `LLM skip (${advice.confidence}%): ${advice.reasoning}`, { llmDecision });
       }
       sizeMult = advice.sizeMult ?? 1.0;
+      slPctOverride = advice.stopLossPct;
+      tp1PctOverride = advice.takeProfitPct;
     }
 
     // Position sizing — 4-level price fallback chain
@@ -501,8 +505,8 @@ export class AutoExecutor {
       console.warn(`[auto-executor] Failed to fetch instrument info for precision mapping:`, err);
     }
     const size = rawSize;
-    const slPct = parseFloat(config.stopLossPct ?? "0.015");
-    const tp1Pct = parseFloat(config.tp1Pct ?? "0.015");
+    const slPct = slPctOverride ?? parseFloat(config.stopLossPct ?? "0.015");
+    const tp1Pct = tp1PctOverride ?? parseFloat(config.tp1Pct ?? "0.015");
 
     const stopLoss = side === "long"
       ? currentPrice * (1 - slPct)

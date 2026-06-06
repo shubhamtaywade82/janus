@@ -3,6 +3,7 @@ import { toolRegistry } from "./tool-registry";
 import { getDb } from "../queries/connection";
 import { brainEpisodes } from "@db/schema";
 import { brainDecisionSchema, BrainDecision } from "./schemas";
+import { brainGovernor } from "./brain-governor";
 
 export class BrainOrchestrator {
   private shadowMode: boolean;
@@ -153,7 +154,24 @@ ${JSON.stringify(currentContext, null, 2)}
       };
     }
 
-    // 5. Store the decision episode in the PostgreSQL database
+    // 5. Run Safety Governor Check if not in shadow mode
+    let approved = true;
+    let governorResult: any = { approved: true };
+    if (!this.shadowMode) {
+      try {
+        governorResult = await brainGovernor.check(userId, parsedDecision, currentContext);
+        approved = governorResult.approved;
+        if (approved && governorResult.adjustedSizePct !== undefined) {
+          parsedDecision.sizePct = governorResult.adjustedSizePct;
+        }
+      } catch (govErr: any) {
+        console.error("[Brain Orchestrator] Governor check error:", govErr.message);
+        approved = false;
+        governorResult = { approved: false, reason: `Governor crash: ${govErr.message}` };
+      }
+    }
+
+    // 6. Store the decision episode in the PostgreSQL database
     let insertedId = 0;
     try {
       const [result] = await db.insert(brainEpisodes).values({
@@ -163,8 +181,10 @@ ${JSON.stringify(currentContext, null, 2)}
         observation: currentContext,
         reasoning: conversationLog,
         proposedAction: parsedDecision,
-        governorJson: { shadowMode: this.shadowMode, approved: true },
-        actualAction: this.shadowMode ? { status: "shadow_logged" } : undefined,
+        governorJson: { shadowMode: this.shadowMode, ...governorResult },
+        actualAction: this.shadowMode 
+          ? { status: "shadow_logged" } 
+          : (approved ? { status: "governor_approved" } : { status: "governor_rejected", reason: governorResult.reason }),
       }).returning({ id: brainEpisodes.id });
 
       insertedId = result.id;
@@ -175,9 +195,10 @@ ${JSON.stringify(currentContext, null, 2)}
 
     return {
       episodeId: insertedId,
-      approved: true, // Auto-approved in shadow mode
+      approved,
       decision: parsedDecision,
-      shadowMode: this.shadowMode
+      shadowMode: this.shadowMode,
+      rejectReason: governorResult.reason
     };
   }
 }

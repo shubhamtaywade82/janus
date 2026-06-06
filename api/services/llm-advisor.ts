@@ -43,6 +43,8 @@ export interface LlmDecision {
   keyUsed: string;
   latencyMs: number;
   error?: string;
+  stopLossPct?: number;
+  takeProfitPct?: number;
 }
 
 interface LlmKey {
@@ -299,6 +301,39 @@ sizeMult: 0.5 (reduce) | 1.0 (normal) | 1.5 (increase, only if very high convict
   }
 
   async analyzeSignal(ctx: SignalContext, depth = 0): Promise<LlmDecision> {
+    const t0 = Date.now();
+    try {
+      const { BrainOrchestrator } = await import("../brain/brain-orchestrator");
+      const shadowModeEnv = process.env.BRAIN_SHADOW_MODE !== "false";
+      
+      const orchestrator = new BrainOrchestrator(shadowModeEnv);
+      const brainResult = await orchestrator.decide(ctx.symbol, 1, ctx);
+      
+      const parsedDecision = brainResult.decision;
+      const isApproved = brainResult.approved;
+      
+      let decision: LlmDecision["decision"] = "skip";
+      if (isApproved && parsedDecision.mode === "enter") {
+        decision = parsedDecision.sizePct && parsedDecision.sizePct <= 2.5 ? "reduce_size" : "execute";
+      }
+      
+      return {
+        decision,
+        confidence: Math.round((parsedDecision.confidence ?? 0.8) * 100),
+        reasoning: parsedDecision.rationale || (isApproved ? "Approved by Safety Governor" : brainResult.rejectReason || "Rejected by Safety Governor"),
+        sizeMult: parsedDecision.sizePct ? (parsedDecision.sizePct / 5.0) : 1.0,
+        keyUsed: `Ollama (ReAct Brain - ${shadowModeEnv ? "Shadow" : "Live"})`,
+        latencyMs: Date.now() - t0,
+        stopLossPct: parsedDecision.stopLossPct ? (parsedDecision.stopLossPct / 100) : undefined,
+        takeProfitPct: parsedDecision.takeProfitPct ? (parsedDecision.takeProfitPct / 100) : undefined,
+      };
+    } catch (err: any) {
+      console.error("[llm-advisor] ReAct Brain failed, falling back to legacy LLM pipeline:", err.message);
+      return this.analyzeSignalLegacy(ctx, depth);
+    }
+  }
+
+  async analyzeSignalLegacy(ctx: SignalContext, depth = 0): Promise<LlmDecision> {
     if (depth >= this.keys.length) {
       return this.defaultDecision("all keys exhausted or unhealthy");
     }
@@ -322,7 +357,7 @@ sizeMult: 0.5 (reduce) | 1.0 (normal) | 1.5 (increase, only if very high convict
 
       await this.updateKeyStats(key.id, false);
       console.warn(`[llm-advisor] Key "${key.label}" error (${status || err.message}) — trying next`);
-      return this.analyzeSignal(ctx, depth + 1);
+      return this.analyzeSignalLegacy(ctx, depth + 1);
     }
   }
 
