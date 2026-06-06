@@ -93,8 +93,10 @@ export class Governor {
       return { approved: false, gate: "duplicate_position", reason: "position already open" };
     }
 
-    // Gate 4: max total open positions
-    const maxTotal = config.maxTotalPositions ?? 3;
+    // Gate 4: max total open positions. Paper is aggressive; live uses the (conservative)
+    // configured cap.
+    const PAPER_MAX_POSITIONS = 10;
+    const maxTotal = isPaperMode ? PAPER_MAX_POSITIONS : (config.maxTotalPositions ?? 3);
     if (openCount >= maxTotal) {
       return { approved: false, gate: "max_positions", reason: `max ${maxTotal} positions open` };
     }

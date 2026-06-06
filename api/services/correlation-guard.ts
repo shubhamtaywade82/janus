@@ -9,6 +9,7 @@
 import { getDb } from "../queries/connection";
 import { positions } from "@db/schema";
 import { and, eq } from "drizzle-orm";
+import { env } from "../lib/env";
 
 const CORRELATION_GROUPS: Record<string, string> = {
   BTCUSDT:  "crypto_beta",
@@ -21,7 +22,10 @@ const CORRELATION_GROUPS: Record<string, string> = {
   DOGEUSDT: "crypto_beta",
 };
 
-const MAX_SAME_DIRECTION_PER_GROUP = 6;
+// Mode-aware: paper is aggressive (more concurrent correlated positions allowed),
+// live stays conservative.
+const MAX_SAME_DIRECTION_PAPER = 6;
+const MAX_SAME_DIRECTION_LIVE = 2;
 
 export interface CorrelationCheck {
   allowed: boolean;
@@ -35,6 +39,8 @@ export async function checkCorrelation(
   userId: number
 ): Promise<CorrelationCheck> {
   const group = CORRELATION_GROUPS[symbol.toUpperCase()] ?? "other";
+  const isPaper = !env.placeOrders || env.paperTrading;
+  const maxSameDir = isPaper ? MAX_SAME_DIRECTION_PAPER : MAX_SAME_DIRECTION_LIVE;
 
   const db = getDb();
   const openPositions = await db
@@ -48,11 +54,11 @@ export async function checkCorrelation(
       p.side === side
   );
 
-  if (sameGroupSameDir.length >= MAX_SAME_DIRECTION_PER_GROUP) {
+  if (sameGroupSameDir.length >= maxSameDir) {
     return {
       allowed: false,
       currentCount: sameGroupSameDir.length,
-      reason: `${sameGroupSameDir.length} ${side} ${group} positions open — correlation limit (max ${MAX_SAME_DIRECTION_PER_GROUP})`,
+      reason: `${sameGroupSameDir.length} ${side} ${group} positions open — correlation limit (max ${maxSameDir})`,
     };
   }
 
