@@ -18,13 +18,14 @@ export function AutoTraderPanel({ userId = 1 }: { userId?: number }) {
     refetchInterval: 5_000,
   });
 
-  const { data: paperWallet } = trpc.autoExecutor.paperWallet.useQuery(
+  const { data: paperWallet, refetch: refetchPaperWallet } = trpc.autoExecutor.paperWallet.useQuery(
     { userId },
     { refetchInterval: 10_000, enabled: status?.isPaperMode ?? true }
   );
 
   const resetPaper = trpc.autoExecutor.resetPaperWallet.useMutation({
-    onSuccess: () => toast.success("Paper wallet reset"),
+    onSuccess: () => { toast.success("Paper wallet reset"); refetchPaperWallet(); },
+    onError: (err) => toast.error("Reset failed", { description: err.message }),
   });
 
   const saveConfig = trpc.autoExecutor.saveConfig.useMutation({
