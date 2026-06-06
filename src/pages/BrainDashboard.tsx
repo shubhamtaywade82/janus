@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Brain, Zap, GitBranch, Lightbulb, RefreshCw, Play, CheckCircle, AlertTriangle, TrendingUp, TrendingDown, Target, Shield, Clock, Terminal, Trash2 } from "lucide-react";
+import { Brain, Zap, GitBranch, Lightbulb, RefreshCw, Play, CheckCircle, AlertTriangle, TrendingUp, TrendingDown, Target, Shield, Clock, Terminal, Trash2, PanelRight } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -11,6 +11,7 @@ export default function BrainDashboard() {
   const [activeTab, setActiveTab] = useState<"episodes" | "strategies" | "reflections">("episodes");
   const [logs, setLogs] = useState<string[]>([]);
   const [logStatus, setLogStatus] = useState<"connecting" | "connected" | "disconnected">("disconnected");
+  const [isLogPanelOpen, setIsLogPanelOpen] = useState(false);
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
   const fetchBrainData = async () => {
@@ -97,7 +98,9 @@ export default function BrainDashboard() {
   };
 
   return (
-    <div className="flex flex-col h-full p-4 gap-4 overflow-auto scrollbar-thin">
+    <div className="flex h-full overflow-hidden">
+      {/* Main Content Area */}
+      <div className="flex-1 flex flex-col p-4 gap-4 overflow-auto scrollbar-thin">
       {/* Header */}
       <div className="flex items-center justify-between flex-wrap gap-2">
         <div className="flex items-center gap-3">
@@ -134,6 +137,21 @@ export default function BrainDashboard() {
           >
             <RefreshCw size={11} className={cn(isLoading && "animate-spin")} />
             Refresh
+          </button>
+
+          <div className="h-5 w-px bg-[#27272a] mx-1"></div>
+
+          <button
+            onClick={() => setIsLogPanelOpen(!isLogPanelOpen)}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-colors border font-semibold",
+              isLogPanelOpen 
+                ? "bg-purple-500/10 text-purple-400 border-purple-500/30" 
+                : "bg-[#18181b] hover:bg-[#27272a] text-[#f4f4f5] border-[#27272a]"
+            )}
+          >
+            <PanelRight size={14} />
+            Logs
           </button>
         </div>
       </div>
@@ -327,45 +345,50 @@ export default function BrainDashboard() {
 
         </div>
       )}
+      </div>
 
-      {/* Live Brain Console Logs */}
-      <div className="bg-[#18181b] border border-[#27272a] rounded-lg flex flex-col h-[260px] shrink-0 overflow-hidden">
-        <div className="flex items-center justify-between px-3 py-2 border-b border-[#27272a] bg-[#0c0c0e]">
-          <div className="flex items-center gap-2">
-            <Terminal size={14} className="text-purple-400" />
-            <span className="text-xs font-bold text-zinc-300">Live Brain & Agent Logs</span>
-            <div className="flex items-center gap-1.5 ml-2">
-              <span className={cn(
-                "w-2 h-2 rounded-full",
-                logStatus === "connected" ? "bg-green-500 animate-pulse" :
-                logStatus === "connecting" ? "bg-yellow-500 animate-pulse" :
-                "bg-red-500"
-              )} />
-              <span className="text-[10px] text-zinc-500 capitalize">{logStatus}</span>
+      {/* Expandable Live Brain Console Logs Sidebar */}
+      {isLogPanelOpen && (
+        <div className="w-[450px] shrink-0 border-l border-[#27272a] bg-[#0c0c0e] flex flex-col h-full">
+          <div className="flex items-center justify-between px-3 py-3 border-b border-[#27272a] bg-[#0c0c0e]">
+            <div className="flex items-center gap-2">
+              <Terminal size={14} className="text-purple-400" />
+              <span className="text-xs font-bold text-zinc-300">Live Brain & Agent Logs</span>
+              <div className="flex items-center gap-1.5 ml-2">
+                <span className={cn(
+                  "w-2 h-2 rounded-full",
+                  logStatus === "connected" ? "bg-green-500 animate-pulse" :
+                  logStatus === "connecting" ? "bg-yellow-500 animate-pulse" :
+                  "bg-red-500"
+                )} />
+                <span className="text-[10px] text-zinc-500 capitalize">{logStatus}</span>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => setLogs([])}
+                className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
+                title="Clear logs"
+              >
+                <Trash2 size={12} />
+              </button>
             </div>
           </div>
-          <button
-            onClick={() => setLogs([])}
-            className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
-            title="Clear logs"
-          >
-            <Trash2 size={12} />
-          </button>
-        </div>
 
-        <div className="flex-1 p-3 overflow-y-auto font-mono text-[10px] text-zinc-400 space-y-1 bg-[#09090b]">
-          {logs.length === 0 ? (
-            <div className="text-zinc-600 italic">Listening for live logs...</div>
-          ) : (
-            logs.map((log, index) => (
-              <div key={index} className="leading-5 whitespace-pre-wrap border-l border-zinc-800 pl-2 hover:bg-zinc-950 transition-colors">
-                {log}
-              </div>
-            ))
-          )}
-          <div ref={terminalEndRef} />
+          <div className="flex-1 p-3 overflow-y-auto font-mono text-[10px] text-zinc-400 space-y-1 bg-[#09090b]">
+            {logs.length === 0 ? (
+              <div className="text-zinc-600 italic">Listening for live logs...</div>
+            ) : (
+              logs.map((log, index) => (
+                <div key={index} className="leading-5 whitespace-pre-wrap border-l border-zinc-800 pl-2 hover:bg-zinc-950 transition-colors break-all">
+                  {log}
+                </div>
+              ))
+            )}
+            <div ref={terminalEndRef} />
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
