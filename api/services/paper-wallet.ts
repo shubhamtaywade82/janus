@@ -10,6 +10,10 @@
  *   availableBalance = equity - lockedMargin
  */
 
+import { eq, and } from "drizzle-orm";
+import { getDb } from "../queries/connection";
+import { positions } from "@db/schema";
+
 import {
   getOrCreateAccount,
   reserveMargin,
@@ -97,6 +101,12 @@ export async function getPaperEquity(userId: number): Promise<number> {
 export async function resetPaperWallet(userId: number, newBalance: number): Promise<void> {
   const accountId = await getAccountId(userId);
   await resetAccount(accountId, newBalance);
+  
+  // Clean up all paper positions so they don't linger after reset
+  await getDb()
+    .delete(positions)
+    .where(and(eq(positions.userId, userId), eq(positions.isPaper, true)));
+
   // Snapshot after reset so the equity curve shows the reset point
   await takeAccountSnapshot(accountId);
   // Clear cache so next getPaperWallet sees the new state

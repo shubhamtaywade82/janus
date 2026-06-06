@@ -12,6 +12,7 @@ import {
   getPaperLedger,
   getPaperSnapshots,
   snapshotPaperWallet,
+  getPaperWallet,
 } from "../services/paper-wallet";
 import { env } from "../lib/env";
 
@@ -84,50 +85,7 @@ export const autoExecutorRouter = createRouter({
   // ─── Paper wallet — computed fresh from DB on every call (no in-memory cache) ───
   paperWallet: authedQuery
     .query(async ({ ctx }) => {
-      const db = getDb();
-      const userId = ctx.user.id;
-
-      // Starting balance from config
-      const configRows = await db
-        .select({ paperStartingBalance: autoExecutorConfig.paperStartingBalance })
-        .from(autoExecutorConfig)
-        .where(eq(autoExecutorConfig.userId, userId))
-        .limit(1);
-      const startingBalance = parseFloat(configRows[0]?.paperStartingBalance ?? "10000");
-
-      // Locked margin = sum of open paper position margins
-      const openPaper = await db
-        .select({ margin: positions.margin })
-        .from(positions)
-        .where(and(
-          eq(positions.userId, userId),
-          eq(positions.status, "open"),
-          eq(positions.isPaper, true)
-        ));
-      const lockedMargin = openPaper.reduce((sum, p) => sum + parseFloat(p.margin), 0);
-
-      // Realized PnL = sum of closed paper position realizedPnl
-      const closedPaper = await db
-        .select({ realizedPnl: positions.realizedPnl })
-        .from(positions)
-        .where(and(
-          eq(positions.userId, userId),
-          eq(positions.status, "closed"),
-          eq(positions.isPaper, true)
-        ));
-      const realizedPnl = closedPaper.reduce((sum, p) => sum + parseFloat(p.realizedPnl ?? "0"), 0);
-
-      // Free = starting - locked + realized
-      const balance = startingBalance - lockedMargin + realizedPnl;
-
-      return {
-        userId,
-        startingBalance,
-        balance,
-        lockedMargin,
-        realizedPnl,
-        tradeCount: closedPaper.length,
-      };
+      return getPaperWallet(ctx.user.id);
     }),
 
   // ─── Reset paper wallet — updates starting balance and clears in-memory state ───
