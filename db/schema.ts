@@ -11,7 +11,21 @@ import {
   boolean,
   index,
   unique,
+  customType,
 } from "drizzle-orm/pg-core";
+
+// ─── Custom pgvector type ───
+export const vector1536 = customType<{ data: number[]; driverData: string }>({
+  dataType() {
+    return "vector(1536)";
+  },
+  toDriver(value: number[]): string {
+    return JSON.stringify(value);
+  },
+  fromDriver(value: string): number[] {
+    return JSON.parse(value);
+  },
+});
 
 // ─── Enums (PostgreSQL custom types) ───
 export const roleEnum = pgEnum("role", ["user", "admin"]);
@@ -353,6 +367,53 @@ export const equitySnapshots = pgTable("equity_snapshots", {
 
 export type EquitySnapshot = typeof equitySnapshots.$inferSelect;
 
+// ─── Risk Sessions (persisted daily trading state — survives restarts) ───
+export const riskSessions = pgTable(
+  "risk_sessions",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    tradingDay: varchar("trading_day", { length: 10 }).notNull(), // YYYY-MM-DD
+    startingEquity: decimal("starting_equity", { precision: 18, scale: 4 }).notNull(),
+    currentEquity: decimal("current_equity", { precision: 18, scale: 4 }).notNull(),
+    realizedPnl: decimal("realized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
+    unrealizedPnl: decimal("unrealized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
+    tradeCount: integer("trade_count").default(0).notNull(),
+    consecutiveLosses: integer("consecutive_losses").default(0).notNull(),
+    cooldownUntil: timestamp("cooldown_until"),
+    maxDrawdownHit: boolean("max_drawdown_hit").default(false).notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userDayIdx: unique("uq_risk_sessions_user_day").on(table.userId, table.tradingDay),
+    userTimeIdx: index("idx_risk_sessions_user_time").on(table.userId, table.updatedAt),
+  })
+);
+
+export type RiskSessionRow = typeof riskSessions.$inferSelect;
+
+// ─── Market Regimes (shared context for Signal Engine, Brain, Reflection, Backtester) ───
+export const marketRegimes = pgTable(
+  "market_regimes",
+  {
+    id: serial("id").primaryKey(),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    regime: varchar("regime", { length: 20 }).notNull(),       // trending | range | volatile
+    direction: varchar("direction", { length: 20 }).notNull(), // bullish | bearish | neutral
+    volatility: varchar("volatility", { length: 20 }).notNull(), // low | normal | high
+    liquidity: varchar("liquidity", { length: 30 }),             // buy_side_targeted | sell_side_targeted | balanced
+    funding: varchar("funding", { length: 20 }),                 // neutral | overheated_long | overheated_short
+    marketStructure: varchar("market_structure", { length: 20 }), // continuation | reversal | accumulation
+    confidence: decimal("confidence", { precision: 5, scale: 4 }).default("0.0000").notNull(),
+    timestamp: timestamp("timestamp").defaultNow().notNull(),
+  },
+  (table) => ({
+    symbolTimeIdx: index("idx_market_regimes_symbol_time").on(table.symbol, table.timestamp),
+  })
+);
+
+export type MarketRegime = typeof marketRegimes.$inferSelect;
+
 // ─── Executor Decisions (structured, queryable, restart-surviving decision log) ───
 // Every auto-executor decision (execute or gate-level skip) is persisted here so the
 // frontend can show WHY the bot did or did not trade. Distinct from system_logs (free text).
@@ -621,6 +682,15 @@ export const brainEpisodes = pgTable("brain_episodes", {
   outcomePnl: decimal("outcome_pnl", { precision: 16, scale: 8 }),
   outcomeTime: timestamp("outcome_time"),
   reflection: text("reflection"),
+  // ─── Decision Attribution (added for measurable Brain evaluation) ───
+  signalSource: varchar("signal_source", { length: 50 }),     // "confluence" | "manual" | "brain"
+  brainVerdict: varchar("brain_verdict", { length: 20 }),     // APPROVE | CAUTION | REDUCE_RISK | EXIT_NOW
+  governorVerdict: varchar("governor_verdict", { length: 20 }), // approved | rejected
+  governorGate: varchar("governor_gate", { length: 50 }),     // which gate triggered (if rejected)
+  executionResult: varchar("execution_result", { length: 20 }), // executed | skipped | error
+  positionId: integer("position_id"),                         // FK to positions (if executed)
+  // ─── pgvector embedding for semantic similarity ───
+  embedding: vector1536("embedding"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

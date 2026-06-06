@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { createChart, ColorType, LineSeries, AreaSeries } from "lightweight-charts";
 import { useEffect, useRef } from "react";
 import { TrendingUp, TrendingDown, Target, Zap } from "lucide-react";
+import { SystemReportPanel } from "./SystemReportPanel";
 
 interface EquityPoint {
   snapshotAt: string | Date;
@@ -315,6 +316,9 @@ export function PerformanceDashboard({ isFullPage = false }: { userId?: number; 
             </div>
           </div>
         </div>
+
+        {/* Full system performance report (attribution by subsystem) */}
+        <SystemReportPanel />
       </div>
     );
   }

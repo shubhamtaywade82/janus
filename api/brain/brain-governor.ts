@@ -40,7 +40,7 @@ export const brainGovernor = {
 
     // 3. Run primary RiskEngine logic
     const wallet = await getPaperWallet(userId);
-    const session = getOrCreateSession(userId, wallet.equity);
+    const session = await getOrCreateSession(userId, wallet.equity);
 
     const checkResult = globalRiskEngine.checkTradeAllowed(session, {
       walletBalance: wallet.balance,

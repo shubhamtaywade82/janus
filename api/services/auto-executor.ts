@@ -17,13 +17,13 @@ import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as path from "path";
 import { getDb } from "../queries/connection";
-import { positions, exchangeCredentials, autoExecutorConfig, systemLogs, signals, executorDecisions } from "@db/schema";
+import { positions, exchangeCredentials, autoExecutorConfig, systemLogs, signals, executorDecisions, brainEpisodes } from "@db/schema";
 import { llmDecisionEvents } from "./llm-events";
 import { eq, and } from "drizzle-orm";
 import { globalKillSwitch } from "./kill-switch";
-import { isFundingExtreme } from "./funding-filter";
-import { checkCorrelation } from "./correlation-guard";
 import { globalRiskEngine, getOrCreateSession, updateSession } from "./risk-engine";
+import { globalGovernor } from "./governor";
+import { BrainOrchestrator } from "../brain/brain-orchestrator";
 import { globalLlmAdvisor, type SignalContext } from "./llm-advisor";
 import { latestTickerCache } from "./streaming";
 import { marketStateManager } from "./market-state";
@@ -31,7 +31,6 @@ import { markPriceCache, tradingEvents } from "./coindcx-ws";
 import { fetchKlines } from "./binance";
 import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo } from "./coindcx";
 import { registerPositionForTrailing, unregisterPosition } from "./trailing-stop";
-import { knnSnapshotCache } from "./knn-supertrend";
 import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
 import type { ExitDecision } from "./exit-manager";
@@ -76,6 +75,8 @@ export interface AutoExecutorState {
   skipsToday: number;
   lastDecision: ExecutorDecision | null;
 }
+
+const brainOrchestrator = new BrainOrchestrator(true); // shadow mode
 
 export class AutoExecutor {
   constructor() {
@@ -315,71 +316,18 @@ export class AutoExecutor {
       : signal.symbol;
 
     const side = signal.direction as "long" | "short";
-    const targetSymbols = (config.targetSymbols as string[]) ?? ["BTCUSDT", "ETHUSDT"];
-
-    // Gate 1: symbol in target list
-    if (!targetSymbols.includes(symbol)) return this.skip(signal, `${symbol} not in target list`, "target_list");
-
-    // Gate 1b: signal staleness — reject signals older than 60s
-    const signalAgeMs = Date.now() - new Date(signal.createdAt).getTime();
-    if (signalAgeMs > 60_000) {
-      return this.skip(signal, `stale signal (${Math.round(signalAgeMs / 1000)}s old)`, "stale_signal");
-    }
-
-    // Gate 1c: dedup — prevent same symbol+direction executing twice within 60s
-    const dedupKey = `${symbol}:${signal.direction}`;
-    const lastExec = this.recentExecutions.get(dedupKey) ?? 0;
-    if (Date.now() - lastExec < this.DEDUP_WINDOW_MS) {
-      return this.skip(
-        signal,
-        `dedup: same ${symbol} ${signal.direction} executed ${Math.round((Date.now() - lastExec) / 1000)}s ago`,
-        "dedup"
-      );
-    }
-
-    // Gate 2: kill switch
-    if (!globalKillSwitch.canTrade()) return this.skip(signal, "kill switch active", "kill_switch");
-
-    // Compute execution mode early so subsequent gates are mode-aware
     const isPaperMode = !env.placeOrders || env.paperTrading;
 
-    // Gate 3: no duplicate open position for this symbol (in current mode)
+    // ─── Pre-fetch data for Governor ───
     const db = getDb();
-    const existing = await db
-      .select({ id: positions.id })
-      .from(positions)
-      .where(and(eq(positions.userId, 1), eq(positions.symbol, symbol), eq(positions.status, "open"), eq(positions.isPaper, isPaperMode)))
-      .limit(1);
-    if (existing.length > 0) return this.skip(signal, "position already open", "duplicate_position");
-
-    // Gate 4: max total open positions (in current mode)
     const openCount = await db
       .select({ id: positions.id })
       .from(positions)
       .where(and(eq(positions.userId, 1), eq(positions.status, "open"), eq(positions.isPaper, isPaperMode)))
       .then((r) => r.length);
-    const maxTotal = config.maxTotalPositions ?? 3;
-    if (openCount >= maxTotal) return this.skip(signal, `max ${maxTotal} positions open`, "max_positions");
 
-    // Gate 5: funding rate filter
-    const fundingCheck = isFundingExtreme(symbol, side);
-    if (fundingCheck.blocked) return this.skip(signal, fundingCheck.reason, "funding");
-
-    // Gate 6: correlation guard
-    const corrCheck = await checkCorrelation(symbol, side, 1);
-    if (!corrCheck.allowed) return this.skip(signal, corrCheck.reason, "correlation");
-
-    // Gate 6b: spread filter — reject wide-spread / low-liquidity conditions
-    const metadata = signal.metadata as Record<string, unknown> | null;
-    const spreadPct = metadata?.spread as number | undefined;
-    if (spreadPct !== undefined && spreadPct > 0.01) {
-      return this.skip(signal, `spread ${(spreadPct * 100).toFixed(3)}% > 1% — low liquidity`, "spread");
-    }
-
-    // Gate 7: risk engine
     let walletFree = 0;
     let walletLocked = 0;
-
     const creds = await db
       .select()
       .from(exchangeCredentials)
@@ -387,7 +335,6 @@ export class AutoExecutor {
       .limit(1);
 
     if (isPaperMode) {
-      // Paper mode: use virtual wallet
       const paperBalance = parseFloat(config.paperStartingBalance ?? "10000");
       const pw = await getPaperWallet(1, paperBalance);
       walletFree = pw.balance;
@@ -400,46 +347,45 @@ export class AutoExecutor {
           walletLocked += parseFloat(w.locked_balance ?? "0");
         }
       } catch {
-        // Live wallet fetch failed — do not trade on phantom balance
         return this.skip(signal, "wallet balance unavailable — skipping to prevent oversizing", "wallet");
       }
     }
 
-    const session = getOrCreateSession(1, walletFree || 10_000);
+    const session = await getOrCreateSession(1, walletFree || 10_000);
     const sigMetadata = signal.metadata as Record<string, unknown> | null;
-    const isManualOverride = sigMetadata?.sizeUsdt !== undefined && sigMetadata.sizeUsdt !== null;
-    if (isManualOverride) {
-      console.warn(`[Auto-Executor] Manual override detected for ${symbol}. Risk engine checks bypassed.`);
-    }
-    const sizeUsdt = isManualOverride
-      ? parseFloat(String(sigMetadata.sizeUsdt))
-      : parseFloat(config.defaultSizeUsdt ?? "50");
-    const riskCheck = globalRiskEngine.checkTradeAllowed(session, {
-      notional: sizeUsdt,
-      walletBalance: walletFree || session.startingBalance,
-      usedMargin: walletLocked,
-      isManualOverride,
-    });
-    if (!riskCheck.approved) return this.skip(signal, `risk: ${riskCheck.reason}`, "risk");
+    const targetSymbols = (config.targetSymbols as string[]) ?? ["BTCUSDT", "ETHUSDT"];
 
-    // Gate 8: KNN SuperTrend filter
-    // Suppresses trades in range regimes and when KNN bias conflicts with signal direction.
-    const knnSnap = knnSnapshotCache.get(symbol);
-    if (knnSnap) {
-      if (knnSnap.regime === "range") {
-        return this.skip(signal, `KNN: range regime — signals suppressed for ${symbol}`, "knn_range");
-      }
-      const knnMinConf = 60;
-      const knnBias = knnSnap.knn.bias;
-      const knnConf = knnSnap.knn.confidence;
-      const biasSide = knnBias === "bullish" ? "long" : knnBias === "bearish" ? "short" : "neutral";
-      if (knnBias !== "neutral" && knnConf >= knnMinConf && biasSide !== side) {
-        return this.skip(signal, `KNN: bias=${knnBias} (${knnConf}%) conflicts with signal ${side}`, "knn_conflict");
-      }
-      if (knnConf < 40) {
-        return this.skip(signal, `KNN: very low confidence (${knnConf}%) — skipping ${symbol}`, "knn_low_conf");
-      }
+    // Sizing inputs (gates that use these now live in the Governor; sizing still needs them).
+    const isManualOverride = sigMetadata?.sizeUsdt !== undefined && sigMetadata.sizeUsdt !== null;
+    const sizeUsdt = isManualOverride
+      ? parseFloat(String(sigMetadata!.sizeUsdt))
+      : parseFloat(config.defaultSizeUsdt ?? "50");
+    const dedupKey = `${symbol}:${signal.direction}`;
+
+    // ─── Governor: deterministic safety gates ───
+    const govOutcome = await globalGovernor.evaluate({
+      signal,
+      config,
+      targetSymbols,
+      dedupWindowMs: this.DEDUP_WINDOW_MS,
+      recentExecutions: this.recentExecutions,
+      openCount,
+      isPaperMode,
+      walletFree,
+      walletLocked,
+      session,
+    });
+
+    if (!govOutcome.approved) {
+      return this.skip(signal, govOutcome.reason, govOutcome.gate);
     }
+
+    // ─── Brain Shadow Evaluation (non-blocking, advisory only) ───
+    // Fire brain evaluation in parallel — never blocks the critical execution path.
+    const brainPromise = brainOrchestrator.evaluate(signal, 1).catch((err) => {
+      console.warn('[Auto-Executor] Brain shadow evaluation failed:', err.message);
+      return null;
+    });
 
     // Gate 9: LLM Advisor (optional)
     let sizeMult = 1.0;
@@ -653,7 +599,7 @@ export class AutoExecutor {
 
     // Update risk session
     session.tradeCount++;
-    updateSession(session);
+    await updateSession(session);
 
     // Snapshot equity after execution
     const equity = isPaperMode ? await getPaperEquity(1) : walletFree - notional / leverage;
@@ -674,6 +620,15 @@ export class AutoExecutor {
       llmDecision,
       ts: Date.now(),
     };
+    // Await brain shadow evaluation (it ran in parallel) and mark its episode executed.
+    const brainResult = (await brainPromise) as { episodeId?: number } | null;
+    if (brainResult?.episodeId) {
+      getDb().update(brainEpisodes)
+        .set({ executionResult: "executed" })
+        .where(eq(brainEpisodes.id, brainResult.episodeId))
+        .catch(() => {});
+    }
+
     this.state.lastDecision = dec;
     autoExecutorEvents.emit("decision", dec);
     this.persistDecision(dec);
@@ -891,9 +846,9 @@ export class AutoExecutor {
     }
 
     // Update risk session so cooldown and drawdown circuit breakers fire correctly
-    const session = getOrCreateSession(position.userId, 0);
+    const session = await getOrCreateSession(position.userId, 0);
     const updatedSession = globalRiskEngine.recordTrade(session, { pnl: realizedPnl });
-    updateSession(updatedSession);
+    await updateSession(updatedSession);
 
     // Clean up trailing‑stop monitoring
     unregisterPosition(position.id);

@@ -12,6 +12,7 @@ import { alertsRouter } from "./routers/alerts-router";
 import { exportRouter } from "./routers/export-router";
 import { healthRouter } from "./routers/health-router";
 import { brainTrpcRouter } from "./routers/brain-trpc-router";
+import { performanceRouter } from "./routers/performance-router";
 import { createRouter, publicQuery } from "./middleware";
 
 export const appRouter = createRouter({
@@ -30,6 +31,7 @@ export const appRouter = createRouter({
   exports: exportRouter,
   health: healthRouter,
   brain: brainTrpcRouter,
+  performance: performanceRouter,
 });
 
 export type AppRouter = typeof appRouter;

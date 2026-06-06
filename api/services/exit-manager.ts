@@ -1,5 +1,4 @@
 import { tradingEvents, markPriceCache } from "./coindcx-ws";
-import { latestTickerCache } from "./streaming";
 import { STRATEGY_CONFIGS, type StrategyType } from "./strategy-config";
 import { SUPPORTED_PAIRS } from "./binance";
 import { getDb } from "../queries/connection";
@@ -104,13 +103,14 @@ export function startExitMonitor(userId: number, positions: MonitoredPosition[])
           const config = STRATEGY_CONFIGS[pos.strategyType];
           const binanceSym = pos.symbol.toUpperCase();
 
-          // CoinDCX mark price takes priority over Binance last price
+          // CoinDCX mark price ONLY — never fall back to Binance for exit decisions
           const markKey = `B-${binanceSym.replace("USDT", "_USDT")}`;
-          const currentPrice =
-            markPriceCache?.get(markKey) ??
-            latestTickerCache.get(binanceSym)?.lastPrice;
+          const currentPrice = markPriceCache?.get(markKey);
 
-          if (!currentPrice || currentPrice <= 0) continue;
+          if (!currentPrice || currentPrice <= 0 || Number.isNaN(currentPrice)) {
+            console.warn(`[exit-manager] Stale/missing CoinDCX mark price for ${markKey}. Skipping exit evaluation.`);
+            continue;
+          }
 
           const decision = evaluateExitCondition(
             pos.side,
@@ -238,19 +238,21 @@ export interface FeeBreakevenEntry {
 export function getFeeBreakevenMap(takerFeeRate = 0.0005): FeeBreakevenEntry[] {
   return SUPPORTED_PAIRS.map((pair) => {
     const markKey = pair.coindcx;
-    const currentPrice =
-      markPriceCache.get(markKey) ??
-      latestTickerCache.get(pair.binance)?.lastPrice ??
-      0;
+    const currentPrice = markPriceCache.get(markKey);
 
+    if (!currentPrice || currentPrice <= 0 || Number.isNaN(currentPrice)) {
+      console.warn(`[exit-manager] Stale/missing CoinDCX mark price for ${markKey} in fee breakeven map.`);
+    }
+
+    const safePrice = currentPrice && currentPrice > 0 && !Number.isNaN(currentPrice) ? currentPrice : 0;
     const minMovePct = 2 * takerFeeRate * 100;          // e.g. 0.10
-    const minMoveAbs = currentPrice * 2 * takerFeeRate;  // e.g. $100 for BTC
+    const minMoveAbs = safePrice * 2 * takerFeeRate;  // e.g. $100 for BTC
 
     return {
       symbol: pair.binance,
       coindcx: pair.coindcx,
       name: pair.name,
-      currentPrice,
+      currentPrice: safePrice,
       takerFeeRate,
       minMovePct,
       minMoveAbs,

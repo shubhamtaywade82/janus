@@ -22,7 +22,7 @@ import { observable } from "@trpc/server/observable";
 import { tradingEvents, initCoinDCXPrivateWs, userBalancesCache, userPositionsCache, markPriceCache } from "../services/coindcx-ws";
 import { getFeeBreakevenMap, startExitMonitor, stopExitMonitor } from "../services/exit-manager";
 import { latestTickerCache, subscribeToSymbol } from "../services/streaming";
-import { globalRiskEngine, getOrCreateSession, sessions, riskEvents } from "../services/risk-engine";
+import { globalRiskEngine, getOrCreateSession, updateSession, riskEvents } from "../services/risk-engine";
 import { registerPositionForTrailing, unregisterPosition } from "../services/trailing-stop";
 import { globalKillSwitch } from "../services/kill-switch";
 import { releasePaperMargin } from "../services/paper-wallet";
@@ -696,7 +696,7 @@ export const tradingRouter = createRouter({
           } catch { /* non-fatal — use 0 as fallback */ }
         }
 
-        const session = getOrCreateSession(userId, walletBalance || 10_000);
+        const session = await getOrCreateSession(userId, walletBalance || 10_000);
         const notional = parseFloat(input.entryPrice) * parseFloat(input.size);
         const riskDecision = globalRiskEngine.checkTradeAllowed(session, {
           notional,
@@ -936,9 +936,9 @@ export const tradingRouter = createRouter({
 
       // Update risk session so circuit breakers fire correctly
       const pnl = parseFloat(input.realizedPnl);
-      const session = getOrCreateSession(userId, 0);
+      const session = await getOrCreateSession(userId, 0);
       const updatedSession = globalRiskEngine.recordTrade(session, { pnl });
-      sessions.set(userId, updatedSession);
+      await updateSession(updatedSession);
 
       unregisterPosition(input.id);
       tradingEvents.emit(`portfolio-update:${userId}`);
@@ -1046,8 +1046,9 @@ export const tradingRouter = createRouter({
 
   // ─── Risk session status ───
   riskStatus: authedQuery
-    .query(({ ctx }) => {
-      const session = sessions.get(ctx.user.id);
+    .query(async ({ ctx }) => {
+      // Risk sessions are DB-backed now; read (or lazily create) the current session.
+      const session = await getOrCreateSession(ctx.user.id, 10_000);
       if (!session) return null;
       const drawdownPct =
         session.startingBalance > 0

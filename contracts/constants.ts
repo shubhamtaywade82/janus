@@ -12,3 +12,18 @@ export const Paths = {
   login: "/login",
   oauthCallback: "/api/oauth/callback",
 } as const;
+
+// ─── Symbol Validation ───
+// Single source of truth for supported trading pairs across all modules.
+export const SUPPORTED_SYMBOLS = [
+  "BTCUSDT",
+  "ETHUSDT",
+  "SOLUSDT",
+  "BNBUSDT",
+  "XRPUSDT",
+  "ADAUSDT",
+  "DOGEUSDT",
+  "AVAXUSDT",
+] as const;
+
+export type SupportedSymbol = (typeof SUPPORTED_SYMBOLS)[number];

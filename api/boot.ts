@@ -175,6 +175,10 @@ positionReconciler.start();
 import { startDaemon as startExitDaemon } from "./services/exit-manager";
 startExitDaemon();
 
+// Start market regime recorder (persists regime snapshots every 5 min)
+import { startMarketRegimeRecorder } from "./services/market-regime-recorder";
+startMarketRegimeRecorder();
+
 // Start auto signal analysis loop with regime detection enabled
 import { startAutoAnalysis } from "./routers/signal-router";
 startAutoAnalysis("intraday", true); // true = regime auto-switch on
@@ -199,17 +203,10 @@ alertEngine.start(5_000);
 import { startTelegramCommandBot } from "./services/telegram-bot";
 startTelegramCommandBot();
 
-// Start AI Brain (Vector Store + Scheduler)
-import { initVectorStore } from "./brain/brain-memory";
-import { startBrainScheduler, startBrainDriver, stopBrainDriver } from "./brain/brain-scheduler";
-initVectorStore().catch((err) => console.error("[Brain] Vector store initialization failed:", err));
+// Start AI Brain scheduler (periodic strategy evolution). The Brain evaluates signals
+// inline inside the auto-executor (Signal → Governor → Brain → Executor).
+import { startBrainScheduler } from "./brain/brain-scheduler";
 startBrainScheduler();
-// Autonomous brain driver (paper-only). Only auto-starts when BOT_AUTO_START=true.
-if (env.botAutoStart) {
-  const paper = !env.placeOrders || env.paperTrading;
-  console.log(`[boot] Brain driver auto-start — PAPER mode=${paper} (PLACE_ORDERS=${env.placeOrders})`);
-  startBrainDriver();
-}
 
 // Start liquidation proximity monitor (alerts + auto-reduce when within 5%/2% of liq price)
 import { startLiquidationMonitor, stopLiquidationMonitor } from "./services/liquidation-monitor";
@@ -237,7 +234,6 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
   positionReconciler.stop();
   stopTelegramCommandBot();
   stopLiquidationMonitor();
-  stopBrainDriver();
   positionLifecycleManager.stop?.();
 
   // 3. Brief pause for in-flight DB writes to complete
