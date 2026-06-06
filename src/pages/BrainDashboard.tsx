@@ -1,5 +1,5 @@
-import { useState, useEffect } from "react";
-import { Brain, Zap, GitBranch, Lightbulb, RefreshCw, Play, CheckCircle, AlertTriangle, TrendingUp, TrendingDown, Target, Shield, Clock } from "lucide-react";
+import { useState, useEffect, useRef } from "react";
+import { Brain, Zap, GitBranch, Lightbulb, RefreshCw, Play, CheckCircle, AlertTriangle, TrendingUp, TrendingDown, Target, Shield, Clock, Terminal, Trash2 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -9,6 +9,9 @@ export default function BrainDashboard() {
   const [strategies, setStrategies] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"episodes" | "strategies" | "reflections">("episodes");
+  const [logs, setLogs] = useState<string[]>([]);
+  const [logStatus, setLogStatus] = useState<"connecting" | "connected" | "disconnected">("disconnected");
+  const terminalEndRef = useRef<HTMLDivElement>(null);
 
   const fetchBrainData = async () => {
     setIsLoading(true);
@@ -33,6 +36,40 @@ export default function BrainDashboard() {
   useEffect(() => {
     fetchBrainData();
   }, []);
+
+  useEffect(() => {
+    setLogStatus("connecting");
+    const eventSource = new EventSource("/api/brain/logs/stream");
+
+    eventSource.onopen = () => {
+      setLogStatus("connected");
+    };
+
+    eventSource.onmessage = (event) => {
+      if (event.data && event.data !== "ping") {
+        setLogs((prev) => {
+          const newLogs = [...prev, event.data];
+          if (newLogs.length > 500) newLogs.shift();
+          return newLogs;
+        });
+      }
+    };
+
+    eventSource.onerror = (err) => {
+      console.error("SSE connection error:", err);
+      setLogStatus("disconnected");
+    };
+
+    return () => {
+      eventSource.close();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (terminalEndRef.current) {
+      terminalEndRef.current.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [logs]);
 
   const handleManualDecide = async () => {
     toast.info("Triggering Brain evaluation...");
@@ -168,7 +205,7 @@ export default function BrainDashboard() {
 
                     <div className="text-xs">
                       <div className="text-zinc-500 mb-1 font-semibold text-[10px] uppercase">Reasoning</div>
-                      <div className="text-zinc-300 bg-[#09090b] p-2 rounded border border-[#27272a] max-h-32 overflow-y-auto">
+                      <div className="text-zinc-300 bg-[#09090b] p-2 rounded border border-[#27272a] max-h-32 overflow-y-auto overflow-x-hidden whitespace-pre-wrap break-words">
                         {ep.reasoning || "No reasoning recorded."}
                       </div>
                     </div>
@@ -176,13 +213,13 @@ export default function BrainDashboard() {
                     <div className="grid grid-cols-2 gap-2 text-xs">
                       <div className="bg-[#09090b] p-2 rounded border border-[#27272a]">
                         <div className="text-zinc-500 mb-1 font-semibold text-[10px] uppercase">Proposed Action</div>
-                        <div className="text-zinc-300 font-mono text-[10px]">
-                          {ep.proposedAction ? JSON.stringify(ep.proposedAction) : "None"}
-                        </div>
+                        <pre className="text-zinc-300 font-mono text-[10px] overflow-x-auto whitespace-pre-wrap break-all">
+                          {ep.proposedAction ? JSON.stringify(ep.proposedAction, null, 2) : "None"}
+                        </pre>
                       </div>
                       <div className="bg-[#09090b] p-2 rounded border border-[#27272a]">
                         <div className="text-zinc-500 mb-1 font-semibold text-[10px] uppercase">Governor Feedback</div>
-                        <div className="text-zinc-300 font-mono text-[10px]">
+                        <div className="text-zinc-300 font-mono text-[10px] overflow-x-auto whitespace-pre-wrap break-words">
                           {ep.governorJson?.approved ? (
                             <span className="text-j-up-bright font-bold">Approved</span>
                           ) : (
@@ -290,6 +327,45 @@ export default function BrainDashboard() {
 
         </div>
       )}
+
+      {/* Live Brain Console Logs */}
+      <div className="bg-[#18181b] border border-[#27272a] rounded-lg flex flex-col h-[260px] shrink-0 overflow-hidden">
+        <div className="flex items-center justify-between px-3 py-2 border-b border-[#27272a] bg-[#0c0c0e]">
+          <div className="flex items-center gap-2">
+            <Terminal size={14} className="text-purple-400" />
+            <span className="text-xs font-bold text-zinc-300">Live Brain & Agent Logs</span>
+            <div className="flex items-center gap-1.5 ml-2">
+              <span className={cn(
+                "w-2 h-2 rounded-full",
+                logStatus === "connected" ? "bg-green-500 animate-pulse" :
+                logStatus === "connecting" ? "bg-yellow-500 animate-pulse" :
+                "bg-red-500"
+              )} />
+              <span className="text-[10px] text-zinc-500 capitalize">{logStatus}</span>
+            </div>
+          </div>
+          <button
+            onClick={() => setLogs([])}
+            className="p-1 rounded hover:bg-zinc-800 text-zinc-500 hover:text-zinc-300 transition-colors"
+            title="Clear logs"
+          >
+            <Trash2 size={12} />
+          </button>
+        </div>
+
+        <div className="flex-1 p-3 overflow-y-auto font-mono text-[10px] text-zinc-400 space-y-1 bg-[#09090b]">
+          {logs.length === 0 ? (
+            <div className="text-zinc-600 italic">Listening for live logs...</div>
+          ) : (
+            logs.map((log, index) => (
+              <div key={index} className="leading-5 whitespace-pre-wrap border-l border-zinc-800 pl-2 hover:bg-zinc-950 transition-colors">
+                {log}
+              </div>
+            ))
+          )}
+          <div ref={terminalEndRef} />
+        </div>
+      </div>
     </div>
   );
 }
