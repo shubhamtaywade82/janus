@@ -850,6 +850,22 @@ export class AutoExecutor {
     const updatedSession = globalRiskEngine.recordTrade(session, { pnl: realizedPnl });
     await updateSession(updatedSession);
 
+    // Trigger LLM reflection on trade close (fire-and-forget)
+    const episodeRow = await db.select({ id: brainEpisodes.id })
+      .from(brainEpisodes)
+      .where(eq(brainEpisodes.positionId, position.id))
+      .orderBy(brainEpisodes.createdAt)
+      .limit(1);
+    if (episodeRow[0]) {
+      reflectOnTrade(episodeRow[0].id, realizedPnl, {
+        action: payload.decision.reason,
+        exitPrice: payload.currentPrice,
+        realizedPnl,
+      }).catch((err) => {
+        console.warn('[Auto-Executor] Reflection failed:', err.message);
+      });
+    }
+
     // Clean up trailing‑stop monitoring
     unregisterPosition(position.id);
     tradingEvents.emit(`portfolio-update:${position.userId}`);
