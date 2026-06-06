@@ -31,7 +31,7 @@ export default function BrainDashboard() {
   const [capitalMode, setCapitalMode] = useState<"pct" | "fixed">("pct");
   const [triggerCapitalPct, setTriggerCapitalPct] = useState(30);
   const [triggerCapitalFixed, setTriggerCapitalFixed] = useState("50");
-  const [triggerLeverage, setTriggerLeverage] = useState("3");
+  const [triggerLeverage, setTriggerLeverage] = useState("10");
 
   // Fetch paper wallet details if in paper mode
   const { data: paperWalletData } = trpc.autoExecutor.paperWallet.useQuery(

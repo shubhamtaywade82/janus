@@ -26,6 +26,7 @@ export interface TradeRequest {
   notional: number;       // price * size in USDT
   walletBalance: number;  // current free balance in USDT
   usedMargin: number;     // locked margin across all positions in USDT
+  isManualOverride?: boolean;
 }
 
 export interface RiskDecision {
@@ -42,6 +43,10 @@ export class RiskEngine {
   }
 
   checkTradeAllowed(session: RiskSession, req: TradeRequest): RiskDecision {
+    if (req.isManualOverride) {
+      return { approved: true };
+    }
+
     // 1. Check cooldown
     if (session.inCooldown && session.cooldownUntil !== null) {
       if (Date.now() < session.cooldownUntil) {

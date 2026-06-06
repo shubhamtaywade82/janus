@@ -369,6 +369,7 @@ export class AutoExecutor {
       notional: sizeUsdt,
       walletBalance: walletFree || session.startingBalance,
       usedMargin: walletLocked,
+      isManualOverride,
     });
     if (!riskCheck.approved) return this.skip(signal, `risk: ${riskCheck.reason}`);
 
