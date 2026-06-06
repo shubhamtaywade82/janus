@@ -553,7 +553,13 @@ export class AutoExecutor {
             client_order_id: clientOrderId,
           }
         );
-        exchangeOrderId = order?.id;
+        if (!order?.id) {
+          throw new Error(
+            `Exchange order may have been placed (client=${clientOrderId}) but returned no order ID. ` +
+            `Manual check required on CoinDCX for ${params.symbol}.`
+          );
+        }
+        exchangeOrderId = order.id;
         console.log(`[auto-executor] Exchange order placed: ${exchangeOrderId} (client=${clientOrderId})`);
 
         // Verify order was fully filled (remaining_quantity should be "0" for market orders)
@@ -570,29 +576,44 @@ export class AutoExecutor {
       }
     }
 
-    // Wrap DB write in a transaction so a DB failure after order placement is detectable
-    const posId = await db.transaction(async (tx) => {
-      const result = await tx.insert(positions).values({
-        userId: params.userId,
-        symbol: params.symbol,
-        side: params.side,
-        entryPrice: String(params.currentPrice),
-        currentPrice: String(params.currentPrice),
-        size: String(params.size),
-        leverage: params.leverage,
-        margin: String((params.notional / params.leverage).toFixed(4)),
-        stopLoss: String(params.stopLoss),
-        takeProfit: String(params.takeProfit),
-        unrealizedPnl: "0",
-        realizedPnl: "0",
-        status: "open",
-        exchangeOrderId,
-        signalId: params.signalId,
-        strategyType: params.strategyType,
-        isPaper: params.isPaper,
-      }).returning({ id: positions.id });
-      return result[0].id;
-    });
+    // Wrap DB write in a transaction so a DB failure after order placement is detectable.
+    // NOTE: If this transaction throws after a live exchange order was placed, the position
+    // exists on CoinDCX but not in our DB. The reconciler will detect it as an ORPHAN within
+    // 5 minutes, but there is a window with no SL/TP. Manual intervention may be required.
+    let posId: number;
+    try {
+      posId = await db.transaction(async (tx) => {
+        const result = await tx.insert(positions).values({
+          userId: params.userId,
+          symbol: params.symbol,
+          side: params.side,
+          entryPrice: String(params.currentPrice),
+          currentPrice: String(params.currentPrice),
+          size: String(params.size),
+          leverage: params.leverage,
+          margin: String((params.notional / params.leverage).toFixed(4)),
+          stopLoss: String(params.stopLoss),
+          takeProfit: String(params.takeProfit),
+          unrealizedPnl: "0",
+          realizedPnl: "0",
+          status: "open",
+          exchangeOrderId,
+          signalId: params.signalId,
+          strategyType: params.strategyType,
+          isPaper: params.isPaper,
+        }).returning({ id: positions.id });
+        return result[0].id;
+      });
+    } catch (dbErr) {
+      if (exchangeOrderId) {
+        console.error(
+          `[auto-executor] CRITICAL: Exchange order ${exchangeOrderId} placed on ${params.symbol} ` +
+          `but DB insert failed. Position exists on exchange with no DB record. ` +
+          `Reconciler will detect as ORPHAN within 5 minutes. Manual SL/TP may be required. Error: ${dbErr}`
+        );
+      }
+      throw dbErr;
+    }
 
     registerPositionForTrailing({
       id: posId,
