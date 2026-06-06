@@ -1,10 +1,26 @@
+import { EventEmitter } from "events";
 import { callLLM } from "../services/ollama";
 import { toolRegistry } from "./tool-registry";
 import { getDb } from "../queries/connection";
 import { brainEpisodes } from "@db/schema";
+import { eq } from "drizzle-orm";
 import { brainDecisionSchema } from "./schemas";
 import type { BrainDecision } from "./schemas";
 import { brainGovernor } from "./brain-governor";
+
+/** Live bus for brain decisions — consumed by the tRPC brain.decisionStream subscription. */
+export const brainEvents = new EventEmitter();
+brainEvents.setMaxListeners(50);
+
+/** Update the executed/vetoed outcome on a previously-logged episode (best-effort). */
+export async function updateEpisodeOutcome(episodeId: number, actualAction: any): Promise<void> {
+  if (!episodeId) return;
+  try {
+    await getDb().update(brainEpisodes).set({ actualAction }).where(eq(brainEpisodes.id, episodeId));
+  } catch {
+    /* best-effort */
+  }
+}
 
 export class BrainOrchestrator {
   private shadowMode: boolean;
@@ -14,9 +30,16 @@ export class BrainOrchestrator {
   }
 
   /**
-   * Run the ReAct loop on a market signal trigger
+   * Run the ReAct loop on a market signal trigger.
+   * @param opts.shadowMode  per-call override (authoritative); falls back to the constructor value.
    */
-  async decide(symbol: string, userId: number, signalDetails?: any): Promise<any> {
+  async decide(
+    symbol: string,
+    userId: number,
+    signalDetails?: any,
+    opts?: { shadowMode?: boolean }
+  ): Promise<any> {
+    const shadowMode = opts?.shadowMode ?? this.shadowMode;
     const db = getDb();
     
     // 1. Observe: Build initial market and portfolio snapshots
@@ -158,7 +181,7 @@ ${JSON.stringify(currentContext, null, 2)}
     // 5. Run Safety Governor Check if not in shadow mode
     let approved = true;
     let governorResult: any = { approved: true };
-    if (!this.shadowMode) {
+    if (!shadowMode) {
       try {
         governorResult = await brainGovernor.check(userId, parsedDecision, currentContext);
         approved = governorResult.approved;
@@ -177,14 +200,14 @@ ${JSON.stringify(currentContext, null, 2)}
     try {
       const [result] = await db.insert(brainEpisodes).values({
         userId,
-        triggerType: signalDetails ? "signal" : "manual",
+        triggerType: signalDetails?.source ?? (signalDetails ? "signal" : "manual"),
         marketSymbol: symbol,
         observation: currentContext,
         reasoning: conversationLog,
         proposedAction: parsedDecision,
-        governorJson: { shadowMode: this.shadowMode, ...governorResult },
-        actualAction: this.shadowMode 
-          ? { status: "shadow_logged" } 
+        governorJson: { shadowMode, ...governorResult },
+        actualAction: shadowMode
+          ? { status: "shadow_logged" }
           : (approved ? { status: "governor_approved" } : { status: "governor_rejected", reason: governorResult.reason }),
       }).returning({ id: brainEpisodes.id });
 
@@ -194,11 +217,23 @@ ${JSON.stringify(currentContext, null, 2)}
       console.error("[Brain Orchestrator] Database write error:", dbErr.message);
     }
 
+    // Broadcast for the live brain.decisionStream subscription.
+    brainEvents.emit("decision", {
+      episodeId: insertedId,
+      symbol,
+      decision: parsedDecision,
+      approved,
+      shadowMode,
+      reasoning: conversationLog,
+      rejectReason: governorResult.reason,
+      ts: Date.now(),
+    });
+
     return {
       episodeId: insertedId,
       approved,
       decision: parsedDecision,
-      shadowMode: this.shadowMode,
+      shadowMode,
       rejectReason: governorResult.reason
     };
   }

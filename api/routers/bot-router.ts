@@ -9,8 +9,8 @@ import { STRATEGY_CONFIGS, type StrategyType } from "../services/strategy-config
 import { latestRegimeCache } from "../services/regime-detector";
 import { startAutoAnalysis } from "./signal-router";
 import { getDb } from "../queries/connection";
-import { autoExecutorConfig } from "@db/schema";
-import { eq } from "drizzle-orm";
+import { autoExecutorConfig, executorDecisions } from "@db/schema";
+import { eq, desc, sql } from "drizzle-orm";
 import { globalAutoExecutor, autoExecutorEvents } from "../services/auto-executor";
 import { env } from "../lib/env";
 
@@ -30,10 +30,21 @@ export const botRouter = createRouter({
       .limit(1);
     const config = rows[0] ?? null;
 
+    const recentDecisions = await db
+      .select()
+      .from(executorDecisions)
+      .where(eq(executorDecisions.userId, ctx.user.id))
+      .orderBy(desc(executorDecisions.createdAt))
+      .limit(10)
+      .catch(() => []);
+
     return {
       enabled: config?.enabled ?? false,
       placeOrders: env.placeOrders,
       useLLMFilter: config?.useLlmAdvisor ?? true,
+      brainDriverEnabled: config?.brainDriverEnabled ?? false,
+      brainGateEnabled: config?.brainGateEnabled ?? false,
+      brainShadowMode: config?.brainShadowMode ?? true,
       stats: {
         signalsReceived: globalAutoExecutor.state.signalsProcessed,
         tradesExecuted: globalAutoExecutor.state.executionsToday,
@@ -41,7 +52,7 @@ export const botRouter = createRouter({
         tradesRejectedByLLM: globalAutoExecutor.state.skipsToday,
         startedAt: 0,
       },
-      recentDecisions: globalAutoExecutor.state.lastDecision ? [globalAutoExecutor.state.lastDecision] : [],
+      recentDecisions,
       ollamaPool: [],
     };
   }),
@@ -67,6 +78,7 @@ export const botRouter = createRouter({
           .insert(autoExecutorConfig)
           .values({ userId: 1, enabled: true, useLlmAdvisor: input.useLLM });
       }
+      globalAutoExecutor.invalidateConfigCache();
       return { ok: true, message: "Auto-executor started" };
     }),
 
@@ -89,6 +101,7 @@ export const botRouter = createRouter({
         .insert(autoExecutorConfig)
         .values({ userId: 1, enabled: false });
     }
+    globalAutoExecutor.invalidateConfigCache();
     return { ok: true, message: "Auto-executor stopped" };
   }),
 
@@ -131,6 +144,7 @@ export const botRouter = createRouter({
           .insert(autoExecutorConfig)
           .values({ userId: 1, useLlmAdvisor: input.enabled });
       }
+      globalAutoExecutor.invalidateConfigCache();
       return { ok: true, llmFilter: input.enabled };
     }),
 
@@ -141,11 +155,42 @@ export const botRouter = createRouter({
     return entries;
   }),
 
-  // ─── Recent decision history ───
+  // ─── Recent decision history (persisted — survives restart) ───
   decisions: authedQuery
-    .input(z.object({ limit: z.number().min(1).max(100).default(20) }))
-    .query(({ input: _input }) => {
-      return globalAutoExecutor.state.lastDecision ? [globalAutoExecutor.state.lastDecision] : [];
+    .input(z.object({ limit: z.number().min(1).max(200).default(50), symbol: z.string().optional() }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+      const where = input.symbol
+        ? sql`${executorDecisions.userId} = ${ctx.user.id} and ${executorDecisions.symbol} = ${input.symbol}`
+        : eq(executorDecisions.userId, ctx.user.id);
+      return db
+        .select()
+        .from(executorDecisions)
+        .where(where)
+        .orderBy(desc(executorDecisions.createdAt))
+        .limit(input.limit)
+        .catch(() => []);
+    }),
+
+  // ─── Gate-level decision breakdown ("why is the bot not trading?") ───
+  decisionStats: authedQuery
+    .input(z.object({ windowMinutes: z.number().min(1).max(1440).default(60) }))
+    .query(async ({ ctx, input }) => {
+      const db = getDb();
+      const since = new Date(Date.now() - input.windowMinutes * 60_000);
+      const rows = await db
+        .select({
+          gate: executorDecisions.gate,
+          action: executorDecisions.action,
+          count: sql<number>`count(*)::int`,
+        })
+        .from(executorDecisions)
+        .where(sql`${executorDecisions.userId} = ${ctx.user.id} and ${executorDecisions.createdAt} >= ${since}`)
+        .groupBy(executorDecisions.gate, executorDecisions.action)
+        .catch(() => []);
+      const executed = rows.filter((r) => r.action === "execute").reduce((s, r) => s + r.count, 0);
+      const skipped = rows.filter((r) => r.action === "skip").reduce((s, r) => s + r.count, 0);
+      return { windowMinutes: input.windowMinutes, executed, skipped, byGate: rows };
     }),
 
   // ─── Real-time decision stream (WebSocket subscription) ───

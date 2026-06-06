@@ -3,6 +3,7 @@ import { Brain, Zap, GitBranch, Lightbulb, RefreshCw, Terminal, Trash2, PanelRig
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { trpc } from "@/providers/trpc";
+import { BrainControlPanel } from "@/components/BrainControlPanel";
 
 export default function BrainDashboard() {
   const [episodes, setEpisodes] = useState<any[]>([]);
@@ -44,6 +45,12 @@ export default function BrainDashboard() {
     { enabled: tradingMode === "live", refetchInterval: 5000 }
   );
 
+  // Live brain reasoning — refresh the episode list when the brain makes a new decision.
+  const fetchBrainDataRef = useRef<(() => void) | null>(null);
+  trpc.brain.decisionStream.useSubscription(undefined, {
+    onData: () => { fetchBrainDataRef.current?.(); },
+  });
+
   const isPaper = tradingMode === "paper";
 
   const availableEquity = useMemo(() => {
@@ -78,6 +85,7 @@ export default function BrainDashboard() {
   };
 
   const fetchBrainData = async () => {
+    fetchBrainDataRef.current = fetchBrainData;
     setIsLoading(true);
     try {
       const [episodesRes, reflectionsRes, strategiesRes] = await Promise.all([
@@ -287,6 +295,9 @@ export default function BrainDashboard() {
           </button>
         </div>
       </div>
+
+      {/* Brain participation controls + live executor decision feed */}
+      <BrainControlPanel />
 
       {/* Signal Trigger Panel */}
       {triggerOpen && (

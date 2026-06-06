@@ -201,9 +201,15 @@ startTelegramCommandBot();
 
 // Start AI Brain (Vector Store + Scheduler)
 import { initVectorStore } from "./brain/brain-memory";
-import { startBrainScheduler } from "./brain/brain-scheduler";
+import { startBrainScheduler, startBrainDriver, stopBrainDriver } from "./brain/brain-scheduler";
 initVectorStore().catch((err) => console.error("[Brain] Vector store initialization failed:", err));
 startBrainScheduler();
+// Autonomous brain driver (paper-only). Only auto-starts when BOT_AUTO_START=true.
+if (env.botAutoStart) {
+  const paper = !env.placeOrders || env.paperTrading;
+  console.log(`[boot] Brain driver auto-start — PAPER mode=${paper} (PLACE_ORDERS=${env.placeOrders})`);
+  startBrainDriver();
+}
 
 // Start liquidation proximity monitor (alerts + auto-reduce when within 5%/2% of liq price)
 import { startLiquidationMonitor, stopLiquidationMonitor } from "./services/liquidation-monitor";
@@ -231,6 +237,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
   positionReconciler.stop();
   stopTelegramCommandBot();
   stopLiquidationMonitor();
+  stopBrainDriver();
   positionLifecycleManager.stop?.();
 
   // 3. Brief pause for in-flight DB writes to complete

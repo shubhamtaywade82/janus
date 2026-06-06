@@ -6,9 +6,8 @@ import { BrainOrchestrator } from "../brain/brain-orchestrator";
 import { getDb } from "../queries/connection";
 import { brainEpisodes, brainStrategies, brainReflections, signals } from "@db/schema";
 import { desc } from "drizzle-orm";
-import { globalAutoExecutor } from "../services/auto-executor";
 import { globalKillSwitch } from "../services/kill-switch";
-import { latestTickerCache } from "../services/streaming";
+import { proposeTradeAsSignal } from "../brain/signal-bridge";
 import { env } from "../lib/env";
 
 export const brainRouter = new Hono();
@@ -100,39 +99,21 @@ brainRouter.post("/trigger-signal", async (c) => {
     // Ensure kill switch is clear
     globalKillSwitch.reset();
 
-    // Fetch live price for metadata
-    const binanceSym = symbol.replace("B-", "").replace("_", "");
-    const currentPrice = latestTickerCache.get(binanceSym)?.lastPrice ?? 0;
-
-    const db = getDb();
-    const [insertedSignal] = await db.insert(signals).values({
+    // Route through the shared bridge (same path the autonomous brain driver uses).
+    const { signalId, decision: firstDecision } = await proposeTradeAsSignal({
       symbol,
-      microScore: compositeScore,
-      intraScore: compositeScore,
-      swingScore: compositeScore,
-      compositeScore,
-      threshold,
-      isGated: true,
       direction,
-      metadata: {
-        rsi: body.rsi ?? 50,
-        ema20: currentPrice * 0.998,
-        ema50: currentPrice * 0.995,
-        spread: 0.0002,
-        imbalance: 0.3,
-        source: "manual-trigger",
-        sizeUsdt: body.sizeUsdt ? parseFloat(String(body.sizeUsdt)) : undefined,
-        leverage: body.leverage ? parseFloat(String(body.leverage)) : undefined,
-        stopLossPct: body.stopLossPct ? parseFloat(String(body.stopLossPct)) / 100 : undefined,
-        takeProfitPct: body.takeProfitPct ? parseFloat(String(body.takeProfitPct)) / 100 : undefined,
-        disableTrailing: body.disableTrailing === true || body.disableTrailing === "true",
-        ...(body.metadata || {}),
-      },
-    }).returning();
-
-    // Fire through the full 8-gate pipeline
-    const decisions = await globalAutoExecutor.onSignalBatch([insertedSignal]);
-    const firstDecision = decisions[0];
+      compositeScore: Number(compositeScore),
+      threshold: Number(threshold),
+      source: "manual-trigger",
+      rsi: body.rsi ?? 50,
+      sizeUsdt: body.sizeUsdt ? parseFloat(String(body.sizeUsdt)) : undefined,
+      leverage: body.leverage ? parseFloat(String(body.leverage)) : undefined,
+      stopLossPct: body.stopLossPct ? parseFloat(String(body.stopLossPct)) / 100 : undefined,
+      takeProfitPct: body.takeProfitPct ? parseFloat(String(body.takeProfitPct)) / 100 : undefined,
+      disableTrailing: body.disableTrailing === true || body.disableTrailing === "true",
+      extraMetadata: body.metadata || {},
+    });
 
     const isPaper = env.paperTrading || !env.placeOrders;
 
@@ -144,7 +125,7 @@ brainRouter.post("/trigger-signal", async (c) => {
 
     return c.json({
       success: true,
-      signalId: insertedSignal.id,
+      signalId,
       symbol,
       direction,
       score: compositeScore,

@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { createRouter, authedQuery } from "../middleware";
 import { getDb } from "../queries/connection";
-import { autoExecutorConfig, equitySnapshots } from "@db/schema";
-import { eq, desc } from "drizzle-orm";
+import { autoExecutorConfig, equitySnapshots, positions } from "@db/schema";
+import { eq, desc, sql, and } from "drizzle-orm";
 import { observable } from "@trpc/server/observable";
 import { globalAutoExecutor, autoExecutorEvents } from "../services/auto-executor";
 import { globalKillSwitch, killSwitchEvents } from "../services/kill-switch";
@@ -47,6 +47,9 @@ export const autoExecutorRouter = createRouter({
         capitalAllocationPct: z.string().optional(),   // "0.050" – "0.500"
         useStrategyLeverage: z.boolean().optional(),
         paperStartingBalance: z.string().optional(),
+        brainDriverEnabled: z.boolean().optional(),
+        brainGateEnabled: z.boolean().optional(),
+        brainShadowMode: z.boolean().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {
@@ -68,6 +71,8 @@ export const autoExecutorRouter = createRouter({
       } else {
         await db.insert(autoExecutorConfig).values({ userId, ...fields });
       }
+      // Make the running executor see the change on the next signal (no 30s cache lag).
+      globalAutoExecutor.invalidateConfigCache();
       return { success: true };
     }),
 
@@ -187,5 +192,43 @@ export const autoExecutorRouter = createRouter({
         .orderBy(desc(equitySnapshots.snapshotAt))
         .limit(input.limit)
         .then((r) => [...r].reverse()); // chronological
+    }),
+
+  // ─── Realized PnL grouped by symbol (closed positions, current mode) ───
+  pnlBySymbol: authedQuery
+    .input(z.object({ isPaper: z.boolean().default(true) }))
+    .query(async ({ input, ctx }) => {
+      const db = getDb();
+      return db
+        .select({
+          symbol: positions.symbol,
+          trades: sql<number>`count(*)::int`,
+          realizedPnl: sql<string>`coalesce(sum(${positions.realizedPnl}), 0)`,
+          wins: sql<number>`count(*) filter (where ${positions.realizedPnl} > 0)::int`,
+        })
+        .from(positions)
+        .where(and(eq(positions.userId, ctx.user.id), eq(positions.status, "closed"), eq(positions.isPaper, input.isPaper)))
+        .groupBy(positions.symbol)
+        .orderBy(desc(sql`coalesce(sum(${positions.realizedPnl}), 0)`))
+        .catch(() => []);
+    }),
+
+  // ─── Realized PnL grouped by strategy (closed positions, current mode) ───
+  pnlByStrategy: authedQuery
+    .input(z.object({ isPaper: z.boolean().default(true) }))
+    .query(async ({ input, ctx }) => {
+      const db = getDb();
+      return db
+        .select({
+          strategy: positions.strategyType,
+          trades: sql<number>`count(*)::int`,
+          realizedPnl: sql<string>`coalesce(sum(${positions.realizedPnl}), 0)`,
+          wins: sql<number>`count(*) filter (where ${positions.realizedPnl} > 0)::int`,
+        })
+        .from(positions)
+        .where(and(eq(positions.userId, ctx.user.id), eq(positions.status, "closed"), eq(positions.isPaper, input.isPaper)))
+        .groupBy(positions.strategyType)
+        .orderBy(desc(sql`coalesce(sum(${positions.realizedPnl}), 0)`))
+        .catch(() => []);
     }),
 });
