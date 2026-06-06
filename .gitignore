@@ -44,3 +44,4 @@ coverage/
 .env.secrets
 .env.secret
 backups/
+kill-switch-state.json
