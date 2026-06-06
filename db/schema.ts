@@ -574,3 +574,147 @@ export const alertDeliveryFailures = pgTable(
 );
 
 export type AlertDeliveryFailure = typeof alertDeliveryFailures.$inferSelect;
+
+// ─── Brain Episodes ───
+export const brainEpisodes = pgTable("brain_episodes", {
+  id: serial("id").primaryKey(),
+  userId: integer("user_id"),
+  sessionId: varchar("session_id", { length: 100 }),
+  triggerType: varchar("trigger_type", { length: 50 }),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+  marketSymbol: varchar("market_symbol", { length: 20 }).notNull(),
+  observation: jsonb("observation").notNull(),
+  reasoning: text("reasoning"),
+  proposedAction: jsonb("proposed_action"),
+  governorJson: jsonb("governor_json"),
+  actualAction: jsonb("actual_action"),
+  outcomePnl: decimal("outcome_pnl", { precision: 16, scale: 8 }),
+  outcomeTime: timestamp("outcome_time"),
+  reflection: text("reflection"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type BrainEpisode = typeof brainEpisodes.$inferSelect;
+
+// ─── Brain Strategies ───
+export const brainStrategies = pgTable("brain_strategies", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 100 }).notNull(),
+  description: text("description"),
+  promptTemplate: text("prompt_template"),
+  parameters: jsonb("parameters").notNull(),
+  sharpRatio: decimal("sharp_ratio", { precision: 8, scale: 4 }).default("0.0000").notNull(),
+  totalPnl: decimal("total_pnl", { precision: 16, scale: 8 }).default("0.00000000").notNull(),
+  winRate: decimal("win_rate", { precision: 5, scale: 2 }).default("0.00").notNull(),
+  active: boolean("active").default(false).notNull(),
+  lastEvaluated: timestamp("last_evaluated"),
+});
+
+export type BrainStrategy = typeof brainStrategies.$inferSelect;
+
+// ─── Brain Reflections ───
+export const brainReflections = pgTable("brain_reflections", {
+  id: serial("id").primaryKey(),
+  episodeId: integer("episode_id").references(() => brainEpisodes.id, { onDelete: "cascade" }).notNull(),
+  lesson: text("lesson").notNull(),
+  ruleCreated: text("rule_created").notNull(),
+  appliedAt: timestamp("applied_at").defaultNow().notNull(),
+});
+
+export type BrainReflection = typeof brainReflections.$inferSelect;
+
+// ─── Brain Candidate Rules ───
+export const brainCandidateRules = pgTable("brain_candidate_rules", {
+  id: serial("id").primaryKey(),
+  ruleText: text("rule_text").notNull(),
+  sourceEpisodeId: integer("source_episode_id").references(() => brainEpisodes.id, { onDelete: "cascade" }).notNull(),
+  occurrences: integer("occurrences").default(1).notNull(),
+  backtestScore: decimal("backtest_score", { precision: 8, scale: 4 }).default("0.0000").notNull(),
+  status: varchar("status", { length: 20 }).default("candidate").notNull(), // candidate, approved, rejected
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type BrainCandidateRule = typeof brainCandidateRules.$inferSelect;
+
+// ─── Brain Actions ───
+export const brainActions = pgTable("brain_actions", {
+  id: serial("id").primaryKey(),
+  episodeId: integer("episode_id").references(() => brainEpisodes.id, { onDelete: "cascade" }).notNull(),
+  actionType: varchar("action_type", { length: 50 }).notNull(),
+  toolName: varchar("tool_name", { length: 100 }).notNull(),
+  requestJson: jsonb("request_json"),
+  responseJson: jsonb("response_json"),
+  status: varchar("status", { length: 50 }).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type BrainAction = typeof brainActions.$inferSelect;
+
+// ─── Brain Tools ───
+export const brainTools = pgTable("brain_tools", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 100 }).notNull().unique(),
+  description: text("description").notNull(),
+  category: varchar("category", { length: 50 }).notNull(),
+  inputSchema: jsonb("input_schema"),
+  outputSchema: jsonb("output_schema"),
+  costEstimate: integer("cost_estimate").default(1).notNull(),
+  isDestructive: boolean("is_destructive").default(false).notNull(),
+});
+
+export type BrainTool = typeof brainTools.$inferSelect;
+
+// ─── Paper Accounts ───
+export const paperAccounts = pgTable("paper_accounts", {
+  id: serial("id").primaryKey(),
+  name: varchar("name", { length: 100 }).notNull(),
+  startingBalance: decimal("starting_balance", { precision: 16, scale: 8 }).notNull(),
+  currentBalance: decimal("current_balance", { precision: 16, scale: 8 }).notNull(),
+  equity: decimal("equity", { precision: 16, scale: 8 }).notNull(),
+  marginUsed: decimal("margin_used", { precision: 16, scale: 8 }).default("0.00000000").notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+});
+
+export type PaperAccount = typeof paperAccounts.$inferSelect;
+
+// ─── Paper Positions ───
+export const paperPositions = pgTable("paper_positions", {
+  id: varchar("id", { length: 100 }).primaryKey(),
+  symbol: varchar("symbol", { length: 20 }).notNull(),
+  side: varchar("side", { length: 10 }).notNull(),
+  entryPrice: decimal("entry_price", { precision: 16, scale: 8 }).notNull(),
+  quantity: decimal("quantity", { precision: 16, scale: 8 }).notNull(),
+  leverage: integer("leverage").default(1).notNull(),
+  margin: decimal("margin", { precision: 16, scale: 8 }).notNull(),
+  stopLoss: decimal("stop_loss", { precision: 16, scale: 8 }),
+  takeProfit: decimal("take_profit", { precision: 16, scale: 8 }),
+  status: varchar("status", { length: 20 }).default("open").notNull(),
+  openedAt: timestamp("opened_at").notNull(),
+  closedAt: timestamp("closed_at"),
+});
+
+export type PaperPosition = typeof paperPositions.$inferSelect;
+
+// ─── Paper Trades ───
+export const paperTrades = pgTable("paper_trades", {
+  id: serial("id").primaryKey(),
+  positionId: varchar("position_id", { length: 100 }).references(() => paperPositions.id, { onDelete: "cascade" }).notNull(),
+  entryPrice: decimal("entry_price", { precision: 16, scale: 8 }).notNull(),
+  exitPrice: decimal("exit_price", { precision: 16, scale: 8 }).notNull(),
+  pnl: decimal("pnl", { precision: 16, scale: 8 }).notNull(),
+  fees: decimal("fees", { precision: 16, scale: 8 }).notNull(),
+  rMultiple: decimal("r_multiple", { precision: 8, scale: 4 }).notNull(),
+});
+
+export type PaperTrade = typeof paperTrades.$inferSelect;
+
+// ─── Paper Equity Snapshots ───
+export const paperEquitySnapshots = pgTable("paper_equity_snapshots", {
+  id: serial("id").primaryKey(),
+  equity: decimal("equity", { precision: 16, scale: 8 }).notNull(),
+  balance: decimal("balance", { precision: 16, scale: 8 }).notNull(),
+  drawdown: decimal("drawdown", { precision: 8, scale: 4 }).notNull(),
+  timestamp: timestamp("timestamp").defaultNow().notNull(),
+});
+
+export type PaperEquitySnapshot = typeof paperEquitySnapshots.$inferSelect;
