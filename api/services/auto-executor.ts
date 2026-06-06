@@ -24,6 +24,7 @@ import { globalKillSwitch } from "./kill-switch";
 import { globalRiskEngine, getOrCreateSession, updateSession } from "./risk-engine";
 import { globalGovernor } from "./governor";
 import { BrainOrchestrator } from "../brain/brain-orchestrator";
+import { reflectOnTrade } from "../brain/brain-reflection";
 import { globalLlmAdvisor, type SignalContext } from "./llm-advisor";
 import { latestTickerCache } from "./streaming";
 import { marketStateManager } from "./market-state";
@@ -76,7 +77,7 @@ export interface AutoExecutorState {
   lastDecision: ExecutorDecision | null;
 }
 
-const brainOrchestrator = new BrainOrchestrator(true); // shadow mode
+const brainOrchestrator = new BrainOrchestrator(); // mode read per-call from config
 
 export class AutoExecutor {
   constructor() {
@@ -189,7 +190,7 @@ export class AutoExecutor {
     targetSymbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"],
     defaultSizeUsdt: "50",
     defaultLeverage: 3,
-    capitalAllocationPct: "0.100",   // 10% of free balance per trade
+    capitalAllocationPct: "0.150",   // 15% base allocation (dynamic, conviction-scaled)
     useStrategyLeverage: true,        // use STRATEGY_CONFIGS leverage per regime
     stopLossPct: "0.015",
     tp1Pct: "0.015",
@@ -517,17 +518,38 @@ export class AutoExecutor {
       }
     }
 
-    // Capital allocation: dynamic % of free balance, adjusted by Brain
-    const allocationPct = parseFloat(config.capitalAllocationPct ?? "0.10"); // e.g. 0.10 = 10%
-    const balanceCap = isManualOverride
-      ? Infinity
-      : (walletFree || session.startingBalance) * allocationPct;
-    let notional = Math.min(sizeUsdt * sizeMult, balanceCap);
+    // ─── Dynamic capital allocation ───────────────────────────────────────────
+    // No fixed USDT size. Notional = % of equity, scaled by signal conviction and
+    // (when it has authority) the Brain. Floor is the exchange minimum (enforced by
+    // the min-qty gate below); hard cap is MAX_ALLOC_PCT of equity.
+    const availEquity = walletFree || session.startingBalance;
+    const baseAllocPct = parseFloat(config.capitalAllocationPct ?? "0.15"); // 15% base
+    const MAX_ALLOC_PCT = 0.15; // hard ceiling per single trade (% of equity)
 
-    // Apply Brain adjustments if authority is enabled
+    // Signal-strength multiplier: gated score 75 → 0.7, 100 → 1.0.
+    const score = parseFloat(signal.compositeScore) || 75;
+    const scoreMult = Math.max(0.7, Math.min(1.0, 0.7 + 0.3 * ((score - 75) / 25)));
+
+    // Conviction = signal strength × LLM advisor sizeMult × (Brain verdict, if authority).
+    let convictionMult = scoreMult * (sizeMult ?? 1.0);
+    if (brainHasAuthority && brainResult) {
+      // By here verdict is APPROVE or REDUCE_RISK (EXIT_NOW/CAUTION already skipped above).
+      convictionMult *= brainResult.verdict === "REDUCE_RISK" ? 0.4 : 1.0;
+    }
+
+    let notional = isManualOverride
+      ? sizeUsdt // manual injection sets an explicit size and bypasses dynamic sizing
+      : availEquity * baseAllocPct * convictionMult;
+
+    // Brain explicit size override (only when it has execution authority).
     if (brainHasAuthority && brainResult?.adjustedSizeUsdt) {
-      notional = Math.min(brainResult.adjustedSizeUsdt, balanceCap);
-      console.log(`[Auto-Executor] Brain adjusted size: ${notional} USDT (was ${Math.min(sizeUsdt * sizeMult, balanceCap)})`);
+      notional = brainResult.adjustedSizeUsdt;
+      console.log(`[Auto-Executor] Brain set size: ${notional.toFixed(2)} USDT`);
+    }
+
+    // Hard cap at MAX_ALLOC_PCT of equity (manual override is intentionally exempt).
+    if (!isManualOverride) {
+      notional = Math.min(notional, availEquity * MAX_ALLOC_PCT);
     }
 
     // Leverage: if useStrategyLeverage=true, use strategy's maxLeverage; else use defaultLeverage
@@ -918,7 +940,7 @@ export class AutoExecutor {
         action: payload.decision.reason,
         exitPrice: payload.currentPrice,
         realizedPnl,
-      }).catch((err) => {
+      }).catch((err: any) => {
         console.warn('[Auto-Executor] Reflection failed:', err.message);
       });
     }

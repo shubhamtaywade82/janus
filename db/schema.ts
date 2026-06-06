@@ -11,21 +11,7 @@ import {
   boolean,
   index,
   unique,
-  customType,
 } from "drizzle-orm/pg-core";
-
-// ─── Custom pgvector type ───
-export const vector1536 = customType<{ data: number[]; driverData: string }>({
-  dataType() {
-    return "vector(1536)";
-  },
-  toDriver(value: number[]): string {
-    return JSON.stringify(value);
-  },
-  fromDriver(value: string): number[] {
-    return JSON.parse(value);
-  },
-});
 
 // ─── Enums (PostgreSQL custom types) ───
 export const roleEnum = pgEnum("role", ["user", "admin"]);
@@ -689,8 +675,9 @@ export const brainEpisodes = pgTable("brain_episodes", {
   governorGate: varchar("governor_gate", { length: 50 }),     // which gate triggered (if rejected)
   executionResult: varchar("execution_result", { length: 20 }), // executed | skipped | error
   positionId: integer("position_id"),                         // FK to positions (if executed)
-  // ─── pgvector embedding for semantic similarity ───
-  embedding: vector1536("embedding"),
+  // NOTE: the pgvector `embedding` column is NOT modelled in Drizzle — it is managed
+  // by migration (0014, docker ankane/pgvector) and queried via raw SQL in brain-memory.
+  // Keeping it out of the ORM model means select() works on hosts without pgvector.
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 

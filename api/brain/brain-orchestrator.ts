@@ -15,26 +15,27 @@
 
 import { EventEmitter } from "events";
 import { getDb } from "../queries/connection";
-import { brainEpisodes, marketRegimes, autoExecutorConfig } from "@db/schema";
-import { desc, eq, and, gte, sql } from "drizzle-orm";
+import { brainEpisodes, autoExecutorConfig, marketRegimes } from "@db/schema";
+import { desc, eq } from "drizzle-orm";
 import { toolRegistry } from "./tool-registry";
 import { brainGovernor } from "./brain-governor";
-import { latestRegimeCache, type RegimeResult } from "../services/regime-detector";
-import { globalRiskEngine, getOrCreateSession } from "../services/risk-engine";
+import { latestRegimeCache } from "../services/regime-detector";
+import { getOrCreateSession } from "../services/risk-engine";
 import { getPaperWallet } from "../services/paper-wallet";
 import { callLLM } from "../services/ollama";
 import { memoryStore } from "./brain-memory";
-import { SUPPORTED_PAIRS } from "../services/binance";
 
 export const brainEvents = new EventEmitter();
 brainEvents.setMaxListeners(20);
 
-export enum BrainVerdict {
-  APPROVE = "APPROVE",
-  CAUTION = "CAUTION",
-  REDUCE_RISK = "REDUCE_RISK",
-  EXIT_NOW = "EXIT_NOW",
-}
+// const-union instead of enum (enums are banned under erasableSyntaxOnly)
+export const BrainVerdict = {
+  APPROVE: "APPROVE",
+  CAUTION: "CAUTION",
+  REDUCE_RISK: "REDUCE_RISK",
+  EXIT_NOW: "EXIT_NOW",
+} as const;
+export type BrainVerdict = (typeof BrainVerdict)[keyof typeof BrainVerdict];
 
 export interface BrainDecision {
   mode: "hold" | "enter" | "scale_in" | "scale_out" | "exit" | "pause";
@@ -298,7 +299,6 @@ Render your verdict.`;
   // ─── Rule-Based Fallback ───
 
   private ruleBasedFallback(ctx: any): any {
-    const notes: string[] = [];
     const { signal, regime, session, marketSnapshot } = ctx;
 
     const drawdownPct = session.startingBalance > 0

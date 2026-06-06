@@ -102,16 +102,25 @@ export const memoryStore = {
     // Using cosine distance operator: 1 - cosine_similarity
     const vectorLiteral = `[${queryVector.join(",")}]`;
 
-    const rows = await db.execute(sql`
-      SELECT *, embedding <=> ${vectorLiteral}::vector AS distance
-      FROM ${brainEpisodes}
-      WHERE embedding IS NOT NULL
-      ORDER BY embedding <=> ${vectorLiteral}::vector
-      LIMIT ${limit}
-    `);
-
-    // postgres-js returns a RowList (array-like); pg's node driver returns { rows }.
-    return (Array.isArray(rows) ? rows : (rows as any).rows) ?? [];
+    try {
+      const rows = await db.execute(sql`
+        SELECT *, embedding <=> ${vectorLiteral}::vector AS distance
+        FROM ${brainEpisodes}
+        WHERE embedding IS NOT NULL
+        ORDER BY embedding <=> ${vectorLiteral}::vector
+        LIMIT ${limit}
+      `);
+      // postgres-js returns a RowList (array-like); pg's node driver returns { rows }.
+      return (Array.isArray(rows) ? rows : (rows as any).rows) ?? [];
+    } catch (err: any) {
+      // pgvector not installed / embedding column absent (e.g. local dev) — degrade gracefully.
+      console.warn("[Brain Memory] Vector search unavailable, falling back to recent episodes:", err.message);
+      return db
+        .select()
+        .from(brainEpisodes)
+        .orderBy(sql`${brainEpisodes.timestamp} DESC`)
+        .limit(limit);
+    }
   },
 
   getEpisode: async (id: number) => {

@@ -15,7 +15,7 @@ import { getDb } from "../queries/connection";
 import { brainReflections, brainCandidateRules, brainEpisodes } from "@db/schema";
 import { memoryStore } from "./brain-memory";
 import { callLLM } from "../services/ollama";
-import { eq, count } from "drizzle-orm";
+import { count } from "drizzle-orm";
 
 const MIN_EPISODES_FOR_REFLECTION = 20;
 
@@ -68,7 +68,7 @@ Respond in exactly this JSON format (no markdown, no other text):
   // 4. Parse and persist reflection in Postgres
   try {
     const cleanJsonText = rawReflection.match(/\{[\s\S]*\}/)?.[0] ?? rawReflection;
-    const { lesson, rule, confidence } = JSON.parse(cleanJsonText);
+    const { lesson, rule } = JSON.parse(cleanJsonText);
 
     // Save reflection row
     await db.insert(brainReflections).values({

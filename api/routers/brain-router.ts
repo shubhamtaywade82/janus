@@ -20,7 +20,7 @@ function validateSymbol(input: string): string | null {
 }
 
 export const brainRouter = new Hono();
-const orchestrator = new BrainOrchestrator(true); // Shadow Mode active
+const orchestrator = new BrainOrchestrator(); // mode read per-call from config
 
 // POST /api/brain/decide?symbol=BTCUSDT
 brainRouter.post("/decide", async (c) => {
