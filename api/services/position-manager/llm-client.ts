@@ -156,7 +156,7 @@ async function callOllama(key: LlmKey, prompt: string): Promise<string> {
       prompt,
       stream: false,
     }),
-    signal: AbortSignal.timeout(25_000),
+    signal: AbortSignal.timeout(100_000),
   });
 
   if (!res.ok) {

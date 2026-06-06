@@ -21,7 +21,7 @@ const CORRELATION_GROUPS: Record<string, string> = {
   DOGEUSDT: "crypto_beta",
 };
 
-const MAX_SAME_DIRECTION_PER_GROUP = 2;
+const MAX_SAME_DIRECTION_PER_GROUP = 6;
 
 export interface CorrelationCheck {
   allowed: boolean;

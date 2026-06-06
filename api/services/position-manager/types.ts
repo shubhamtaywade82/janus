@@ -185,7 +185,7 @@ export interface PositionManagerConfig {
   assessIntervalMs: number;     // how often to assess each position (default: 30s)
   opportunityCostIntervalMs: number; // how often to run opp-cost (default: 10min)
   useAi: boolean;               // try AI before code-based fallback
-  aiTimeoutMs: number;          // max wait for AI response (default: 8s)
+  aiTimeoutMs: number;          // max wait for AI response (default: 90s for local Ollama cold-start)
   autoApplyActions: boolean;    // execute actions automatically vs notify only
   protectionEnabled: boolean;   // auto-place SL/TP on unprotected positions
   trailingEnabled: boolean;     // run trailing stop logic
@@ -197,7 +197,7 @@ export const DEFAULT_POSITION_MANAGER_CONFIG: PositionManagerConfig = {
   assessIntervalMs: 30_000,
   opportunityCostIntervalMs: 600_000,
   useAi: true,
-  aiTimeoutMs: 8_000,
+  aiTimeoutMs: 90_000,
   autoApplyActions: true,
   protectionEnabled: true,
   trailingEnabled: true,
