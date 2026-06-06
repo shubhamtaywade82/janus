@@ -186,6 +186,14 @@ PORTFOLIO:
 - Total Unrealized PnL: ${portfolio.totalUnrealizedPnl.toFixed(2)} USDT
 - Open Positions: ${portfolio.openPositionCount}
 
+DECISION GUIDANCE (read carefully):
+- DEFAULT to KEEP_OPEN. The stop-loss already caps downside risk — let trades develop.
+- "Neutral" / "sideways" / "normal-or-high volatility" / a neutral confluence score are NOT reasons to exit. They mean KEEP_OPEN, not FULL_EXIT.
+- Use FULL_EXIT ONLY when the market clearly turns against the position: bias is STRONG_BEARISH for a LONG (or STRONG_BULLISH for a SHORT), OR market structure breaks against the position, OR price is at/through the stop. Set confidence >= 0.75 only for these clear cases.
+- Positions held under 15 minutes should almost never be fully exited — a brief hold with flat ROE is normal, not a reason to bail.
+- When in doubt, prefer protective actions (MOVE_TO_BREAKEVEN, TRAIL_SL, TIGHTEN_TP) or PARTIAL_EXIT over FULL_EXIT.
+- Confidence must reflect genuine conviction: reserve > 0.60 for clear, well-supported decisions.
+
 Choose ONE action from: KEEP_OPEN, MOVE_TO_BREAKEVEN, TRAIL_SL, PARTIAL_EXIT, FULL_EXIT, REDUCE_SIZE, SCALE_IN, EXTEND_TP, TIGHTEN_TP
 
 Respond ONLY with valid JSON (no markdown):

@@ -34,6 +34,8 @@ import { EMA_COLORS, SMA_COLORS } from "@/components/IndicatorPanel";
 import { calcEMA, calcSMA, calcBB, calcSuperTrend, calcRSI, calcVWAP, calcCVD, calcNW, calcMACD, calcStochRSI, calcPSAR, calcIchimoku, calcADX, calcZScore, calcVolumeProfile, calcKeltner, calcDonchian, calcTTMSqueeze } from "@/lib/chart/indicators";
 import { detectMACDSignals, detectADXSignals, detectDirectionFlips, detectStochCross, detectZScoreSignals, detectIchimokuSignals, detectDonchianBreakout, detectNWBandTag, detectVWAPSignals, detectRSIDivergence, detectCVDDivergence } from "@/lib/chart/indicator-signals";
 import type { PriceActionData } from "@/lib/chart/pa-types";
+import { checkIndicatorAlerts, checkSMCAlerts, checkKnnAlerts, ALERT_DEFAULTS } from "@/lib/chart/alert-engine";
+import type { AlertConfig, AlertEvent, KnnSnapshotLike } from "@/lib/chart/alert-engine";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { formatPrice, formatQty, getPriceDecimals } from "@/utils/precision";
 
@@ -2955,6 +2957,72 @@ const Dashboard = () => {
   const prevPaDataRef = useRef<any>(null);
   const prevKlinesLenRef = useRef(0);
 
+  // ─── Chart alert engine — drives toasts from AlertConfigPanel toggles ───
+  const [alertCfg, setAlertCfg] = useState<AlertConfig>(() => {
+    try {
+      const s = localStorage.getItem("janus_alert_cfg");
+      return s ? { ...ALERT_DEFAULTS, ...JSON.parse(s) } : ALERT_DEFAULTS;
+    } catch { return ALERT_DEFAULTS; }
+  });
+  const alertCfgRef = useRef(alertCfg);
+  useEffect(() => { alertCfgRef.current = alertCfg; }, [alertCfg]);
+
+  const selectedSymbolRef = useRef(selectedSymbol);
+  useEffect(() => { selectedSymbolRef.current = selectedSymbol; }, [selectedSymbol]);
+
+  // Dedup recently-shown events (guards React re-renders / re-subscribes)
+  const alertDedupRef = useRef<Set<string>>(new Set());
+  const emitAlerts = useCallback((events: AlertEvent[]) => {
+    for (const ev of events) {
+      const key = `${ev.type}:${ev.direction}:${ev.timestamp}`;
+      if (alertDedupRef.current.has(key)) continue;
+      alertDedupRef.current.add(key);
+      if (alertDedupRef.current.size > 300) {
+        const oldest = alertDedupRef.current.values().next().value;
+        if (oldest) alertDedupRef.current.delete(oldest);
+      }
+      const fn = ev.direction === "bullish" ? toast.success
+        : ev.direction === "bearish" ? toast.error : toast.info;
+      fn(`${ev.emoji} ${ev.symbol} · ${ev.message}`, { duration: 6000 });
+    }
+  }, []);
+
+  // Reset per-symbol alert tracking on symbol/interval switch
+  const lastClosedOpenTimeRef = useRef<number | null>(null);
+  const prevKnnRef = useRef<Map<string, KnnSnapshotLike>>(new Map());
+  useEffect(() => {
+    lastClosedOpenTimeRef.current = null;
+    prevKnnRef.current.clear();
+  }, [selectedSymbol, interval]);
+
+  // Indicator alerts — fire once per CLOSED candle (not on live ticks)
+  useEffect(() => {
+    if (!indicatorCfg || klines.length < 4) return;
+    const closedOpenTime = klines[klines.length - 2].openTime; // last closed candle
+    if (lastClosedOpenTimeRef.current === null) {
+      lastClosedOpenTimeRef.current = closedOpenTime; // prime — no burst on load
+      return;
+    }
+    if (closedOpenTime <= lastClosedOpenTimeRef.current) return; // no new close yet
+    lastClosedOpenTimeRef.current = closedOpenTime;
+    // slice off the forming candle so detectors evaluate the just-closed one
+    emitAlerts(checkIndicatorAlerts(klines.slice(0, -1), alertCfgRef.current, indicatorCfg, selectedSymbol));
+  }, [klines, indicatorCfg, selectedSymbol, emitAlerts]);
+
+  // KNN alerts — bias flip / ST flip / rejection / regime change (chart symbol only)
+  type KnnStreamData = { symbol: string; snapshot: KnnSnapshotLike };
+  const knnAlertCallbackRef = useRef<(d: KnnStreamData) => void>(() => {});
+  useEffect(() => {
+    knnAlertCallbackRef.current = (d: KnnStreamData) => {
+      if (!d?.snapshot || d.symbol !== selectedSymbolRef.current) return;
+      const prev = prevKnnRef.current.get(d.symbol) ?? null;
+      emitAlerts(checkKnnAlerts(d.snapshot, prev, alertCfgRef.current, d.symbol));
+      prevKnnRef.current.set(d.symbol, d.snapshot);
+    };
+  }, [emitAlerts]);
+  const knnAlertOpts = useRef({ onData: (d: KnnStreamData) => knnAlertCallbackRef.current(d) });
+  trpc.signal.knnStream.useSubscription(undefined, knnAlertOpts.current);
+
   const [overlayToggles, setOverlayToggles] = useState<OverlayToggles>(() => {
     try {
       const saved = localStorage.getItem("janus_chart_overlays");
@@ -3214,8 +3282,15 @@ const Dashboard = () => {
   const lastPrice = tickerData ? parseFloat(tickerData.lastPrice) : 0;
   const priceChange = tickerData ? parseFloat(tickerData.priceChangePercent) : 0;
 
-  // Track previous PA data ref for chart overlay diffing
+  // Track previous PA data ref for chart overlay diffing + fire SMC alerts on change
   useEffect(() => {
+    if (paData) {
+      const prev = prevPaDataRef.current;
+      if (prev) {
+        const cp = klines.length > 0 ? parseFloat(klines[klines.length - 1].close) : lastPrice;
+        emitAlerts(checkSMCAlerts(paData, prev, cp, selectedSymbol, alertCfgRef.current));
+      }
+    }
     prevPaDataRef.current = paData ?? prevPaDataRef.current;
   }, [paData]);
 
@@ -3321,7 +3396,7 @@ const Dashboard = () => {
               <RegimeIndicator symbol={selectedSymbol} />
               <ChartOverlayPanel onChange={setOverlayToggles} />
               <IndicatorPanel onChange={setIndicatorCfg} />
-              <AlertConfigPanel onChange={() => {}} />
+              <AlertConfigPanel onChange={setAlertCfg} />
               <div className="h-3 w-px bg-[#27272a]" />
               <span className="text-[10px] text-[#71717a]">
                 H: {tickerData ? parseFloat(tickerData.highPrice).toFixed(2) : "--"}

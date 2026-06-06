@@ -16,7 +16,11 @@ import type { RegimeResult } from "./regime-detector";
 
 const BASE_URL   = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
 const MODEL      = process.env.OLLAMA_MODEL     ?? "llama3.2";
-const TIMEOUT_MS = parseInt(process.env.OLLAMA_TIMEOUT_MS ?? "15000", 10);
+const TIMEOUT_MS = parseInt(process.env.OLLAMA_TIMEOUT_MS ?? "30000", 10);
+// Keep the model resident between sporadic calls (avoids cold-reload latency)
+// and cap output length so a rambling generation can't blow the timeout.
+const KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE ?? "30m";
+const NUM_PREDICT = parseInt(process.env.OLLAMA_NUM_PREDICT ?? "512", 10);
 const COOLDOWN_MS = 5 * 60 * 1000; // 5 min after a 429
 
 // ─── Key Pool ───
@@ -99,11 +103,18 @@ export async function callLLM(prompt: string): Promise<string> {
     : `${BASE_URL}/v1/chat/completions`;
 
   const body = isLocal
-    ? JSON.stringify({ model: MODEL, prompt, stream: false })
+    ? JSON.stringify({
+        model: MODEL,
+        prompt,
+        stream: false,
+        keep_alive: KEEP_ALIVE,
+        options: { num_predict: NUM_PREDICT },
+      })
     : JSON.stringify({
         model: MODEL,
         messages: [{ role: "user", content: prompt }],
         stream: false,
+        max_tokens: NUM_PREDICT,
       });
 
   const headers: Record<string, string> = { "Content-Type": "application/json" };

@@ -57,11 +57,11 @@ export function policyGuard(
   }
 
   // ── FULL_EXIT / PARTIAL_EXIT: require minimum confidence ──────────────
-  if (action === PA.FULL_EXIT && confidence < 0.60) {
+  if (action === PA.FULL_EXIT && confidence < 0.75) {
     return {
       approved: true,
       action: PA.TIGHTEN_TP,
-      reason: `FULL_EXIT downgraded to TIGHTEN_TP: confidence ${(confidence * 100).toFixed(0)}% < 60% threshold`,
+      reason: `FULL_EXIT downgraded to TIGHTEN_TP: confidence ${(confidence * 100).toFixed(0)}% < 75% threshold`,
     };
   }
 
