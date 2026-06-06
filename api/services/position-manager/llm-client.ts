@@ -22,7 +22,7 @@
 
 import { getDb } from "../../queries/connection";
 import { llmApiKeys } from "@db/schema";
-import { eq, asc, like } from "drizzle-orm";
+import { eq, asc } from "drizzle-orm";
 import type { AiRecommendation } from "./types";
 import { PositionAction } from "./types";
 

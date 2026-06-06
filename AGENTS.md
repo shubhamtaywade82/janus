@@ -72,10 +72,9 @@ Different parts of the system use different formats. Always handle conversion pr
 
 Whenever you introduce a new feature, fix a bug, or change system behaviors, log it here.
 
-### [2026-06-06] Mode Separation, Manual Injections, & ROE Fixes
-* **Manual Signal Injection**: Added a manual trigger form on `BrainDashboard.tsx` hitting `POST /api/brain/trigger-signal`. Bypasses default balance limits when a custom `sizeUsdt` override is present in the signal's `metadata`.
-* **Toast Notifications**: Subscribed to portfolio stream in `ExitSignalToast.tsx` to show entry (`entryReason`) and exit (`exitReason`) toasts.
-* **Exit Manager Update**: Changed `shouldExit` logic in `exit-manager.ts` so positions are not exited immediately upon clearing fees. They now run to actual TP/SL levels.
-* **Real-time ROE Fixes**: Replaced static database-driven ROE display with dynamic real-time calculations:
-  $$\text{ROE}\% = \frac{\text{Unrealized PnL}}{\text{Margin}} \times 100\%$$
-  Implemented on both frontend (`Portfolio.tsx`) and backend mapper (`mapPaperPosition`).
+### [2026-06-06] Price Feed Robustness, Risk Engine Overrides & Default Leverage
+* **Price Feed Safeguards**: Added zero and NaN filters to `latestTickerCache` and `markPriceCache` updates in `streaming.ts` and `coindcx-ws.ts` to prevent transient socket hiccups from seeding bad values.
+* **Pricing Fallback Chains**: Modified position mapping and portfolio metrics on both the frontend (`Portfolio.tsx`) and backend (`trading-router.ts`) to fall back to the position's entry price if all real-time market feeds report 0 or NaN.
+* **Risk Engine Manual Bypass**: Equipped `RiskEngine` and `checkTradeAllowed()` with a manual override parameter (`isManualOverride`) so that manually-injected signals from the dashboard bypass automated cooldowns, drawdown halts, and position size caps. Added warning logs in `auto-executor.ts` for audibility.
+* **Default Leverage UI**: Changed the default leverage for manual signal injection in `BrainDashboard.tsx` from 3 to 10.
+

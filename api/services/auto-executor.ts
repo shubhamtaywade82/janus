@@ -362,6 +362,9 @@ export class AutoExecutor {
     const session = getOrCreateSession(1, walletFree || 10_000);
     const sigMetadata = signal.metadata as Record<string, unknown> | null;
     const isManualOverride = sigMetadata?.sizeUsdt !== undefined && sigMetadata.sizeUsdt !== null;
+    if (isManualOverride) {
+      console.warn(`[Auto-Executor] Manual override detected for ${symbol}. Risk engine checks bypassed.`);
+    }
     const sizeUsdt = isManualOverride
       ? parseFloat(String(sigMetadata.sizeUsdt))
       : parseFloat(config.defaultSizeUsdt ?? "50");
@@ -720,6 +723,7 @@ export class AutoExecutor {
         stopLoss: params.stopLoss,
         strategyType: params.strategyType,
         userId: params.userId,
+        size: params.size,
       });
     }
 
@@ -772,6 +776,43 @@ export class AutoExecutor {
 
     if (position.isPaper) {
       await releasePaperMargin(position.userId, parseFloat(position.margin), realizedPnl, position.id);
+    } else {
+      // Place exit order on live exchange (CoinDCX)
+      const creds = await db
+        .select()
+        .from(exchangeCredentials)
+        .where(and(eq(exchangeCredentials.userId, position.userId), eq(exchangeCredentials.exchange, "coindcx")))
+        .limit(1);
+
+      if (creds[0]) {
+        try {
+          const decrypted = decryptCreds(creds[0]);
+          const coindcxSym = `B-${position.symbol.replace("USDT", "_USDT")}`;
+
+          console.log(`[Auto-Executor] Placing live exit market order for ${position.symbol} (ID: ${position.id})`);
+          const order = await createFuturesOrder(
+            decrypted,
+            {
+              market: coindcxSym,
+              side: position.side === "long" ? "sell" : "buy", // Close: opposite side
+              order_type: "market",
+              total_quantity: parseFloat(position.size),
+              price: payload.currentPrice,
+              leverage: position.leverage,
+            }
+          );
+          console.log(`[Auto-Executor] Live exit order placed: ${order?.id} for ${position.symbol}`);
+        } catch (err: any) {
+          console.error(`[Auto-Executor] Live exit order failed for ${position.symbol}: ${err.message}`);
+          await db.insert(systemLogs).values({
+            level: "error",
+            component: "auto-executor",
+            event: "live_exit_failed",
+            message: `Failed to place live exit order for ${position.symbol}: ${err.message}`,
+            metadata: { positionId: position.id, error: err.message },
+          }).catch(() => {});
+        }
+      }
     }
 
     // Update signal outcome for post-trade analysis / win-rate tracking

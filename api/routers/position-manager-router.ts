@@ -1,12 +1,11 @@
 import { z } from "zod";
-import { TRPCError } from "@trpc/server";
 import { createRouter, authedQuery } from "../middleware";
 import { positionLifecycleManager, positionStore } from "../services/position-manager/index";
 import { positionManagerBus } from "../services/position-manager/event-bus";
 import { getLlmKeyHealth } from "../services/position-manager/llm-client";
 import { getDb } from "../queries/connection";
 import { aiAssessments } from "@db/position-manager-schema";
-import { eq, desc, gte, and } from "drizzle-orm";
+import { eq, desc } from "drizzle-orm";
 import { observable } from "@trpc/server/observable";
 import type { AssessmentRecord } from "../services/position-manager/types";
 

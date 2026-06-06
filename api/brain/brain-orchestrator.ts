@@ -2,7 +2,8 @@ import { callLLM } from "../services/ollama";
 import { toolRegistry } from "./tool-registry";
 import { getDb } from "../queries/connection";
 import { brainEpisodes } from "@db/schema";
-import { brainDecisionSchema, BrainDecision } from "./schemas";
+import { brainDecisionSchema } from "./schemas";
+import type { BrainDecision } from "./schemas";
 import { brainGovernor } from "./brain-governor";
 
 export class BrainOrchestrator {

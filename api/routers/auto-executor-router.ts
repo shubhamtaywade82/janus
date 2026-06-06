@@ -1,8 +1,8 @@
 import { z } from "zod";
 import { createRouter, authedQuery } from "../middleware";
 import { getDb } from "../queries/connection";
-import { autoExecutorConfig, equitySnapshots, positions } from "@db/schema";
-import { eq, desc, and } from "drizzle-orm";
+import { autoExecutorConfig, equitySnapshots } from "@db/schema";
+import { eq, desc } from "drizzle-orm";
 import { observable } from "@trpc/server/observable";
 import { globalAutoExecutor, autoExecutorEvents } from "../services/auto-executor";
 import { globalKillSwitch, killSwitchEvents } from "../services/kill-switch";

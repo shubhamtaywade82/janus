@@ -1,11 +1,21 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterAll } from "vitest";
+import * as fs from "fs";
+import * as path from "path";
 import { KillSwitch } from "../kill-switch";
+
+const STATE_FILE = path.resolve(process.cwd(), "kill-switch-state.json");
 
 describe("KillSwitch", () => {
   let ks: KillSwitch;
 
   beforeEach(() => {
+    // KillSwitch persists to a cwd state file; clear it so each test starts clean.
+    if (fs.existsSync(STATE_FILE)) fs.unlinkSync(STATE_FILE);
     ks = new KillSwitch();
+  });
+
+  afterAll(() => {
+    if (fs.existsSync(STATE_FILE)) fs.unlinkSync(STATE_FILE);
   });
 
   it("starts inactive — canTrade = true", () => {

@@ -171,6 +171,10 @@ initCoinDCXPrivateWs().catch((err) => {
 import { positionReconciler } from "./services/position-reconciler";
 positionReconciler.start();
 
+// Start position exit manager background daemon (SL/TP monitoring)
+import { startDaemon as startExitDaemon } from "./services/exit-manager";
+startExitDaemon();
+
 // Start auto signal analysis loop with regime detection enabled
 import { startAutoAnalysis } from "./routers/signal-router";
 startAutoAnalysis("intraday", true); // true = regime auto-switch on
@@ -227,7 +231,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
   positionReconciler.stop();
   stopTelegramCommandBot();
   stopLiquidationMonitor();
-  positionLifecycleManager.stop?.()?.catch?.(() => {});
+  positionLifecycleManager.stop?.();
 
   // 3. Brief pause for in-flight DB writes to complete
   await new Promise((r) => setTimeout(r, 500));

@@ -69,14 +69,14 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
   // --- Queries & Mutations ---
   // Credentials
   const { data: credentials, refetch: refetchCredentials } = trpc.trading.credentials.useQuery(
-    { userId: 1 },
+    undefined,
     { enabled: isOpen }
   );
   const saveCredentialsMutation = trpc.trading.saveCredentials.useMutation();
 
   // LLM Keys
   const { data: llmKeys, refetch: refetchLlmKeys } = trpc.llm.listKeys.useQuery(
-    { userId: 1 },
+    undefined,
     { enabled: isOpen }
   );
 
@@ -164,7 +164,6 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
     try {
       if (coindcxKey && coindcxSecret) {
         await saveCredentialsMutation.mutateAsync({
-          userId: 1,
           exchange: "coindcx",
           apiKey: coindcxKey,
           apiSecret: coindcxSecret,
@@ -173,7 +172,6 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
 
       if (binanceKey && binanceSecret) {
         await saveCredentialsMutation.mutateAsync({
-          userId: 1,
           exchange: "binance",
           apiKey: binanceKey,
           apiSecret: binanceSecret,
@@ -206,7 +204,6 @@ const SettingsModal = ({ isOpen, onClose }: SettingsModalProps) => {
     }
 
     addLlmKeyMutation.mutate({
-      userId: 1,
       label: llmLabel.trim(),
       provider: llmProvider,
       endpoint: llmEndpoint.trim(),

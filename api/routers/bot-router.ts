@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import { observable } from "@trpc/server/observable";
-import { createRouter, publicQuery, authedQuery, adminQuery } from "../middleware";
+import { createRouter, authedQuery, adminQuery } from "../middleware";
 import { STRATEGY_CONFIGS, type StrategyType } from "../services/strategy-config";
 import { latestRegimeCache } from "../services/regime-detector";
 import { startAutoAnalysis } from "./signal-router";

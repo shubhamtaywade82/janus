@@ -3,10 +3,8 @@ import type {
   MarketContext,
   BiasResult,
   AiRecommendation,
-  PositionAction,
 } from "./types";
 import { PositionAction as PA } from "./types";
-import { positionStore } from "./position-store";
 
 // ─── AI + Code-Fallback Position Advisor ────────────────────────────────────
 // Tries to get a recommendation from the configured LLM (via LlmAdvisor).
@@ -26,7 +24,7 @@ function codeBasedDecision(
   ctx: MarketContext,
   bias: BiasResult
 ): AiRecommendation {
-  const { roe, holdingMinutes, unrealizedPnl, stopLoss, entryPrice, markPrice, side } = position;
+  const { roe, holdingMinutes, stopLoss, entryPrice, markPrice, side } = position;
   const isLong = side === "LONG";
   const pnlSign = isLong
     ? markPrice > entryPrice

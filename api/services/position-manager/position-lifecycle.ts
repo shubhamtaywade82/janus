@@ -267,8 +267,6 @@ export class PositionLifecycleManager {
     position: ManagedPosition,
     portfolio: { totalEquityUsdt: number; availableBalance: number; totalUnrealizedPnl: number; openPositionCount: number }
   ): Promise<void> {
-    const db = getDb();
-
     // 1. Build market context
     const ctx = await buildMarketContext(position.binanceSymbol);
 

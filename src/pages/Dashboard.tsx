@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { createChart, ColorType, CandlestickSeries, HistogramSeries, LineSeries, LineStyle, createSeriesMarkers } from "lightweight-charts";
-import type { UTCTimestamp, SeriesMarker, Time } from "lightweight-charts";
+import type { UTCTimestamp, SeriesMarker, Time, ISeriesApi } from "lightweight-charts";
 import { OrderBlockPrimitive } from "@/lib/chart/primitives/OrderBlockPrimitive";
 import { FVGPrimitive } from "@/lib/chart/primitives/FVGPrimitive";
 import { StructurePrimitive } from "@/lib/chart/primitives/StructurePrimitive";
@@ -1720,7 +1720,6 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
 
   // Recalculate vertical coordinates of active positions on the canvas
   const updatePositionsCoordinates = useCallback(() => {
-    const chart = chartRef.current;
     const series = candlestickSeriesRef.current;
     const newCoords: Record<number, { entryY: number | null; liqY: number | null }> = {};
     
@@ -3158,7 +3157,7 @@ const Dashboard = () => {
   // Fetch portfolio for open positions
   const [portfolio, setPortfolio] = useState<any>(null);
   const { data: initialPortfolio } = trpc.trading.portfolio.useQuery(
-    { userId: 1 },
+    undefined,
     { staleTime: Infinity }
   );
   useEffect(() => {
@@ -3178,10 +3177,8 @@ const Dashboard = () => {
     onData: (data: any) => portfolioCallbackRef.current(data),
   });
 
-  const portfolioStreamInput = useMemo(() => ({ userId: 1 }), []);
-
   trpc.trading.portfolioStream.useSubscription(
-    portfolioStreamInput,
+    undefined,
     portfolioStreamOpts.current
   );
 
@@ -3191,7 +3188,7 @@ const Dashboard = () => {
   );
 
   const { data: instrInfo } = trpc.trading.instrumentInfo.useQuery(
-    { userId: 1, symbol: selectedSymbol },
+    { symbol: selectedSymbol },
     { staleTime: 60_000, refetchOnWindowFocus: false }
   );
 

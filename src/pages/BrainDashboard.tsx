@@ -18,7 +18,6 @@ export default function BrainDashboard() {
   const [triggerSymbol, setTriggerSymbol] = useState("B-BTC_USDT");
   const [triggerDirection, setTriggerDirection] = useState<"long" | "short">("long");
   const [triggerScore, setTriggerScore] = useState(85);
-  const [triggerCapital, setTriggerCapital] = useState("50");
   const [triggerSl, setTriggerSl] = useState("1.5");
   const [triggerTp, setTriggerTp] = useState("1.5");
   const [triggerTrailing, setTriggerTrailing] = useState(true);
@@ -35,13 +34,13 @@ export default function BrainDashboard() {
 
   // Fetch paper wallet details if in paper mode
   const { data: paperWalletData } = trpc.autoExecutor.paperWallet.useQuery(
-    { userId: 1 },
+    undefined,
     { enabled: tradingMode === "paper", refetchInterval: 5000 }
   );
 
   // Fetch live portfolio details if in live mode
   const { data: livePortfolioData } = trpc.trading.portfolio.useQuery(
-    { userId: 1 },
+    undefined,
     { enabled: tradingMode === "live", refetchInterval: 5000 }
   );
 
@@ -484,7 +483,7 @@ export default function BrainDashboard() {
                 value={triggerLeverage}
                 onChange={(e) => setTriggerLeverage(e.target.value)}
                 className="w-full px-2 py-1.5 rounded bg-[#09090b] border border-[#27272a] text-xs text-zinc-200 focus:border-emerald-500/50 outline-none"
-                placeholder="3"
+                placeholder="10"
               />
             </div>
             {/* Spacer */}

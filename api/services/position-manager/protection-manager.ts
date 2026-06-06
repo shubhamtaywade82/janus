@@ -24,7 +24,7 @@ export function checkProtectionStatus(position: ManagedPosition): ProtectionStat
 export async function ensureProtection(
   position: ManagedPosition,
   ctx: MarketContext,
-  userId: number
+  _userId: number
 ): Promise<ProtectionStatus> {
   const status = checkProtectionStatus(position);
   if (!status.needsProtection) return status;

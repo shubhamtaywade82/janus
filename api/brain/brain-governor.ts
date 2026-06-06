@@ -1,7 +1,7 @@
 import { globalRiskEngine, getOrCreateSession } from "../services/risk-engine";
 import { marketStateManager } from "../services/market-state";
 import { getPaperWallet } from "../services/paper-wallet";
-import { BrainDecision } from "./schemas";
+import type { BrainDecision } from "./schemas";
 
 export interface GovernorOutcome {
   approved: boolean;
@@ -16,7 +16,7 @@ export const brainGovernor = {
   check: async (
     userId: number,
     decision: BrainDecision,
-    marketData: any
+    _marketData: any
   ): Promise<GovernorOutcome> => {
     // 1. Stale feed check
     const now = Date.now();
