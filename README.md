@@ -10,23 +10,23 @@ Built on a unified modern stack utilizing Hono, Vite, React, TypeScript, and Dri
 
 ```mermaid
 graph TD
-    subgraph Frontend (Vite + React + TS)
+    subgraph FE["Frontend (Vite + React + TS)"]
         UI[Dashboard / Market / Trading UI]
         TRPC_Client[tRPC Client]
         UI --> TRPC_Client
     end
 
-    subgraph Backend (Hono + Node Server)
-        API[Hono HTTP & WebSocket Server]
+    subgraph BE["Backend (Hono + Node Server)"]
+        API[Hono HTTP and WebSocket Server]
         TRPC_Server[tRPC Router]
-        Auth[OAuth & Session Middleware]
-        
+        Auth[OAuth and Session Middleware]
+
         API --> TRPC_Server
         API --> Auth
     end
 
-    subgraph Database
-        DB[(MySQL Database)]
+    subgraph DB_Layer["Database"]
+        DB[(PostgreSQL)]
         Drizzle[Drizzle ORM]
     end
 
@@ -39,7 +39,7 @@ graph TD
 
 1. **Frontend**: React, TypeScript, Vite, Tailwind CSS, shadcn/ui.
 2. **Backend**: Hono, Node Server, tRPC (fetch adapter) for type-safe API communication.
-3. **Database**: MySQL managed with Drizzle ORM.
+3. **Database**: PostgreSQL managed with Drizzle ORM.
 4. **Authentication**: Generic OAuth workflow for user authorization, and JWT/Cookie-based session persistence.
 
 ---
@@ -58,7 +58,7 @@ graph TD
 │   └── lib/              # Shared helper libraries (env, cookies, encryption)
 ├── contracts/            # Common type contracts and constant declarations
 ├── db/                   # Database schemas and Drizzle migrations
-│   ├── schema.ts         # MySQL table definitions
+│   ├── schema.ts         # PostgreSQL table definitions
 │   └── migrations/       # Generated SQL migrations
 ├── src/                  # React Frontend application
 │   ├── components/       # shadcn/ui elements
@@ -76,7 +76,7 @@ graph TD
 ### 1. Prerequisites
 - **Node.js**: `v20` or higher
 - **Package Manager**: `npm`
-- **Database**: A running MySQL database instance
+- **Database**: A running PostgreSQL database instance
 
 ### 2. Install Dependencies
 Clone the repository and install the npm packages:
@@ -97,7 +97,7 @@ APP_ID=your-app-id
 APP_SECRET=your-app-secret-jwt-key
 
 # ── Database ───────────────────────────────────────────────────
-DATABASE_URL=mysql://user:password@127.0.0.1:3306/janus
+DATABASE_URL=postgres://user:password@127.0.0.1:5432/janus
 
 # ── Frontend (exposed to browser via Vite) ──────────────────────
 VITE_AUTH_URL=https://auth.example.com
@@ -112,7 +112,7 @@ OWNER_UNION_ID=admin-union-id
 ```
 
 ### 4. Database Setup
-Push the Drizzle schemas to your MySQL database:
+Push the Drizzle schemas to your PostgreSQL database:
 ```bash
 # Push schema changes directly
 npm run db:push
@@ -131,7 +131,7 @@ Start the unified backend dev server and Vite compilation process:
 ```bash
 npm run dev
 ```
-The application will be accessible at `http://localhost:3000`.
+The application will be accessible at `http://localhost:3010`.
 
 ### Running Tests
 Execute test suites with Vitest:
