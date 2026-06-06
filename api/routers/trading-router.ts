@@ -417,7 +417,7 @@ export async function fetchPortfolioData(userId: number) {
 
 export const tradingRouter = createRouter({
   // ─── Get all positions ───
-  positions: publicQuery
+  positions: authedQuery
     .input(
       z.object({
         userId: z.number().optional(),
@@ -425,9 +425,9 @@ export const tradingRouter = createRouter({
         symbol: z.string().optional(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = getDb();
-      const userId = input.userId || 1;
+      const userId = ctx.user.id;
 
       // Check if user has saved credentials for CoinDCX
       const creds = await db
@@ -558,14 +558,14 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── Get position by ID ───
-  position: publicQuery
+  position: authedQuery
     .input(z.object({ id: z.number() }))
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = getDb();
       const result = await db
         .select()
         .from(positions)
-        .where(eq(positions.id, input.id))
+        .where(and(eq(positions.id, input.id), eq(positions.userId, ctx.user.id)))
         .limit(1);
       return result[0] || null;
     }),
@@ -843,7 +843,7 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── Update position PnL ───
-  updatePositionPnl: publicQuery
+  updatePositionPnl: authedQuery
     .input(
       z.object({
         id: z.number(),
@@ -865,18 +865,17 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── Get trade history ───
-  trades: publicQuery
+  trades: authedQuery
     .input(
       z.object({
-        userId: z.number().optional(),
         symbol: z.string().optional(),
         limit: z.number().default(50),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = getDb();
-      const conditions = [];
-      if (input.userId) conditions.push(eq(trades.userId, input.userId));
+      const userId = ctx.user.id;
+      const conditions = [eq(trades.userId, userId)];
       if (input.symbol) conditions.push(eq(trades.symbol, input.symbol));
 
       const query = db
@@ -884,17 +883,13 @@ export const tradingRouter = createRouter({
         .from(trades)
         .orderBy(desc(trades.createdAt))
         .limit(input.limit);
-      if (conditions.length > 0) {
-        return query.where(and(...conditions));
-      }
-      return query;
+      return query.where(and(...conditions));
     }),
 
   // ─── Record a trade ───
-  recordTrade: publicQuery
+  recordTrade: authedQuery
     .input(
       z.object({
-        userId: z.number(),
         symbol: z.string(),
         side: z.enum(["buy", "sell"]),
         orderType: z.enum(["market", "limit", "stop"]).default("market"),
@@ -907,7 +902,7 @@ export const tradingRouter = createRouter({
         clientOrderId: z.string().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const priceVal = parseFloat(input.price) || 0;
       const sizeVal = parseFloat(input.size) || 0;
@@ -916,7 +911,7 @@ export const tradingRouter = createRouter({
       const tdsDeducted = tdsVal.toFixed(8);
 
       const result = await db.insert(trades).values({
-        userId: input.userId,
+        userId: ctx.user.id,
         symbol: input.symbol,
         side: input.side,
         orderType: input.orderType,
@@ -935,7 +930,7 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── Fee breakeven map — min price move needed to cover entry+exit fees per symbol ───
-  feeBreakevenMap: publicQuery
+  feeBreakevenMap: authedQuery
     .input(
       z.object({
         takerFeeRate: z.number().min(0).max(0.01).default(0.0005),
@@ -946,10 +941,9 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── Risk session status ───
-  riskStatus: publicQuery
-    .input(z.object({ userId: z.number() }))
-    .query(({ input }) => {
-      const session = sessions.get(input.userId);
+  riskStatus: authedQuery
+    .query(({ ctx }) => {
+      const session = sessions.get(ctx.user.id);
       if (!session) return null;
       const drawdownPct =
         session.startingBalance > 0
@@ -965,40 +959,37 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── Risk alert stream — fires on drawdown/cooldown events ───
-  riskAlertStream: publicQuery
-    .input(z.object({ userId: z.number() }))
-    .subscription(({ input }) => {
+  riskAlertStream: authedQuery
+    .subscription(({ ctx }) => {
       return observable((emit) => {
         const handler = (payload: unknown) => emit.next(payload);
-        tradingEvents.on(`risk-alert:${input.userId}`, handler);
-        return () => tradingEvents.off(`risk-alert:${input.userId}`, handler);
+        tradingEvents.on(`risk-alert:${ctx.user.id}`, handler);
+        return () => tradingEvents.off(`risk-alert:${ctx.user.id}`, handler);
       });
     }),
 
   // ─── Get portfolio summary ───
-  portfolio: publicQuery
-    .input(z.object({ userId: z.number() }))
-    .query(async ({ input }) => {
-      return fetchPortfolioData(input.userId);
+  portfolio: authedQuery
+    .query(async ({ ctx }) => {
+      return fetchPortfolioData(ctx.user.id);
     }),
 
   // ─── USDT/INR Currency Conversion Rate ───
-  currencyConversion: publicQuery
+  currencyConversion: authedQuery
     .query(async () => {
       const conversions = await getCurrencyConversions();
       return conversions[0] ?? { symbol: "USDTINR", conversion_price: 89.0 };
     }),
 
   // ─── Portfolio Subscription Stream ───
-  portfolioStream: publicQuery
-    .input(z.object({ userId: z.number() }))
-    .subscription(({ input }) => {
+  portfolioStream: authedQuery
+    .subscription(({ ctx }) => {
       return observable((emit) => {
         let closed = false;
 
         const onUpdate = async () => {
           try {
-            const data = await fetchPortfolioData(input.userId);
+            const data = await fetchPortfolioData(ctx.user.id);
             if (!closed) emit.next(data);
           } catch (e) {
             if (!closed) {
@@ -1008,7 +999,7 @@ export const tradingRouter = createRouter({
         };
 
         // Listen for internal portfolio updates
-        tradingEvents.on(`portfolio-update:${input.userId}`, onUpdate);
+        tradingEvents.on(`portfolio-update:${ctx.user.id}`, onUpdate);
 
         // Also refresh periodically every 5 seconds (heartbeat/sync fallback)
         const interval = setInterval(onUpdate, 5000);
@@ -1018,28 +1009,27 @@ export const tradingRouter = createRouter({
 
         return () => {
           closed = true;
-          tradingEvents.off(`portfolio-update:${input.userId}`, onUpdate);
+          tradingEvents.off(`portfolio-update:${ctx.user.id}`, onUpdate);
           clearInterval(interval);
         };
       });
     }),
 
   // ─── Exit Signal Stream — fires when fee-adjusted PnL > 0 on an open position ───
-  exitSignalStream: publicQuery
-    .input(z.object({ userId: z.number() }))
-    .subscription(({ input }) => {
+  exitSignalStream: authedQuery
+    .subscription(({ ctx }) => {
       return observable((emit) => {
         const onExitSignal = (payload: unknown) => {
           emit.next(payload);
         };
 
-        tradingEvents.on(`exit-signal:${input.userId}`, onExitSignal);
+        tradingEvents.on(`exit-signal:${ctx.user.id}`, onExitSignal);
 
         const refreshMonitor = () => {
           const db = getDb();
           db.select()
             .from(positions)
-            .where(and(eq(positions.userId, input.userId), eq(positions.status, "open")))
+            .where(and(eq(positions.userId, ctx.user.id), eq(positions.status, "open")))
             .then((openPositions) => {
               const monitored = openPositions.map((p) => ({
                 id: p.id,
@@ -1051,7 +1041,7 @@ export const tradingRouter = createRouter({
                 stopLoss: p.stopLoss ? parseFloat(p.stopLoss) : null,
                 takeProfit: p.takeProfit ? parseFloat(p.takeProfit) : null,
               }));
-              startExitMonitor(input.userId, monitored);
+              startExitMonitor(ctx.user.id, monitored);
             })
             .catch(() => {});
         };
@@ -1060,12 +1050,12 @@ export const tradingRouter = createRouter({
         refreshMonitor();
 
         // Refresh monitoring when positions open or close
-        tradingEvents.on(`portfolio-update:${input.userId}`, refreshMonitor);
+        tradingEvents.on(`portfolio-update:${ctx.user.id}`, refreshMonitor);
 
         return () => {
-          tradingEvents.off(`exit-signal:${input.userId}`, onExitSignal);
-          tradingEvents.off(`portfolio-update:${input.userId}`, refreshMonitor);
-          stopExitMonitor(input.userId);
+          tradingEvents.off(`exit-signal:${ctx.user.id}`, onExitSignal);
+          tradingEvents.off(`portfolio-update:${ctx.user.id}`, refreshMonitor);
+          stopExitMonitor(ctx.user.id);
         };
       });
     }),
@@ -1109,16 +1099,16 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── Get futures wallet (with derived metrics) ───
-  futuresWallet: publicQuery
-    .input(z.object({ userId: z.number(), marginCurrency: z.enum(["USDT", "INR"]).optional() }))
-    .query(async ({ input }) => {
+  futuresWallet: authedQuery
+    .input(z.object({ marginCurrency: z.enum(["USDT", "INR"]).optional() }))
+    .query(async ({ input, ctx }) => {
       const db = getDb();
       const cached = await db
         .select()
         .from(futuresWallets)
         .where(
           and(
-            eq(futuresWallets.userId, input.userId),
+            eq(futuresWallets.userId, ctx.user.id),
             eq(futuresWallets.exchange, "coindcx"),
             input.marginCurrency ? eq(futuresWallets.marginCurrency, input.marginCurrency) : undefined
           )
@@ -1160,16 +1150,15 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── Get cross margin details (live from CoinDCX) ───
-  crossMarginDetails: publicQuery
-    .input(z.object({ userId: z.number() }))
-    .query(async ({ input }) => {
+  crossMarginDetails: authedQuery
+    .query(async ({ ctx }) => {
       const db = getDb();
       const creds = await db
         .select()
         .from(exchangeCredentials)
         .where(
           and(
-            eq(exchangeCredentials.userId, input.userId),
+            eq(exchangeCredentials.userId, ctx.user.id),
             eq(exchangeCredentials.exchange, "coindcx")
           )
         )
@@ -1245,23 +1234,22 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── List futures orders ───
-  futuresOrders: publicQuery
+  futuresOrders: authedQuery
     .input(
       z.object({
-        userId: z.number(),
         status: z.enum(["open", "closed", "cancelled"]).optional(),
         marginCurrency: z.enum(["USDT", "INR"]).optional(),
         market: z.string().optional(),
       })
     )
-    .query(async ({ input }) => {
+    .query(async ({ input, ctx }) => {
       const db = getDb();
       const creds = await db
         .select()
         .from(exchangeCredentials)
         .where(
           and(
-            eq(exchangeCredentials.userId, input.userId),
+            eq(exchangeCredentials.userId, ctx.user.id),
             eq(exchangeCredentials.exchange, "coindcx")
           )
         )
@@ -1278,14 +1266,14 @@ export const tradingRouter = createRouter({
     }),
 
   // ─── Instrument info + user context for trading sidebar ───
-  instrumentInfo: publicQuery
-    .input(z.object({ userId: z.number(), symbol: z.string() }))
-    .query(async ({ input }) => {
+  instrumentInfo: authedQuery
+    .input(z.object({ symbol: z.string() }))
+    .query(async ({ input, ctx }) => {
       const db = getDb();
       const [instrument, creds] = await Promise.all([
         getFuturesInstrumentInfo(input.symbol).catch(() => null),
         db.select().from(exchangeCredentials)
-          .where(and(eq(exchangeCredentials.userId, input.userId), eq(exchangeCredentials.exchange, "coindcx")))
+          .where(and(eq(exchangeCredentials.userId, ctx.user.id), eq(exchangeCredentials.exchange, "coindcx")))
           .limit(1),
       ]);
 

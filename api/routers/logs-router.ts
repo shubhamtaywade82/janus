@@ -1,12 +1,12 @@
 import { z } from "zod";
-import { createRouter, publicQuery } from "../middleware";
+import { createRouter, authedQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { systemLogs } from "@db/schema";
 import { desc, eq, and } from "drizzle-orm";
 
 export const logsRouter = createRouter({
   // ─── Get system logs ───
-  list: publicQuery
+  list: authedQuery
     .input(
       z.object({
         level: z.enum(["info", "warn", "error", "critical", "debug"]).optional(),
@@ -33,7 +33,7 @@ export const logsRouter = createRouter({
     }),
 
   // ─── Create a log entry ───
-  create: publicQuery
+  create: authedQuery
     .input(
       z.object({
         level: z.enum(["info", "warn", "error", "critical", "debug"]).default("info"),
@@ -56,7 +56,7 @@ export const logsRouter = createRouter({
     }),
 
   // ─── Get log statistics ───
-  stats: publicQuery.query(async () => {
+  stats: authedQuery.query(async () => {
     const db = getDb();
     const allLogs = await db
       .select()
@@ -88,7 +88,7 @@ export const logsRouter = createRouter({
   }),
 
   // ─── Get recent logs for a component ───
-  component: publicQuery
+  component: authedQuery
     .input(
       z.object({
         component: z.string(),

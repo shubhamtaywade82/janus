@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { createRouter, publicQuery } from "../middleware";
+import { createRouter, authedQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { autoExecutorConfig, equitySnapshots, positions } from "@db/schema";
 import { eq, desc, and } from "drizzle-orm";
@@ -17,23 +17,21 @@ import { env } from "../lib/env";
 
 export const autoExecutorRouter = createRouter({
   // ─── Get config ───
-  getConfig: publicQuery
-    .input(z.object({ userId: z.number() }))
-    .query(async ({ input }) => {
+  getConfig: authedQuery
+    .query(async ({ ctx }) => {
       const db = getDb();
       const rows = await db
         .select()
         .from(autoExecutorConfig)
-        .where(eq(autoExecutorConfig.userId, input.userId))
+        .where(eq(autoExecutorConfig.userId, ctx.user.id))
         .limit(1);
       return rows[0] ?? null;
     }),
 
   // ─── Save / upsert config ───
-  saveConfig: publicQuery
+  saveConfig: authedQuery
     .input(
       z.object({
-        userId: z.number(),
         enabled: z.boolean().optional(),
         targetSymbols: z.array(z.string()).optional(),
         defaultSizeUsdt: z.string().optional(),
@@ -50,9 +48,10 @@ export const autoExecutorRouter = createRouter({
         paperStartingBalance: z.string().optional(),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
-      const { userId, ...fields } = input;
+      const userId = ctx.user.id;
+      const fields = input;
 
       const existing = await db
         .select({ id: autoExecutorConfig.id })
@@ -72,7 +71,7 @@ export const autoExecutorRouter = createRouter({
     }),
 
   // ─── Runtime state (in-memory counters) ───
-  status: publicQuery.query(() => ({
+  status: authedQuery.query(() => ({
     ...globalAutoExecutor.state,
     killSwitch: {
       isActive: globalKillSwitch.isActive,
@@ -83,16 +82,16 @@ export const autoExecutorRouter = createRouter({
   })),
 
   // ─── Paper wallet — computed fresh from DB on every call (no in-memory cache) ───
-  paperWallet: publicQuery
-    .input(z.object({ userId: z.number() }))
-    .query(async ({ input }) => {
+  paperWallet: authedQuery
+    .query(async ({ ctx }) => {
       const db = getDb();
+      const userId = ctx.user.id;
 
       // Starting balance from config
       const configRows = await db
         .select({ paperStartingBalance: autoExecutorConfig.paperStartingBalance })
         .from(autoExecutorConfig)
-        .where(eq(autoExecutorConfig.userId, input.userId))
+        .where(eq(autoExecutorConfig.userId, userId))
         .limit(1);
       const startingBalance = parseFloat(configRows[0]?.paperStartingBalance ?? "10000");
 
@@ -101,7 +100,7 @@ export const autoExecutorRouter = createRouter({
         .select({ margin: positions.margin })
         .from(positions)
         .where(and(
-          eq(positions.userId, input.userId),
+          eq(positions.userId, userId),
           eq(positions.status, "open"),
           eq(positions.isPaper, true)
         ));
@@ -112,7 +111,7 @@ export const autoExecutorRouter = createRouter({
         .select({ realizedPnl: positions.realizedPnl })
         .from(positions)
         .where(and(
-          eq(positions.userId, input.userId),
+          eq(positions.userId, userId),
           eq(positions.status, "closed"),
           eq(positions.isPaper, true)
         ));
@@ -122,7 +121,7 @@ export const autoExecutorRouter = createRouter({
       const balance = startingBalance - lockedMargin + realizedPnl;
 
       return {
-        userId: input.userId,
+        userId,
         startingBalance,
         balance,
         lockedMargin,
@@ -132,38 +131,36 @@ export const autoExecutorRouter = createRouter({
     }),
 
   // ─── Reset paper wallet — updates starting balance and clears in-memory state ───
-  resetPaperWallet: publicQuery
-    .input(z.object({ userId: z.number(), newBalance: z.number().default(10_000) }))
-    .mutation(async ({ input }) => {
-      await resetPaperWallet(input.userId, input.newBalance);
+  resetPaperWallet: authedQuery
+    .input(z.object({ newBalance: z.number().default(10_000) }))
+    .mutation(async ({ input, ctx }) => {
+      await resetPaperWallet(ctx.user.id, input.newBalance);
       return { success: true, balance: input.newBalance };
     }),
 
   // ─── Paper wallet ledger entries (audit trail) ───
-  paperWalletLedger: publicQuery
-    .input(z.object({ userId: z.number(), limit: z.number().default(50) }))
-    .query(async ({ input }) => {
-      return getPaperLedger(input.userId, input.limit);
+  paperWalletLedger: authedQuery
+    .input(z.object({ limit: z.number().default(50) }))
+    .query(async ({ input, ctx }) => {
+      return getPaperLedger(ctx.user.id, input.limit);
     }),
 
   // ─── Paper wallet snapshots (equity curve) ───
-  paperWalletSnapshots: publicQuery
-    .input(z.object({ userId: z.number(), limit: z.number().default(100) }))
-    .query(async ({ input }) => {
-      return getPaperSnapshots(input.userId, input.limit);
+  paperWalletSnapshots: authedQuery
+    .input(z.object({ limit: z.number().default(100) }))
+    .query(async ({ input, ctx }) => {
+      return getPaperSnapshots(ctx.user.id, input.limit);
     }),
 
   // ─── Take a manual snapshot ───
-  takePaperSnapshot: publicQuery
-    .input(z.object({ userId: z.number() }))
-    .mutation(async ({ input }) => {
-      await snapshotPaperWallet(input.userId);
+  takePaperSnapshot: authedQuery
+    .mutation(async ({ ctx }) => {
+      await snapshotPaperWallet(ctx.user.id);
       return { success: true };
     }),
 
   // ─── Live stream of execution decisions ───
-  activityStream: publicQuery
-    .input(z.void())
+  activityStream: authedQuery
     .subscription(() => {
       return observable((emit) => {
         const onDecision = (d: unknown) => emit.next(d);
@@ -173,7 +170,7 @@ export const autoExecutorRouter = createRouter({
     }),
 
   // ─── Kill switch ───
-  killSwitch: publicQuery
+  killSwitch: authedQuery
     .input(
       z.object({
         action: z.enum(["trigger", "reset"]),
@@ -189,14 +186,13 @@ export const autoExecutorRouter = createRouter({
       return { isActive: globalKillSwitch.isActive, state: globalKillSwitch.state };
     }),
 
-  killSwitchStatus: publicQuery.query(() => ({
+  killSwitchStatus: authedQuery.query(() => ({
     isActive: globalKillSwitch.isActive,
     state: globalKillSwitch.state,
   })),
 
   // ─── Kill switch stream ───
-  killSwitchStream: publicQuery
-    .input(z.void())
+  killSwitchStream: authedQuery
     .subscription(() => {
       return observable((emit) => {
         const onTriggered = (s: unknown) => emit.next({ event: "triggered", state: s });
@@ -211,16 +207,15 @@ export const autoExecutorRouter = createRouter({
     }),
 
   // ─── Performance metrics ───
-  metrics: publicQuery
-    .input(z.object({ userId: z.number() }))
-    .query(async ({ input }) => {
-      return computeMetrics(input.userId);
+  metrics: authedQuery
+    .query(async ({ ctx }) => {
+      return computeMetrics(ctx.user.id);
     }),
 
   // ─── Equity curve (last N snapshots) ───
-  equityCurve: publicQuery
-    .input(z.object({ userId: z.number(), limit: z.number().default(200) }))
-    .query(async ({ input }) => {
+  equityCurve: authedQuery
+    .input(z.object({ limit: z.number().default(200) }))
+    .query(async ({ input, ctx }) => {
       const db = getDb();
       return db
         .select({
@@ -230,7 +225,7 @@ export const autoExecutorRouter = createRouter({
           openPositionCount: equitySnapshots.openPositionCount,
         })
         .from(equitySnapshots)
-        .where(eq(equitySnapshots.userId, input.userId))
+        .where(eq(equitySnapshots.userId, ctx.user.id))
         .orderBy(desc(equitySnapshots.snapshotAt))
         .limit(input.limit)
         .then((r) => [...r].reverse()); // chronological

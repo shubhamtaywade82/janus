@@ -234,7 +234,6 @@ export function subscribeToSymbol(symbol: string) {
         }
       }
       else if (stream.endsWith("@ticker")) {
-        require("fs").writeFileSync("test-ticker.json", JSON.stringify(data));
         const formattedTicker = {
           symbol: data.s,
           priceChange: data.p,

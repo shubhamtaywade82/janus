@@ -57,3 +57,17 @@ export const env = {
   // Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
   encryptionKey: process.env.ENCRYPTION_KEY ?? "",
 };
+
+if (!env.encryptionKey) {
+  throw new Error("ENCRYPTION_KEY missing");
+}
+
+try {
+  const buf = Buffer.from(env.encryptionKey, "hex");
+  if (buf.length !== 32) {
+    throw new Error(`ENCRYPTION_KEY invalid size (must be 32 bytes, got ${buf.length} bytes)`);
+  }
+} catch (err: any) {
+  throw new Error(`ENCRYPTION_KEY invalid hex formatting: ${err.message}`);
+}
+

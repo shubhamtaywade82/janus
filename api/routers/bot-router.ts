@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import { observable } from "@trpc/server/observable";
-import { createRouter, publicQuery, adminQuery } from "../middleware";
+import { createRouter, publicQuery, authedQuery, adminQuery } from "../middleware";
 import { STRATEGY_CONFIGS, type StrategyType } from "../services/strategy-config";
 import { latestRegimeCache } from "../services/regime-detector";
 import { startAutoAnalysis } from "./signal-router";
@@ -21,12 +21,12 @@ const strategyTypeSchema = z.enum([
 
 export const botRouter = createRouter({
   // ─── Current bot status ───
-  status: publicQuery.query(async () => {
+  status: authedQuery.query(async ({ ctx }) => {
     const db = getDb();
     const rows = await db
       .select()
       .from(autoExecutorConfig)
-      .where(eq(autoExecutorConfig.userId, 1))
+      .where(eq(autoExecutorConfig.userId, ctx.user.id))
       .limit(1);
     const config = rows[0] ?? null;
 
@@ -135,21 +135,21 @@ export const botRouter = createRouter({
     }),
 
   // ─── Latest regime per tracked symbol ───
-  regime: publicQuery.query(() => {
+  regime: authedQuery.query(() => {
     const entries: Record<string, any> = {};
     latestRegimeCache.forEach((v, k) => { entries[k] = v; });
     return entries;
   }),
 
   // ─── Recent decision history ───
-  decisions: publicQuery
+  decisions: authedQuery
     .input(z.object({ limit: z.number().min(1).max(100).default(20) }))
     .query(({ input: _input }) => {
       return globalAutoExecutor.state.lastDecision ? [globalAutoExecutor.state.lastDecision] : [];
     }),
 
   // ─── Real-time decision stream (WebSocket subscription) ───
-  decisionStream: publicQuery.subscription(() => {
+  decisionStream: authedQuery.subscription(() => {
     return observable<any>((emit) => {
       const onDecision = (d: any) => emit.next(d);
       autoExecutorEvents.on("decision", onDecision);

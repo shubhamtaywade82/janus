@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { createRouter, publicQuery } from "../middleware";
+import { createRouter, authedQuery } from "../middleware";
 import { getDb } from "../queries/connection";
 import { llmApiKeys, systemLogs } from "@db/schema";
-import { eq, desc, asc } from "drizzle-orm";
+import { eq, desc, asc, and } from "drizzle-orm";
 import { observable } from "@trpc/server/observable";
 import { globalLlmAdvisor } from "../services/llm-advisor";
 import { EventEmitter } from "events";
@@ -13,9 +13,8 @@ llmDecisionEvents.setMaxListeners(20);
 
 export const llmRouter = createRouter({
   // ─── List all keys for a user ───
-  listKeys: publicQuery
-    .input(z.object({ userId: z.number() }))
-    .query(async ({ input }) => {
+  listKeys: authedQuery
+    .query(async ({ ctx }) => {
       const db = getDb();
       return db
         .select({
@@ -31,15 +30,14 @@ export const llmRouter = createRouter({
           lastUsedAt: llmApiKeys.lastUsedAt,
         })
         .from(llmApiKeys)
-        .where(eq(llmApiKeys.userId, input.userId))
+        .where(eq(llmApiKeys.userId, ctx.user.id))
         .orderBy(asc(llmApiKeys.priority));
     }),
 
   // ─── Add a new key ───
-  addKey: publicQuery
+  addKey: authedQuery
     .input(
       z.object({
-        userId: z.number(),
         label: z.string().min(1).max(100),
         provider: z.enum(["ollama", "openai", "anthropic"]).default("ollama"),
         endpoint: z.string().url(),
@@ -48,40 +46,50 @@ export const llmRouter = createRouter({
         priority: z.number().min(1).max(100).default(1),
       })
     )
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       const result = await db
         .insert(llmApiKeys)
-        .values({ ...input })
+        .values({ userId: ctx.user.id, ...input })
         .returning({ id: llmApiKeys.id });
       return { id: result[0].id };
     }),
 
   // ─── Delete a key ───
-  deleteKey: publicQuery
+  deleteKey: authedQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
-      await db.delete(llmApiKeys).where(eq(llmApiKeys.id, input.id));
+      await db.delete(llmApiKeys).where(
+        and(
+          eq(llmApiKeys.id, input.id),
+          eq(llmApiKeys.userId, ctx.user.id)
+        )
+      );
       return { success: true };
     }),
 
   // ─── Toggle active ───
-  toggleKey: publicQuery
+  toggleKey: authedQuery
     .input(z.object({ id: z.number(), isActive: z.boolean() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       const db = getDb();
       await db
         .update(llmApiKeys)
         .set({ isActive: input.isActive })
-        .where(eq(llmApiKeys.id, input.id));
+        .where(
+          and(
+            eq(llmApiKeys.id, input.id),
+            eq(llmApiKeys.userId, ctx.user.id)
+          )
+        );
       return { success: true };
     }),
 
   // ─── Test a key — sends a trivial prompt ───
-  testKey: publicQuery
+  testKey: authedQuery
     .input(z.object({ id: z.number() }))
-    .mutation(async ({ input }) => {
+    .mutation(async ({ input, ctx }) => {
       let key = globalLlmAdvisor.getKeyById(input.id);
 
       if (!key) {
@@ -89,7 +97,12 @@ export const llmRouter = createRouter({
         const rows = await db
           .select()
           .from(llmApiKeys)
-          .where(eq(llmApiKeys.id, input.id))
+          .where(
+            and(
+              eq(llmApiKeys.id, input.id),
+              eq(llmApiKeys.userId, ctx.user.id)
+            )
+          )
           .limit(1);
 
         if (rows[0]) {
@@ -122,10 +135,10 @@ export const llmRouter = createRouter({
     }),
 
   // ─── Key health status (in-memory) ───
-  keyStatus: publicQuery.query(() => globalLlmAdvisor.getKeyStatus()),
+  keyStatus: authedQuery.query(() => globalLlmAdvisor.getKeyStatus()),
 
   // ─── Activity log — last N LLM decisions from system_logs ───
-  activityLog: publicQuery
+  activityLog: authedQuery
     .input(z.object({ limit: z.number().default(50) }))
     .query(async ({ input }) => {
       const db = getDb();
@@ -138,7 +151,7 @@ export const llmRouter = createRouter({
     }),
 
   // ─── Live stream of LLM decision events ───
-  decisionStream: publicQuery.subscription(() => {
+  decisionStream: authedQuery.subscription(() => {
     return observable((emit) => {
       const onDecision = (d: unknown) => emit.next(d);
       llmDecisionEvents.on("decision", onDecision);

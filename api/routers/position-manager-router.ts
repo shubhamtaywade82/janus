@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { TRPCError } from "@trpc/server";
-import { createRouter, publicQuery } from "../middleware";
+import { createRouter, authedQuery } from "../middleware";
 import { positionLifecycleManager, positionStore } from "../services/position-manager/index";
 import { positionManagerBus } from "../services/position-manager/event-bus";
 import { getLlmKeyHealth } from "../services/position-manager/llm-client";
@@ -12,7 +12,7 @@ import type { AssessmentRecord } from "../services/position-manager/types";
 
 export const positionManagerRouter = createRouter({
   // ── Status ──────────────────────────────────────────────────────────────
-  status: publicQuery.query(() => {
+  status: authedQuery.query(() => {
     const open = positionStore.getOpen();
     return {
       isRunning: true,
@@ -38,7 +38,7 @@ export const positionManagerRouter = createRouter({
   }),
 
   // ── Recent assessments from memory ──────────────────────────────────────
-  recentAssessments: publicQuery.query(() => {
+  recentAssessments: authedQuery.query(() => {
     return positionLifecycleManager
       .getAssessmentHistory()
       .slice(-20)
@@ -62,7 +62,7 @@ export const positionManagerRouter = createRouter({
   }),
 
   // ── Historical assessments from DB ──────────────────────────────────────
-  assessmentHistory: publicQuery
+  assessmentHistory: authedQuery
     .input(
       z.object({
         positionId: z.number().optional(),
@@ -90,7 +90,7 @@ export const positionManagerRouter = createRouter({
     }),
 
   // ── Force an immediate assessment ───────────────────────────────────────
-  forceAssess: publicQuery
+  forceAssess: authedQuery
     .input(z.object({ positionId: z.number().optional() }))
     .mutation(async ({ input }) => {
       // Trigger a sync + assessment cycle
@@ -107,11 +107,11 @@ export const positionManagerRouter = createRouter({
     }),
 
   // ── Get/update config ────────────────────────────────────────────────────
-  getConfig: publicQuery.query(() => {
+  getConfig: authedQuery.query(() => {
     return positionLifecycleManager.getConfig();
   }),
 
-  updateConfig: publicQuery
+  updateConfig: authedQuery
     .input(
       z.object({
         enabled: z.boolean().optional(),
@@ -134,10 +134,10 @@ export const positionManagerRouter = createRouter({
 
   // ── LLM key health ───────────────────────────────────────────────────────
   // Shows paper (local Ollama) and live (Ollama.com cloud) key status.
-  llmHealth: publicQuery.query(() => getLlmKeyHealth()),
+  llmHealth: authedQuery.query(() => getLlmKeyHealth()),
 
   // ── Live event stream ────────────────────────────────────────────────────
-  assessmentStream: publicQuery.subscription(() => {
+  assessmentStream: authedQuery.subscription(() => {
     return observable<{
       type: "assessment" | "action" | "lifecycle" | "error";
       positionId?: number;

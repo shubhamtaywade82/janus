@@ -11,8 +11,45 @@ export interface KillState {
 export const killSwitchEvents = new EventEmitter();
 killSwitchEvents.setMaxListeners(20);
 
+import * as fs from "fs";
+import * as path from "path";
+
+const STATE_FILE = path.resolve(process.cwd(), "kill-switch-state.json");
+
 export class KillSwitch {
   state: KillState | null = null;
+
+  constructor() {
+    this.loadState();
+  }
+
+  private loadState() {
+    try {
+      if (fs.existsSync(STATE_FILE)) {
+        const data = fs.readFileSync(STATE_FILE, "utf-8");
+        this.state = JSON.parse(data);
+        if (this.state) {
+          console.log(`[kill-switch] Loaded persistent state: type=${this.state.type} reason="${this.state.reason}"`);
+        }
+      }
+    } catch (err) {
+      console.error("[kill-switch] Failed to load persistent state:", err);
+    }
+  }
+
+  private saveState() {
+    try {
+      if (this.state) {
+        fs.writeFileSync(STATE_FILE, JSON.stringify(this.state, null, 2), "utf-8");
+      } else {
+        if (fs.existsSync(STATE_FILE)) {
+          fs.unlinkSync(STATE_FILE);
+        }
+      }
+    } catch (err) {
+      console.error("[kill-switch] Failed to save state:", err);
+    }
+  }
 
   get isActive(): boolean {
     return this.state !== null;
@@ -26,6 +63,7 @@ export class KillSwitch {
     if (this.isActive) return; // first trigger wins
     this.state = { type, reason, triggeredAt: Date.now() };
     console.error(`[kill-switch] TRIGGERED — type=${type} reason="${reason}"`);
+    this.saveState();
     killSwitchEvents.emit("triggered", this.state);
   }
 
@@ -33,6 +71,7 @@ export class KillSwitch {
     const prev = this.state;
     this.state = null;
     console.log(`[kill-switch] RESET — was: ${prev?.reason ?? "none"}`);
+    this.saveState();
     killSwitchEvents.emit("reset", prev);
   }
 }

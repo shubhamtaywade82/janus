@@ -1324,50 +1324,59 @@ function evaluateSymbolSignal(
   extraMetrics?: ConfluenceExtraMetrics
 ): typeof signals.$inferInsert {
   const config = STRATEGY_CONFIGS[strategy];
+  let signalData: typeof signals.$inferInsert;
 
   if (strategy === "grid") {
     const res = evaluateGridStrategy(currentPrice, prices, config.threshold);
-    return { symbol: coindcxSymbol, microScore: String(res.score), intraScore: "50.00", swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
+    signalData = { symbol: coindcxSymbol, microScore: String(res.score), intraScore: "50.00", swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
   }
-  if (strategy === "momentum_reversal") {
+  else if (strategy === "momentum_reversal") {
     const res = evaluateMomentumReversal(currentPrice, prices, config.threshold);
-    return { symbol: coindcxSymbol, microScore: "50.00", intraScore: String(res.score), swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
+    signalData = { symbol: coindcxSymbol, microScore: "50.00", intraScore: String(res.score), swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
   }
-  if (strategy === "bb_reversion") {
+  else if (strategy === "bb_reversion") {
     const res = evaluateBBReversion(currentPrice, prices, config.threshold);
-    return { symbol: coindcxSymbol, microScore: "50.00", intraScore: "50.00", swingScore: String(res.score), compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
+    signalData = { symbol: coindcxSymbol, microScore: "50.00", intraScore: "50.00", swingScore: String(res.score), compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
   }
-  if (strategy === "ml_sizing") {
+  else if (strategy === "ml_sizing") {
     const res = evaluateMLSizing(currentPrice, prices, highs, lows, config.threshold);
-    return { symbol: coindcxSymbol, microScore: "50.00", intraScore: String(res.score), swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
+    signalData = { symbol: coindcxSymbol, microScore: "50.00", intraScore: String(res.score), swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
   }
-  if (strategy === "scalping_micro") {
+  else if (strategy === "scalping_micro") {
     const res = evaluateScalpingMicro(currentPrice, obMetrics, tapeMetrics, config.threshold);
-    return { symbol: coindcxSymbol, microScore: String(res.score), intraScore: "50.00", swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
+    signalData = { symbol: coindcxSymbol, microScore: String(res.score), intraScore: "50.00", swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy } };
+  }
+  else {
+    const analysis = analyzeConfluence(
+      coindcxSymbol,
+      obMetrics,
+      tapeMetrics,
+      prices,
+      volumes,
+      extraMetrics,
+      config.weights,
+      config.threshold
+    );
+    signalData = {
+      symbol: coindcxSymbol,
+      microScore: String(analysis.microScore),
+      intraScore: String(analysis.intraScore),
+      swingScore: String(analysis.swingScore),
+      compositeScore: String(analysis.compositeScore),
+      threshold: String(analysis.threshold),
+      isGated: analysis.isGated,
+      direction: analysis.direction,
+      metadata: { ...analysis.indicators, strategy },
+    };
   }
 
-  const analysis = analyzeConfluence(
-    coindcxSymbol,
-    obMetrics,
-    tapeMetrics,
-    prices,
-    volumes,
-    extraMetrics,
-    config.weights,
-    config.threshold
-  );
-
-  return {
-    symbol: coindcxSymbol,
-    microScore: String(analysis.microScore),
-    intraScore: String(analysis.intraScore),
-    swingScore: String(analysis.swingScore),
-    compositeScore: String(analysis.compositeScore),
-    threshold: String(analysis.threshold),
-    isGated: analysis.isGated,
-    direction: analysis.direction,
-    metadata: { ...analysis.indicators, strategy },
+  // Always inject currentPrice into metadata for drift protection
+  signalData.metadata = {
+    ...(signalData.metadata as Record<string, unknown> ?? {}),
+    signalPrice: currentPrice,
   };
+
+  return signalData;
 }
 
 let klineUpdateListener: ((symbol: string, kline: any) => void) | null = null;

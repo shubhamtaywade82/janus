@@ -14,6 +14,8 @@
  */
 
 import { EventEmitter } from "events";
+import * as fs from "fs";
+import * as path from "path";
 import { getDb } from "../queries/connection";
 import { positions, exchangeCredentials, autoExecutorConfig, systemLogs, signals } from "@db/schema";
 import { eq, and } from "drizzle-orm";
@@ -38,6 +40,8 @@ import { env } from "../lib/env";
 import { decryptCreds } from "../lib/crypto";
 import type { Signal, AutoExecutorConfig } from "@db/schema";
 import type { StrategyType } from "./strategy-config";
+
+const DEDUP_FILE = path.resolve(process.cwd(), "dedup-cache-state.json");
 
 export const autoExecutorEvents = new EventEmitter();
 autoExecutorEvents.setMaxListeners(20);
@@ -72,6 +76,40 @@ export class AutoExecutor {
   constructor() {
     // Subscribe to exit signals for default user (userId=1)
     tradingEvents.on(`exit-signal:1`, this.handleExitSignal.bind(this));
+    this.loadDedupCache();
+  }
+
+  private loadDedupCache() {
+    try {
+      if (fs.existsSync(DEDUP_FILE)) {
+        const data = fs.readFileSync(DEDUP_FILE, "utf-8");
+        const parsed = JSON.parse(data) as Record<string, number>;
+        const now = Date.now();
+        for (const [key, ts] of Object.entries(parsed)) {
+          if (now - ts <= this.DEDUP_WINDOW_MS) {
+            this.recentExecutions.set(key, ts);
+          }
+        }
+        console.log(`[auto-executor] Loaded ${this.recentExecutions.size} entries from persistent dedup cache`);
+      }
+    } catch (err) {
+      console.error("[auto-executor] Failed to load dedup cache:", err);
+    }
+  }
+
+  private saveDedupCache() {
+    try {
+      const obj: Record<string, number> = {};
+      const now = Date.now();
+      for (const [key, ts] of this.recentExecutions) {
+        if (now - ts <= this.DEDUP_WINDOW_MS) {
+          obj[key] = ts;
+        }
+      }
+      fs.writeFileSync(DEDUP_FILE, JSON.stringify(obj, null, 2), "utf-8");
+    } catch (err) {
+      console.error("[auto-executor] Failed to save dedup cache:", err);
+    }
   }
 
   /** Current executor state */
@@ -106,10 +144,15 @@ export class AutoExecutor {
 
     // Clean up stale dedup entries to prevent unbounded memory growth
     const now = Date.now();
+    let cleaned = false;
     for (const [key, ts] of this.recentExecutions) {
       if (now - ts > this.DEDUP_WINDOW_MS) {
         this.recentExecutions.delete(key);
+        cleaned = true;
       }
+    }
+    if (cleaned) {
+      this.saveDedupCache();
     }
 
     for (const signal of gated) {
@@ -403,6 +446,20 @@ export class AutoExecutor {
       return this.skip(signal, "no price feed");
     }
 
+    // Gate 7b: Price drift protection check (Binance signal price vs CoinDCX execution price)
+    const sigMetadata = signal.metadata as Record<string, unknown> | null;
+    const signalPrice = sigMetadata?.signalPrice as number | undefined;
+    if (signalPrice && signalPrice > 0) {
+      const drift = Math.abs(currentPrice - signalPrice) / signalPrice;
+      const MAX_DRIFT_PCT = 0.005; // 0.5% maximum allowable price drift
+      if (drift > MAX_DRIFT_PCT) {
+        return this.skip(
+          signal,
+          `price drift: CoinDCX price ${currentPrice} vs Binance signal price ${signalPrice} is ${(drift * 100).toFixed(2)}% > ${(MAX_DRIFT_PCT * 100).toFixed(2)}%`
+        );
+      }
+    }
+
     // Capital allocation: use configured % of free balance, capped by fixed USDT size
     const allocationPct = parseFloat(config.capitalAllocationPct ?? "0.10"); // e.g. 0.10 = 10%
     const balanceCap = (walletFree || session.startingBalance) * allocationPct;
@@ -487,6 +544,7 @@ export class AutoExecutor {
 
     // Record execution for dedup gate (Gate 1c)
     this.recentExecutions.set(dedupKey, Date.now());
+    this.saveDedupCache();
 
     // Lock margin in paper wallet
     if (isPaperMode) {
@@ -535,10 +593,38 @@ export class AutoExecutor {
     isPaper: boolean;
   }): Promise<void> {
     const db = getDb();
+    const clientOrderId = `AE-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+
+    // 1. Pre-insert the position record in the database before order execution.
+    // If the process crashes or DB becomes unavailable now, no live order was placed.
+    // If the DB write succeeds but subsequent order placement crashes, the record is left
+    // as a pending tracking record with exchangeOrderId = clientOrderId for the reconciler.
+    const posId = await db.transaction(async (tx) => {
+      const result = await tx.insert(positions).values({
+        userId: params.userId,
+        symbol: params.symbol,
+        side: params.side,
+        entryPrice: String(params.currentPrice),
+        currentPrice: String(params.currentPrice),
+        size: String(params.size),
+        leverage: params.leverage,
+        margin: String((params.notional / params.leverage).toFixed(4)),
+        stopLoss: String(params.stopLoss),
+        takeProfit: String(params.takeProfit),
+        unrealizedPnl: "0",
+        realizedPnl: "0",
+        status: "open",
+        exchangeOrderId: clientOrderId, // Store temporary client ID first
+        signalId: params.signalId,
+        strategyType: params.strategyType,
+        isPaper: params.isPaper,
+      }).returning({ id: positions.id });
+      return result[0].id;
+    });
+
     let exchangeOrderId: string | undefined;
 
     if (params.creds && env.placeOrders) {
-      const clientOrderId = `AE-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
       try {
         const coindcxSym = `B-${params.symbol.replace("USDT", "_USDT")}`;
         const order = await createFuturesOrder(
@@ -564,35 +650,21 @@ export class AutoExecutor {
             `Position will reflect actual fill.`
           );
         }
+
+        // 2. Update the DB record with the actual exchangeOrderId returned by the exchange
+        await db.update(positions)
+          .set({ exchangeOrderId })
+          .where(eq(positions.id, posId));
+
       } catch (err: any) {
-        console.error(`[auto-executor] Exchange order failed: ${err.message}`);
+        console.error(`[auto-executor] Exchange order failed: ${err.message}. Cleaning up DB record ${posId}...`);
+        // 3. Rollback: delete the position record if order placement failed
+        await db.delete(positions).where(eq(positions.id, posId)).catch((dbErr) => {
+          console.error(`[auto-executor] Failed to clean up DB record after order failure:`, dbErr);
+        });
         throw err; // re-throw so processSignal catches it
       }
     }
-
-    // Wrap DB write in a transaction so a DB failure after order placement is detectable
-    const posId = await db.transaction(async (tx) => {
-      const result = await tx.insert(positions).values({
-        userId: params.userId,
-        symbol: params.symbol,
-        side: params.side,
-        entryPrice: String(params.currentPrice),
-        currentPrice: String(params.currentPrice),
-        size: String(params.size),
-        leverage: params.leverage,
-        margin: String((params.notional / params.leverage).toFixed(4)),
-        stopLoss: String(params.stopLoss),
-        takeProfit: String(params.takeProfit),
-        unrealizedPnl: "0",
-        realizedPnl: "0",
-        status: "open",
-        exchangeOrderId,
-        signalId: params.signalId,
-        strategyType: params.strategyType,
-        isPaper: params.isPaper,
-      }).returning({ id: positions.id });
-      return result[0].id;
-    });
 
     registerPositionForTrailing({
       id: posId,
