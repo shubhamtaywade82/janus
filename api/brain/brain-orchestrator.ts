@@ -13,6 +13,7 @@
  * kill switch, max drawdown, or position limits.
  */
 
+import { EventEmitter } from "events";
 import { getDb } from "../queries/connection";
 import { brainEpisodes, marketRegimes, autoExecutorConfig } from "@db/schema";
 import { desc, eq, and, gte, sql } from "drizzle-orm";
@@ -24,6 +25,9 @@ import { getPaperWallet } from "../services/paper-wallet";
 import { callLLM } from "../services/ollama";
 import { memoryStore } from "./brain-memory";
 import { SUPPORTED_PAIRS } from "../services/binance";
+
+export const brainEvents = new EventEmitter();
+brainEvents.setMaxListeners(20);
 
 export enum BrainVerdict {
   APPROVE = "APPROVE",

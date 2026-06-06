@@ -670,13 +670,20 @@ export class AutoExecutor {
       llmDecision,
       ts: Date.now(),
     };
-    // Await brain shadow evaluation (it ran in parallel) and mark its episode executed.
-    const brainResult = (await brainPromise) as { episodeId?: number } | null;
-    if (brainResult?.episodeId) {
+    // Update brain episode with execution result
+    if (brainHasAuthority && brainResult?.episodeId) {
       getDb().update(brainEpisodes)
         .set({ executionResult: "executed" })
         .where(eq(brainEpisodes.id, brainResult.episodeId))
         .catch(() => {});
+    } else if ((signal as any)._brainPromise) {
+      const shadowBrainResult = await (signal as any)._brainPromise;
+      if (shadowBrainResult?.episodeId) {
+        getDb().update(brainEpisodes)
+          .set({ executionResult: "executed" })
+          .where(eq(brainEpisodes.id, shadowBrainResult.episodeId))
+          .catch(() => {});
+      }
     }
 
     this.state.lastDecision = dec;
