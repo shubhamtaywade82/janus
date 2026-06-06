@@ -45,3 +45,4 @@ coverage/
 .env.secret
 backups/
 kill-switch-state.json
+dedup-cache-state.json

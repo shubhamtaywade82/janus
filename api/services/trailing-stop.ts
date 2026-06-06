@@ -164,9 +164,10 @@ function ensureTrailingEngine() {
     for (const [posId, pos] of trackedPositions) {
       // Price: CoinDCX mark price (accurate) → Binance last price (fallback)
       const markKey = `B-${pos.symbol.replace("USDT", "_USDT")}`;
-      const currentPrice =
-        markPriceCache.get(markKey) ??
-        latestTickerCache.get(pos.symbol)?.lastPrice;
+      let currentPrice = markPriceCache.get(markKey) ?? 0;
+      if (currentPrice <= 0) {
+        currentPrice = latestTickerCache.get(pos.symbol)?.lastPrice ?? 0;
+      }
 
       if (!currentPrice || currentPrice <= 0) continue;
 

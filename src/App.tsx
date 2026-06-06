@@ -8,6 +8,7 @@ import Login from "./pages/Login";
 import NotFound from "./pages/NotFound";
 import RiskMetrics from "./pages/RiskMetrics";
 import AiAnalysis from "./pages/AiAnalysis";
+import BrainDashboard from "./pages/BrainDashboard";
 import { Toaster } from "./components/ui/sonner";
 
 const App = () => {
@@ -36,6 +37,14 @@ const App = () => {
         element={
           <Layout>
             <AiAnalysis />
+          </Layout>
+        }
+      />
+      <Route
+        path="/brain"
+        element={
+          <Layout>
+            <BrainDashboard />
           </Layout>
         }
       />

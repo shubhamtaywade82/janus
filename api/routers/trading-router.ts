@@ -46,6 +46,78 @@ riskEvents.on("cooldown-started", ({ userId, consecutiveLosses }: { userId: numb
   });
 });
 
+export function mapPaperPosition(p: any, markets: any[] = []) {
+  const symbol = p.symbol.startsWith("B-")
+    ? p.symbol.slice(2).replace("_USDT", "USDT").replace("_", "")
+    : p.symbol;
+
+  const tickerMap = new Map<string, number>();
+  latestTickerCache.forEach((t, sym) => tickerMap.set(sym, t.lastPrice));
+  markPriceCache.forEach((mp, pair) => tickerMap.set(pair.replace("B-", "").replace("_", ""), mp));
+
+  const lastPrice = tickerMap.get(symbol) ?? parseFloat(p.currentPrice || p.entryPrice);
+  const entryPrice = parseFloat(p.entryPrice);
+  const sizeVal = parseFloat(p.size);
+  const side = p.side;
+
+  const unrealizedPnl = side === "long"
+    ? (lastPrice - entryPrice) * sizeVal
+    : (entryPrice - lastPrice) * sizeVal;
+
+  const posLeverage = Number(p.leverage) || 1;
+  const notional = sizeVal * lastPrice;
+  const initialMargin = notional / posLeverage;
+  const marginVal = parseFloat(p.margin) || initialMargin;
+  const roe = marginVal > 0 ? (unrealizedPnl / marginVal) * 100 : 0;
+  const priceChangePct = entryPrice > 0 ? ((lastPrice - entryPrice) / entryPrice) * 100 : 0;
+
+  const liqPriceRaw = parseFloat(p.liquidationPrice || "0");
+  const liqDistance = liqPriceRaw > 0
+    ? (side === "long" ? lastPrice - liqPriceRaw : liqPriceRaw - lastPrice)
+    : 0;
+  const liqDistancePct = lastPrice > 0 && liqPriceRaw > 0
+    ? (liqDistance / lastPrice) * 100
+    : 0;
+
+  const cdxPair = `B-${symbol.replace("USDT", "_USDT")}`;
+  const m = markets.find((x: any) => x.pair === cdxPair || x.symbol === symbol || x.coindcx_name === symbol);
+  const basePrecision = m?.base_currency_precision ?? 2;
+  const targetPrecision = m?.target_currency_precision ?? 4;
+
+  return {
+    id: p.id,
+    userId: p.userId,
+    symbol,
+    side,
+    entryPrice: String(p.entryPrice),
+    currentPrice: String(lastPrice),
+    size: String(sizeVal),
+    leverage: p.leverage,
+    margin: String(marginVal),
+    unrealizedPnl: String(unrealizedPnl),
+    realizedPnl: String(p.realizedPnl || "0.00"),
+    liquidationPrice: p.liquidationPrice ? String(p.liquidationPrice) : null,
+    stopLoss: p.stopLoss ? String(p.stopLoss) : null,
+    takeProfit: p.takeProfit ? String(p.takeProfit) : null,
+    marginMode: p.marginMode || "isolated",
+    marginCurrency: p.marginCurrency || "USDT",
+    status: p.status,
+    createdAt: p.createdAt,
+    updatedAt: p.updatedAt,
+    isPaper: true as const,
+    notional: String(notional),
+    initialMargin: String(initialMargin),
+    roe: String(roe),
+    priceChangePct: String(priceChangePct),
+    liqDistance: String(liqDistance),
+    liqDistancePct: String(liqDistancePct),
+    basePrecision,
+    targetPrecision,
+    entryReason: p.entryReason,
+    exitReason: p.exitReason,
+  };
+}
+
 export async function fetchPortfolioData(userId: number) {
   const db = getDb();
   const creds = await db
@@ -123,10 +195,11 @@ export async function fetchPortfolioData(userId: number) {
           const markPriceFromApi = parseFloat(p.mark_price || "0");
           const markPriceFromWs = markPriceCache.get(p.pair) ?? 0;
           const binanceLastPrice = tickerMap.get(symbol) ?? 0;
-          const lastPrice = (markPriceFromApi > 0 ? markPriceFromApi : 0)
-            || markPriceFromWs
-            || binanceLastPrice
-            || parseFloat(p.avg_price);
+          const avgPrice = parseFloat(p.avg_price || "0");
+          const lastPrice = (markPriceFromApi > 0 && !isNaN(markPriceFromApi) ? markPriceFromApi : null)
+            || (markPriceFromWs > 0 && !isNaN(markPriceFromWs) ? markPriceFromWs : null)
+            || (binanceLastPrice > 0 && !isNaN(binanceLastPrice) ? binanceLastPrice : null)
+            || (avgPrice > 0 && !isNaN(avgPrice) ? avgPrice : 0);
           const entryPrice = parseFloat(p.avg_price);
 
           // Exchange PnL (most accurate) → signed-quantity formula fallback
@@ -303,16 +376,7 @@ export async function fetchPortfolioData(userId: number) {
         .from(positions)
         .where(and(eq(positions.userId, userId), eq(positions.status, "open"), eq(positions.isPaper, true)));
 
-      const paperMapped = paperPositions.map((p) => ({
-        ...p,
-        isPaper: true as const,
-        entryPrice: p.entryPrice,
-        currentPrice: latestTickerCache.get(p.symbol)?.lastPrice?.toString() ?? p.currentPrice,
-        unrealizedPnl: p.unrealizedPnl,
-        margin: p.margin,
-        basePrecision: getPrecisions(p.symbol).basePrecision,
-        targetPrecision: getPrecisions(p.symbol).targetPrecision,
-      }));
+      const paperMapped = paperPositions.map((p) => mapPaperPosition(p, markets));
 
       const allPositions = [
         ...openPositions.map((p) => ({ ...p, isPaper: false as const })),
@@ -444,9 +508,10 @@ export const tradingRouter = createRouter({
       if (creds && creds[0] && input.status === "open") {
         try {
           // Fetch live CoinDCX futures positions
-          const [livePositions, usdtInrRate] = await Promise.all([
+          const [livePositions, usdtInrRate, markets] = await Promise.all([
             getFuturesPositions(decryptCreds(creds[0])),
             getUsdtInrRate(),
+            getMarketsDetails().catch(() => []),
           ]);
 
           const tickerMap = new Map<string, number>();
@@ -466,10 +531,12 @@ export const tradingRouter = createRouter({
 
               const markPriceFromApi2 = parseFloat(p.mark_price || "0");
               const markPriceFromWs2 = markPriceCache.get(p.pair) ?? 0;
-              const lastPrice = (markPriceFromApi2 > 0 ? markPriceFromApi2 : 0)
-                || markPriceFromWs2
-                || tickerMap.get(symbol)
-                || parseFloat(p.avg_price);
+              const avgPrice = parseFloat(p.avg_price || "0");
+              const binanceLastPrice2 = tickerMap.get(symbol) ?? 0;
+              const lastPrice = (markPriceFromApi2 > 0 && !isNaN(markPriceFromApi2) ? markPriceFromApi2 : null)
+                || (markPriceFromWs2 > 0 && !isNaN(markPriceFromWs2) ? markPriceFromWs2 : null)
+                || (binanceLastPrice2 > 0 && !isNaN(binanceLastPrice2) ? binanceLastPrice2 : null)
+                || (avgPrice > 0 && !isNaN(avgPrice) ? avgPrice : 0);
               const entryPrice = parseFloat(p.avg_price);
 
               // Exchange PnL → signed-quantity formula fallback
@@ -538,7 +605,7 @@ export const tradingRouter = createRouter({
 
           return [
             ...mapped.map((p) => ({ ...p, isPaper: false })),
-            ...paperDbPositions,
+            ...paperDbPositions.map((p) => mapPaperPosition(p, markets)),
           ];
         } catch (err) {
           console.error("[trading-router] Failed to fetch live positions from CoinDCX, falling back to local DB:", err);
@@ -821,6 +888,7 @@ export const tradingRouter = createRouter({
           currentPrice: input.closePrice,
           realizedPnl: input.realizedPnl,
           unrealizedPnl: "0",
+          exitReason: "Manual Close via UI",
           closedAt: new Date(),
           updatedAt: new Date(),
         })
@@ -1027,9 +1095,14 @@ export const tradingRouter = createRouter({
 
         const refreshMonitor = () => {
           const db = getDb();
+          const isPaperMode = env.paperTrading || !env.placeOrders;
           db.select()
             .from(positions)
-            .where(and(eq(positions.userId, ctx.user.id), eq(positions.status, "open")))
+            .where(and(
+              eq(positions.userId, ctx.user.id),
+              eq(positions.status, "open"),
+              eq(positions.isPaper, isPaperMode)
+            ))
             .then((openPositions) => {
               const monitored = openPositions.map((p) => ({
                 id: p.id,

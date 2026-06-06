@@ -108,9 +108,12 @@ export async function initCoinDCXPrivateWs() {
     const prices = parsed?.prices ?? {};
     for (const [pair, data] of Object.entries(prices) as [string, any][]) {
       if (data?.mp) {
-        markPriceCache.set(pair, data.mp);
-        // Also update latestTickerCache so portfolio + UI get futures mark price
-        latestTickerCache.set(toSymbol(pair), { lastPrice: data.mp, symbol: toSymbol(pair) });
+        const mpVal = typeof data.mp === 'number' ? data.mp : parseFloat(String(data.mp));
+        if (mpVal > 0 && !isNaN(mpVal)) {
+          markPriceCache.set(pair, mpVal);
+          // Also update latestTickerCache so portfolio + UI get futures mark price
+          latestTickerCache.set(toSymbol(pair), { lastPrice: mpVal, symbol: toSymbol(pair) });
+        }
       }
     }
   });
@@ -146,7 +149,9 @@ export async function initCoinDCXPrivateWs() {
     // Update ticker cache with latest close
     if (c.close) {
       const price = parseFloat(c.close);
-      latestTickerCache.set(symbol, { lastPrice: price, symbol });
+      if (price > 0 && !isNaN(price)) {
+        latestTickerCache.set(symbol, { lastPrice: price, symbol });
+      }
 
       // Emit ticker update to UI as fallback if Binance stream is down/inactive
       const binanceActive = activeStreams.get(symbol)?.ws?.readyState === 1;

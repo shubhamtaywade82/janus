@@ -65,6 +65,12 @@ export function ExitSignalToast({ userId }: Props) {
                 +{decision.feeAdjustedPnl.toFixed(6)} USDT
               </span>
             </div>
+            <div className="flex justify-between gap-4 border-t border-zinc-750 pt-1">
+              <span className="text-zinc-400">Reason</span>
+              <span className="text-zinc-300 text-right max-w-[200px] break-words">
+                {decision.reason}
+              </span>
+            </div>
           </div>
         ) as unknown as string,
         action: {
@@ -107,6 +113,72 @@ export function ExitSignalToast({ userId }: Props) {
   trpc.trading.exitSignalStream.useSubscription(
     userInput,
     streamOpts.current
+  );
+
+  const prevPositionsRef = useRef<any[]>([]);
+
+  trpc.trading.portfolioStream.useSubscription(
+    userInput,
+    {
+      onData: async (data: any) => {
+        const openPositions = data?.positions || [];
+        const prevPositions = prevPositionsRef.current;
+
+        if (prevPositions.length > 0) {
+          // 1. Detect newly opened positions
+          for (const pos of openPositions) {
+            if (!prevPositions.some((p: any) => p.id === pos.id)) {
+              const cleanSymbol = pos.symbol.replace("B-", "").replace("_", "");
+              toast.success(`Position Opened: ${cleanSymbol} ${pos.side.toUpperCase()}`, {
+                description: (
+                  <div className="text-xs space-y-1 mt-1">
+                    <div>Price: {parseFloat(pos.entryPrice).toFixed(4)} | Size: {parseFloat(pos.size).toFixed(4)}</div>
+                    {pos.entryReason && (
+                      <div className="border-t border-zinc-850 pt-1 text-zinc-400">
+                        <span className="font-semibold text-zinc-300">Reason:</span> {pos.entryReason}
+                      </div>
+                    )}
+                  </div>
+                ) as unknown as string,
+                duration: 10000,
+              });
+            }
+          }
+
+          // 2. Detect closed positions
+          for (const prevPos of prevPositions) {
+            if (!openPositions.some((p: any) => p.id === prevPos.id)) {
+              try {
+                const closedPos = await utils.client.trading.position.query({ id: prevPos.id });
+                if (closedPos && closedPos.status === "closed") {
+                  const cleanSymbol = closedPos.symbol.replace("B-", "").replace("_", "");
+                  toast.error(`Position Closed: ${cleanSymbol} ${closedPos.side.toUpperCase()}`, {
+                    description: (
+                      <div className="text-xs space-y-1 mt-1">
+                        <div>Exit Price: {parseFloat(closedPos.currentPrice).toFixed(4)} | PnL: {parseFloat(closedPos.realizedPnl || "0").toFixed(4)} USDT</div>
+                        {closedPos.exitReason && (
+                          <div className="border-t border-zinc-850 pt-1 text-zinc-400 font-medium">
+                            <span className="font-semibold text-zinc-300">Reason:</span> {closedPos.exitReason}
+                          </div>
+                        )}
+                      </div>
+                    ) as unknown as string,
+                    duration: 10000,
+                  });
+                }
+              } catch (err) {
+                console.error("[Toast] Failed to fetch closed position details:", err);
+              }
+            }
+          }
+        }
+
+        prevPositionsRef.current = openPositions;
+      },
+      onError: (err) => {
+        console.error("[Toast] portfolio stream error:", err);
+      },
+    }
   );
 
   return null;

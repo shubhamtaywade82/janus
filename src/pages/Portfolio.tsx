@@ -30,8 +30,11 @@ const PositionRow = ({
   onClose: (pos: any, currentPrice: number, pnl: number) => void;
   isClosing: boolean;
 }) => {
-  const currentPrice = livePrice ?? parseFloat(position.currentPrice || "0");
   const entryPrice = parseFloat(position.entryPrice || "0");
+  const backendPrice = parseFloat(position.currentPrice || "0");
+  const livePriceVal = (livePrice && livePrice > 0 && !isNaN(livePrice)) ? livePrice : null;
+  const dbPriceVal = (backendPrice > 0 && !isNaN(backendPrice)) ? backendPrice : null;
+  const currentPrice = livePriceVal ?? dbPriceVal ?? entryPrice;
   const size = parseFloat(position.size || "0");
   const marginCurrency = position.marginCurrency || "USDT";
 
@@ -42,7 +45,8 @@ const PositionRow = ({
         : (entryPrice - currentPrice) * size)
     : parseFloat(position.unrealizedPnl || "0");
   const isProfit = pnl >= 0;
-  const roe = parseFloat(position.roe || "0");
+  const margin = parseFloat(position.margin || "0");
+  const roe = margin > 0 ? (pnl / margin) * 100 : parseFloat(position.roe || "0");
 
   const priceFlash = useFlash(currentPrice);
   const pnlFlashRow = useFlash(pnl);
@@ -57,17 +61,24 @@ const PositionRow = ({
   return (
     <tr className="border-b border-[#27272a] hover:bg-[#18181b] transition-colors">
       <td className="px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span
-            className={cn(
-              "w-1.5 h-1.5 rounded-full",
-              position.side === "long" ? "bg-j-up" : "bg-j-down"
+        <div className="flex flex-col gap-0.5">
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                "w-1.5 h-1.5 rounded-full",
+                position.side === "long" ? "bg-j-up" : "bg-j-down"
+              )}
+            />
+            <span className="text-xs font-medium text-[#f4f4f5]">{position.symbol}</span>
+            {position.isPaper && (
+              <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-[#f59e0b]/10 text-[#f59e0b] border border-[#f59e0b]/30">
+                PAPER
+              </span>
             )}
-          />
-          <span className="text-xs font-medium text-[#f4f4f5]">{position.symbol}</span>
-          {position.isPaper && (
-            <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-[#f59e0b]/10 text-[#f59e0b] border border-[#f59e0b]/30">
-              PAPER
+          </div>
+          {position.entryReason && (
+            <span className="text-[9px] text-[#71717a] pl-3.5 max-w-[180px] truncate" title={position.entryReason}>
+              {position.entryReason}
             </span>
           )}
         </div>
@@ -160,27 +171,34 @@ const PositionRow = ({
         </div>
       </td>
       <td className="px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span
-            className={cn(
-              "text-xs px-1.5 py-0.5 rounded",
-              position.status === "open"
-                ? "bg-j-up/10 text-j-up"
-                : position.status === "closed"
-                ? "bg-[#27272a] text-[#71717a]"
-                : "bg-j-down/10 text-j-down"
-            )}
-          >
-            {position.status.toUpperCase()}
-          </span>
-          {position.status === "open" && (
-            <button
-              onClick={() => onClose(position, currentPrice, pnl)}
-              disabled={isClosing}
-              className="text-[10px] px-1.5 py-0.5 rounded bg-j-down/10 border border-j-down/20 text-j-down hover:bg-j-down/25 hover:text-white active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                "text-xs px-1.5 py-0.5 rounded",
+                position.status === "open"
+                  ? "bg-j-up/10 text-j-up"
+                  : position.status === "closed"
+                  ? "bg-[#27272a] text-[#71717a]"
+                  : "bg-j-down/10 text-j-down"
+              )}
             >
-              {isClosing ? "Closing..." : "Exit"}
-            </button>
+              {position.status.toUpperCase()}
+            </span>
+            {position.status === "open" && (
+              <button
+                onClick={() => onClose(position, currentPrice, pnl)}
+                disabled={isClosing}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-j-down/10 border border-j-down/20 text-j-down hover:bg-j-down/25 hover:text-white active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
+              >
+                {isClosing ? "Closing..." : "Exit"}
+              </button>
+            )}
+          </div>
+          {position.status !== "open" && position.exitReason && (
+            <span className="text-[9px] text-[#71717a] max-w-[180px] truncate" title={position.exitReason}>
+              {position.exitReason}
+            </span>
           )}
         </div>
       </td>
@@ -212,7 +230,10 @@ const SymbolTicker = memo(({ symbol, onPrice }: { symbol: string; onPrice: (sym:
   // Keep options object stable — never recreated after mount
   const optsRef = useRef({
     onData(t: any) {
-      if (t?.lastPrice) onPriceRef.current(symbol, parseFloat(t.lastPrice));
+      const price = parseFloat(t?.lastPrice);
+      if (price > 0 && !isNaN(price)) {
+        onPriceRef.current(symbol, price);
+      }
     },
   });
 
@@ -331,6 +352,7 @@ export default function Portfolio() {
 
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
   const handlePrice = useCallback((sym: string, price: number) => {
+    if (price <= 0 || isNaN(price)) return;
     setLivePrices((prev) => prev[sym] === price ? prev : { ...prev, [sym]: price });
   }, []);
 
@@ -395,8 +417,10 @@ export default function Portfolio() {
 
   // Paper portfolio computed values
   const paperUnrealizedPnl = paperPositions.reduce((sum: number, p: any) => {
-    const lp = livePrices[p.symbol] ?? parseFloat(p.currentPrice || "0");
+    const livePriceVal = livePrices[p.symbol];
+    const dbPriceVal = parseFloat(p.currentPrice || "0");
     const entry = parseFloat(p.entryPrice || "0");
+    const lp = (livePriceVal && livePriceVal > 0) ? livePriceVal : ((dbPriceVal && dbPriceVal > 0) ? dbPriceVal : entry);
     const size = parseFloat(p.size || "0");
     return sum + (p.side === "long" ? (lp - entry) * size : (entry - lp) * size);
   }, 0);
@@ -408,8 +432,10 @@ export default function Portfolio() {
 
   const liveTotalUnrealizedPnl = openPositions.reduce((sum: number, p: any) => {
     if (p.isPaper) return sum;
-    const lp = livePrices[p.symbol] ?? 0;
+    const livePriceVal = livePrices[p.symbol];
+    const dbPriceVal = parseFloat(p.currentPrice || "0");
     const entry = parseFloat(p.entryPrice || "0");
+    const lp = (livePriceVal && livePriceVal > 0) ? livePriceVal : ((dbPriceVal && dbPriceVal > 0) ? dbPriceVal : 0);
     const size = parseFloat(p.size || "0");
     // Use live price for real-time calc; fall back to backend unrealizedPnl (exchange-reported or mark-price based)
     const raw = lp > 0

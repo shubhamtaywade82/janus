@@ -86,7 +86,7 @@ function markExhausted(entry: ApiKey) {
 
 // ─── HTTP helper ───
 
-async function callLLM(prompt: string): Promise<string> {
+export async function callLLM(prompt: string): Promise<string> {
   const entry = nextAvailableKey();
   if (!entry) {
     console.warn("[ollama] All keys exhausted — skipping LLM call");

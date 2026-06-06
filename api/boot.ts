@@ -54,6 +54,9 @@ if (!env.isProduction) {
 }
 app.get(Paths.oauthCallback, createOAuthCallbackHandler());
 
+import { brainRouter } from "./routers/brain-router";
+app.route("/api/brain", brainRouter);
+
 // tRPC handler - allow method override for batch POST requests
 app.use("/api/trpc/*", async (c) => {
   return fetchRequestHandler({
@@ -109,11 +112,30 @@ app.get("*", async (c, next) => {
 export default app;
 
 // Setup WS Server context creator
-const createContextWSS = (opts: any) => {
-  return {
+import { authenticateRequest } from "./oauth/auth";
+const createContextWSS = async (opts: any) => {
+  const ctx: any = {
     req: opts.req,
     resHeaders: new Headers(),
   };
+  try {
+    const headers = new Headers();
+    if (opts.req.headers) {
+      for (const [key, value] of Object.entries(opts.req.headers)) {
+        if (value) {
+          if (Array.isArray(value)) {
+            value.forEach((v) => headers.append(key, v));
+          } else {
+            headers.set(key, value as string);
+          }
+        }
+      }
+    }
+    ctx.user = await authenticateRequest(headers);
+  } catch (err: any) {
+    console.error("[ws] Authentication failed in createContextWSS:", err?.message || err);
+  }
+  return ctx;
 };
 
 // Setup WS Server in Development
@@ -173,6 +195,12 @@ alertEngine.start(5_000);
 import { startTelegramCommandBot } from "./services/telegram-bot";
 startTelegramCommandBot();
 
+// Start AI Brain (Vector Store + Scheduler)
+import { initVectorStore } from "./brain/brain-memory";
+import { startBrainScheduler } from "./brain/brain-scheduler";
+initVectorStore().catch((err) => console.error("[Brain] Vector store initialization failed:", err));
+startBrainScheduler();
+
 // Start liquidation proximity monitor (alerts + auto-reduce when within 5%/2% of liq price)
 import { startLiquidationMonitor, stopLiquidationMonitor } from "./services/liquidation-monitor";
 startLiquidationMonitor(10_000);
@@ -199,7 +227,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
   positionReconciler.stop();
   stopTelegramCommandBot();
   stopLiquidationMonitor();
-  positionLifecycleManager.stop?.().catch?.(() => {});
+  positionLifecycleManager.stop?.()?.catch?.(() => {});
 
   // 3. Brief pause for in-flight DB writes to complete
   await new Promise((r) => setTimeout(r, 500));

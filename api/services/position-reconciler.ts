@@ -103,7 +103,12 @@ class PositionReconciler {
         // Exchange has no matching position — it was closed externally
         await db
           .update(positions)
-          .set({ status: "closed", closedAt: new Date(), updatedAt: new Date() })
+          .set({
+            status: "closed",
+            exitReason: "Reconciled: closed externally on exchange (manual/liq)",
+            closedAt: new Date(),
+            updatedAt: new Date()
+          })
           .where(eq(positions.id, pos.id))
           .catch(() => {});
         closedCount++;

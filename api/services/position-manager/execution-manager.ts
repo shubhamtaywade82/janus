@@ -9,6 +9,7 @@ import { getDb } from "../../queries/connection";
 import { positions, exchangeCredentials } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { decryptCreds } from "../../lib/crypto";
+import { releasePaperMargin } from "../paper-wallet";
 
 // ─── Execution Manager ───────────────────────────────────────────────────────
 // Maps approved PositionActions to actual exchange calls + DB updates.
@@ -141,14 +142,24 @@ export async function executeAction(
         // Update position size in DB (paper: always; live: only after successful exchange order)
         const newQty = position.quantity - exitQty;
         const newMargin = position.margin * (newQty / position.quantity);
+        const marginReleased = position.margin - newMargin;
+        const partialPnl = (position.side === "LONG" ? 1 : -1) * (position.markPrice - position.entryPrice) * exitQty;
+        const prevRealized = position.realizedPnl || 0;
+        const nextRealized = prevRealized + partialPnl;
+
         await db
           .update(positions)
           .set({
             size: newQty.toFixed(8),
             margin: newMargin.toFixed(8),
+            realizedPnl: nextRealized.toFixed(8),
             updatedAt: new Date(),
           })
           .where(eq(positions.id, position.id));
+
+        if (position.isPaper) {
+          await releasePaperMargin(userId, marginReleased, partialPnl, position.id);
+        }
 
         positionManagerBus.emit("position:action-executed", position.id, action, "ok",
           `Exited ${(exitPct * 100).toFixed(0)}% of position`);
@@ -180,14 +191,23 @@ export async function executeAction(
         }
 
         // Close in DB (paper: always; live: only after successful exchange order above)
+        const realizedPnl = (position.side === "LONG" ? 1 : -1) * (position.markPrice - position.entryPrice) * position.quantity;
         await db
           .update(positions)
           .set({
             status: "closed",
+            currentPrice: String(position.markPrice),
+            realizedPnl: String(realizedPnl),
+            unrealizedPnl: "0",
+            exitReason: recommendation.reasoning,
             closedAt: new Date(),
             updatedAt: new Date(),
           })
           .where(eq(positions.id, position.id));
+
+        if (position.isPaper) {
+          await releasePaperMargin(userId, position.margin, realizedPnl, position.id);
+        }
 
         positionStore.updateLifecycleState(position.id, "CLOSED");
         positionStore.remove(position.id);
