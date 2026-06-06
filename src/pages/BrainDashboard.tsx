@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { Brain, Zap, GitBranch, Lightbulb, RefreshCw, Play, CheckCircle, AlertTriangle, TrendingUp, TrendingDown, Target, Shield, Clock, Terminal, Trash2, PanelRight } from "lucide-react";
+import { Brain, Zap, GitBranch, Lightbulb, RefreshCw, Terminal, Trash2, PanelRight, ChevronDown, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -12,7 +12,38 @@ export default function BrainDashboard() {
   const [logs, setLogs] = useState<string[]>([]);
   const [logStatus, setLogStatus] = useState<"connecting" | "connected" | "disconnected">("disconnected");
   const [isLogPanelOpen, setIsLogPanelOpen] = useState(false);
+  // Signal trigger state
+  const [triggerOpen, setTriggerOpen] = useState(false);
+  const [triggerSymbol, setTriggerSymbol] = useState("B-BTC_USDT");
+  const [triggerDirection, setTriggerDirection] = useState<"long" | "short">("long");
+  const [triggerScore, setTriggerScore] = useState(85);
+  const [triggerCapital, setTriggerCapital] = useState("50");
+  const [triggerLoading, setTriggerLoading] = useState(false);
+  const [triggerResult, setTriggerResult] = useState<any>(null);
+  // Mode state
+  const [tradingMode, setTradingMode] = useState<"paper" | "live" | "unknown">("unknown");
   const terminalEndRef = useRef<HTMLDivElement>(null);
+
+  const SYMBOLS = [
+    { value: "B-BTC_USDT", label: "BTC/USDT" },
+    { value: "B-ETH_USDT", label: "ETH/USDT" },
+    { value: "B-SOL_USDT", label: "SOL/USDT" },
+    { value: "B-BNB_USDT", label: "BNB/USDT" },
+    { value: "B-XRP_USDT", label: "XRP/USDT" },
+    { value: "B-ADA_USDT", label: "ADA/USDT" },
+    { value: "B-DOGE_USDT", label: "DOGE/USDT" },
+    { value: "B-AVAX_USDT", label: "AVAX/USDT" },
+  ];
+
+  const fetchMode = async () => {
+    try {
+      const res = await fetch("/api/brain/mode");
+      if (res.ok) {
+        const data = await res.json();
+        setTradingMode(data.mode);
+      }
+    } catch { /* ignore */ }
+  };
 
   const fetchBrainData = async () => {
     setIsLoading(true);
@@ -36,6 +67,7 @@ export default function BrainDashboard() {
 
   useEffect(() => {
     fetchBrainData();
+    fetchMode();
   }, []);
 
   useEffect(() => {
@@ -77,7 +109,7 @@ export default function BrainDashboard() {
     try {
       const res = await fetch("/api/brain/decide?symbol=BTCUSDT", { method: "POST" });
       if (!res.ok) throw new Error("Request failed");
-      const data = await res.json();
+      await res.json();
       toast.success("Evaluation complete!");
       fetchBrainData();
     } catch (e) {
@@ -97,6 +129,37 @@ export default function BrainDashboard() {
     }
   };
 
+  const handleTriggerSignal = async () => {
+    setTriggerLoading(true);
+    setTriggerResult(null);
+    try {
+      const res = await fetch("/api/brain/trigger-signal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          symbol: triggerSymbol,
+          direction: triggerDirection,
+          compositeScore: triggerScore,
+          sizeUsdt: triggerCapital ? parseFloat(triggerCapital) : undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setTriggerResult(data);
+        toast.success(`Signal triggered: ${data.symbol} ${data.direction} (${data.mode} mode)`);
+        fetchBrainData();
+      } else {
+        toast.error(`Trigger failed: ${data.error}`);
+        setTriggerResult({ error: data.error });
+      }
+    } catch (e: any) {
+      toast.error("Signal trigger request failed.");
+      setTriggerResult({ error: e.message });
+    } finally {
+      setTriggerLoading(false);
+    }
+  };
+
   return (
     <div className="flex h-full overflow-hidden">
       {/* Main Content Area */}
@@ -112,8 +175,32 @@ export default function BrainDashboard() {
             </p>
           </div>
         </div>
+          {/* Mode Badge */}
+          <span className={cn(
+            "px-2.5 py-1 rounded-full text-[10px] font-black uppercase tracking-wider border",
+            tradingMode === "paper" 
+              ? "bg-amber-500/10 text-amber-400 border-amber-500/30" 
+              : tradingMode === "live"
+              ? "bg-red-500/10 text-red-400 border-red-500/30 animate-pulse"
+              : "bg-zinc-800 text-zinc-500 border-zinc-700"
+          )}>
+            {tradingMode === "paper" ? "📋 Paper Mode" : tradingMode === "live" ? "🔴 Live Mode" : "Loading..."}
+          </span>
 
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setTriggerOpen(!triggerOpen)}
+            className={cn(
+              "flex items-center gap-1.5 px-3 py-1.5 rounded text-xs transition-colors border font-semibold",
+              triggerOpen 
+                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/30" 
+                : "bg-[#18181b] hover:bg-[#27272a] text-[#f4f4f5] border-[#27272a]"
+            )}
+          >
+            <Send size={12} />
+            Trigger Signal
+            <ChevronDown size={10} className={cn("transition-transform", triggerOpen && "rotate-180")} />
+          </button>
           <button
             onClick={handleManualDecide}
             className="flex items-center gap-1.5 px-3 py-1.5 rounded bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 text-xs transition-colors border border-purple-500/30 font-semibold"
@@ -155,6 +242,126 @@ export default function BrainDashboard() {
           </button>
         </div>
       </div>
+
+      {/* Signal Trigger Panel */}
+      {triggerOpen && (
+        <div className="bg-[#18181b] border border-emerald-500/20 rounded-lg p-4 animate-in slide-in-from-top-2 duration-200">
+          <div className="flex items-center gap-2 mb-3">
+            <Send size={14} className="text-emerald-400" />
+            <span className="text-xs font-bold text-zinc-200">Manual Signal Injection</span>
+            <span className="text-[10px] text-zinc-500 ml-auto">
+              Fires through the full 8-gate pipeline → Brain → Governor → Execution
+            </span>
+          </div>
+          <div className="grid grid-cols-5 gap-3">
+            {/* Symbol */}
+            <div>
+              <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Symbol</label>
+              <select
+                value={triggerSymbol}
+                onChange={(e) => setTriggerSymbol(e.target.value)}
+                className="w-full px-2 py-1.5 rounded bg-[#09090b] border border-[#27272a] text-xs text-zinc-200 focus:border-emerald-500/50 outline-none"
+              >
+                {SYMBOLS.map((s) => (
+                  <option key={s.value} value={s.value}>{s.label}</option>
+                ))}
+              </select>
+            </div>
+            {/* Direction */}
+            <div>
+              <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Direction</label>
+              <div className="flex gap-1">
+                <button
+                  onClick={() => setTriggerDirection("long")}
+                  className={cn(
+                    "flex-1 px-2 py-1.5 rounded text-xs font-bold border transition-colors",
+                    triggerDirection === "long"
+                      ? "bg-emerald-500/15 text-emerald-400 border-emerald-500/30"
+                      : "bg-[#09090b] text-zinc-500 border-[#27272a] hover:text-zinc-300"
+                  )}
+                >
+                  ↗ Long
+                </button>
+                <button
+                  onClick={() => setTriggerDirection("short")}
+                  className={cn(
+                    "flex-1 px-2 py-1.5 rounded text-xs font-bold border transition-colors",
+                    triggerDirection === "short"
+                      ? "bg-red-500/15 text-red-400 border-red-500/30"
+                      : "bg-[#09090b] text-zinc-500 border-[#27272a] hover:text-zinc-300"
+                  )}
+                >
+                  ↘ Short
+                </button>
+              </div>
+            </div>
+            {/* Score */}
+            <div>
+              <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">
+                Score: <span className="text-zinc-300">{triggerScore}</span>
+              </label>
+              <input
+                type="range"
+                min="50"
+                max="100"
+                value={triggerScore}
+                onChange={(e) => setTriggerScore(Number(e.target.value))}
+                className="w-full h-1.5 bg-zinc-800 rounded-lg appearance-none cursor-pointer accent-emerald-500"
+              />
+              <div className="flex justify-between text-[9px] text-zinc-600 mt-0.5">
+                <span>50</span>
+                <span>75</span>
+                <span>100</span>
+              </div>
+            </div>
+            {/* Capital */}
+            <div>
+              <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Capital (USDT)</label>
+              <input
+                type="number"
+                min="1"
+                value={triggerCapital}
+                onChange={(e) => setTriggerCapital(e.target.value)}
+                className="w-full px-2 py-1.5 rounded bg-[#09090b] border border-[#27272a] text-xs text-zinc-200 focus:border-emerald-500/50 outline-none"
+                placeholder="50"
+              />
+            </div>
+            {/* Fire Button */}
+            <div className="flex flex-col justify-end">
+              <button
+                onClick={handleTriggerSignal}
+                disabled={triggerLoading}
+                className="w-full px-3 py-1.5 rounded bg-emerald-500/20 hover:bg-emerald-500/30 text-emerald-400 text-xs font-bold transition-colors border border-emerald-500/30 disabled:opacity-50 flex items-center justify-center gap-1.5"
+              >
+                {triggerLoading ? (
+                  <RefreshCw size={11} className="animate-spin" />
+                ) : (
+                  <Zap size={11} />
+                )}
+                {triggerLoading ? "Processing..." : "Fire Signal"}
+              </button>
+            </div>
+          </div>
+          {/* Result */}
+          {triggerResult && (
+            <div className={cn(
+              "mt-3 p-2.5 rounded border text-xs font-mono",
+              triggerResult.error
+                ? "bg-red-500/5 border-red-500/20 text-red-400"
+                : "bg-emerald-500/5 border-emerald-500/20 text-emerald-400"
+            )}>
+              {triggerResult.error ? (
+                <span>❌ {triggerResult.error}</span>
+              ) : (
+                <div className="space-y-1">
+                  <div>✅ {triggerResult.message}</div>
+                  <div className="text-zinc-500">Signal ID: {triggerResult.signalId} | Mode: <span className="text-zinc-300 uppercase">{triggerResult.mode}</span></div>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex items-center gap-1 border-b border-[#27272a] pb-2">

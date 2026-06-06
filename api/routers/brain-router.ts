@@ -4,8 +4,12 @@ import * as fs from "fs";
 import * as path from "path";
 import { BrainOrchestrator } from "../brain/brain-orchestrator";
 import { getDb } from "../queries/connection";
-import { brainEpisodes, brainStrategies, brainReflections } from "@db/schema";
-import { desc, limit } from "drizzle-orm";
+import { brainEpisodes, brainStrategies, brainReflections, signals } from "@db/schema";
+import { desc } from "drizzle-orm";
+import { globalAutoExecutor } from "../services/auto-executor";
+import { globalKillSwitch } from "../services/kill-switch";
+import { latestTickerCache } from "../services/streaming";
+import { env } from "../lib/env";
 
 export const brainRouter = new Hono();
 const orchestrator = new BrainOrchestrator(true); // Shadow Mode active
@@ -77,6 +81,79 @@ brainRouter.get("/reflections", async (c) => {
 // POST /api/brain/evolution/run
 brainRouter.post("/evolution/run", async (c) => {
   return c.json({ success: true, message: "Evolution trigger stub (Shadow Mode)" });
+});
+
+// POST /api/brain/trigger-signal — Manual signal injection for testing
+brainRouter.post("/trigger-signal", async (c) => {
+  try {
+    const body = await c.req.json();
+    const symbol = body.symbol || "B-BTC_USDT";
+    const direction = body.direction || "long";
+    const compositeScore = String(body.compositeScore ?? 85);
+    const threshold = String(body.threshold ?? 75);
+
+    // Validate
+    if (!['long', 'short'].includes(direction)) {
+      return c.json({ error: "direction must be 'long' or 'short'" }, 400);
+    }
+
+    // Ensure kill switch is clear
+    globalKillSwitch.reset();
+
+    // Fetch live price for metadata
+    const binanceSym = symbol.replace("B-", "").replace("_", "");
+    const currentPrice = latestTickerCache.get(binanceSym)?.lastPrice ?? 0;
+
+    const db = getDb();
+    const [insertedSignal] = await db.insert(signals).values({
+      symbol,
+      microScore: compositeScore,
+      intraScore: compositeScore,
+      swingScore: compositeScore,
+      compositeScore,
+      threshold,
+      isGated: true,
+      direction,
+      metadata: {
+        rsi: body.rsi ?? 50,
+        ema20: currentPrice * 0.998,
+        ema50: currentPrice * 0.995,
+        spread: 0.0002,
+        imbalance: 0.3,
+        source: "manual-trigger",
+        sizeUsdt: body.sizeUsdt ? parseFloat(String(body.sizeUsdt)) : undefined,
+        ...(body.metadata || {}),
+      },
+    }).returning();
+
+    // Fire through the full 8-gate pipeline
+    await globalAutoExecutor.onSignalBatch([insertedSignal]);
+
+    const isPaper = env.paperTrading || !env.placeOrders;
+    return c.json({
+      success: true,
+      signalId: insertedSignal.id,
+      symbol,
+      direction,
+      score: compositeScore,
+      mode: isPaper ? "paper" : "live",
+      message: `Signal injected and processed through 8-gate pipeline (${isPaper ? 'PAPER' : 'LIVE'} mode)`,
+    });
+  } catch (err: any) {
+    console.error("[Brain Router] Trigger signal failed:", err);
+    return c.json({ error: err.message }, 500);
+  }
+});
+
+// GET /api/brain/mode — Returns current trading mode
+brainRouter.get("/mode", async (c) => {
+  const isPaper = env.paperTrading || !env.placeOrders;
+  return c.json({
+    mode: isPaper ? "paper" : "live",
+    placeOrders: env.placeOrders,
+    paperTrading: env.paperTrading,
+    autoExecute: env.autoExecute,
+  });
 });
 
 // GET /api/brain/logs/stream

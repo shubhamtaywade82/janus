@@ -283,20 +283,23 @@ export class AutoExecutor {
     // Gate 2: kill switch
     if (!globalKillSwitch.canTrade()) return this.skip(signal, "kill switch active");
 
-    // Gate 3: no duplicate open position for this symbol
+    // Compute execution mode early so subsequent gates are mode-aware
+    const isPaperMode = !env.placeOrders || env.paperTrading;
+
+    // Gate 3: no duplicate open position for this symbol (in current mode)
     const db = getDb();
     const existing = await db
       .select({ id: positions.id })
       .from(positions)
-      .where(and(eq(positions.userId, 1), eq(positions.symbol, symbol), eq(positions.status, "open")))
+      .where(and(eq(positions.userId, 1), eq(positions.symbol, symbol), eq(positions.status, "open"), eq(positions.isPaper, isPaperMode)))
       .limit(1);
     if (existing.length > 0) return this.skip(signal, "position already open");
 
-    // Gate 4: max total open positions
+    // Gate 4: max total open positions (in current mode)
     const openCount = await db
       .select({ id: positions.id })
       .from(positions)
-      .where(and(eq(positions.userId, 1), eq(positions.status, "open")))
+      .where(and(eq(positions.userId, 1), eq(positions.status, "open"), eq(positions.isPaper, isPaperMode)))
       .then((r) => r.length);
     const maxTotal = config.maxTotalPositions ?? 3;
     if (openCount >= maxTotal) return this.skip(signal, `max ${maxTotal} positions open`);
@@ -319,7 +322,6 @@ export class AutoExecutor {
     // Gate 7: risk engine
     let walletFree = 0;
     let walletLocked = 0;
-    const isPaperMode = !env.placeOrders || env.paperTrading;
 
     const creds = await db
       .select()
@@ -347,7 +349,11 @@ export class AutoExecutor {
     }
 
     const session = getOrCreateSession(1, walletFree || 10_000);
-    const sizeUsdt = parseFloat(config.defaultSizeUsdt ?? "50");
+    const sigMetadata = signal.metadata as Record<string, unknown> | null;
+    const isManualOverride = sigMetadata?.sizeUsdt !== undefined && sigMetadata.sizeUsdt !== null;
+    const sizeUsdt = isManualOverride
+      ? parseFloat(String(sigMetadata.sizeUsdt))
+      : parseFloat(config.defaultSizeUsdt ?? "50");
     const riskCheck = globalRiskEngine.checkTradeAllowed(session, {
       notional: sizeUsdt,
       walletBalance: walletFree || session.startingBalance,
@@ -451,7 +457,6 @@ export class AutoExecutor {
     }
 
     // Gate 7b: Price drift protection check (Binance signal price vs CoinDCX execution price)
-    const sigMetadata = signal.metadata as Record<string, unknown> | null;
     const signalPrice = sigMetadata?.signalPrice as number | undefined;
     if (signalPrice && signalPrice > 0) {
       const drift = Math.abs(currentPrice - signalPrice) / signalPrice;
@@ -466,7 +471,9 @@ export class AutoExecutor {
 
     // Capital allocation: use configured % of free balance, capped by fixed USDT size
     const allocationPct = parseFloat(config.capitalAllocationPct ?? "0.10"); // e.g. 0.10 = 10%
-    const balanceCap = (walletFree || session.startingBalance) * allocationPct;
+    const balanceCap = isManualOverride
+      ? Infinity
+      : (walletFree || session.startingBalance) * allocationPct;
     const notional = Math.min(sizeUsdt * sizeMult, balanceCap);
 
     // Leverage: if useStrategyLeverage=true, use strategy's maxLeverage; else use defaultLeverage
@@ -628,7 +635,7 @@ export class AutoExecutor {
 
     let exchangeOrderId: string | undefined;
 
-    if (params.creds && env.placeOrders) {
+    if (params.creds && !params.isPaper) {
       try {
         const coindcxSym = `B-${params.symbol.replace("USDT", "_USDT")}`;
         const order = await createFuturesOrder(

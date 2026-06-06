@@ -1027,9 +1027,14 @@ export const tradingRouter = createRouter({
 
         const refreshMonitor = () => {
           const db = getDb();
+          const isPaperMode = env.paperTrading || !env.placeOrders;
           db.select()
             .from(positions)
-            .where(and(eq(positions.userId, ctx.user.id), eq(positions.status, "open")))
+            .where(and(
+              eq(positions.userId, ctx.user.id),
+              eq(positions.status, "open"),
+              eq(positions.isPaper, isPaperMode)
+            ))
             .then((openPositions) => {
               const monitored = openPositions.map((p) => ({
                 id: p.id,

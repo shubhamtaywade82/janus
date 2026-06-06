@@ -20,6 +20,8 @@ import { aiAssessments } from "@db/position-manager-schema";
 import { eq, and, desc, gte as _gte } from "drizzle-orm";
 import { userPositionsCache, markPriceCache } from "../coindcx-ws";
 import { latestTickerCache } from "../streaming";
+import { env } from "../../lib/env";
+import { getPaperWallet } from "../paper-wallet";
 
 // ─── Position Lifecycle Manager ──────────────────────────────────────────────
 // Central orchestrator: syncs positions, runs assessment loops,
@@ -99,14 +101,19 @@ export class PositionLifecycleManager {
     const userId = this.config.userId;
     const db = getDb();
 
+    const isPaperMode = env.paperTrading || !env.placeOrders;
     // ── 1. Open positions from DB (paper + any not yet in WS cache) ──────
     const dbPositions = await db
       .select()
       .from(positions)
-      .where(and(eq(positions.userId, userId), eq(positions.status, "open")));
+      .where(and(
+        eq(positions.userId, userId),
+        eq(positions.status, "open"),
+        eq(positions.isPaper, isPaperMode)
+      ));
 
     // ── 2. Live CoinDCX WS positions ──────────────────────────────────────
-    const wsPositions = userPositionsCache.get(userId) ?? [];
+    const wsPositions = isPaperMode ? [] : (userPositionsCache.get(userId) ?? []);
 
     // Build merged set keyed by exchangeOrderId / DB id
     const managed = new Map<string, ManagedPosition>();
@@ -400,6 +407,11 @@ export class PositionLifecycleManager {
 
   private async fetchAvailableBalance(): Promise<number> {
     try {
+      const isPaper = env.paperTrading || !env.placeOrders;
+      if (isPaper) {
+        const pw = await getPaperWallet(this.config.userId);
+        return pw.balance;
+      }
       const db = getDb();
       const [wallet] = await db
         .select({ balance: futuresWallets.balance, lockedBalance: futuresWallets.lockedBalance })
@@ -420,6 +432,11 @@ export class PositionLifecycleManager {
 
   private async fetchTotalEquity(): Promise<number> {
     try {
+      const isPaper = env.paperTrading || !env.placeOrders;
+      if (isPaper) {
+        const pw = await getPaperWallet(this.config.userId);
+        return pw.equity;
+      }
       const db = getDb();
       const [wallet] = await db
         .select({ totalAccountEquity: futuresWallets.totalAccountEquity })
