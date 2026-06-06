@@ -26,7 +26,6 @@ export function detectOrderBlocks(
   // Detect bullish order blocks
   // Look for the last bearish candle before each bullish BOS
   for (let i = lookback; i < candles.length - 1; i++) {
-    const current = candles[i];
     const next = candles[i + 1];
     if (!next) continue;
 

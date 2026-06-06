@@ -98,7 +98,7 @@ export class BinanceMarketFeed implements MarketDataFeedPort {
     const res = await fetch(url);
     if (!res.ok) throw new Error(`Binance REST error ${res.status}`);
     const raw = (await res.json()) as [number, string, string, string, string, string, number, string, number][];
-    return raw.map(([t, o, h, l, c, v, ct, qv, n]) => ({
+    return raw.map(([t, o, h, l, c, v, _ct, qv, n]) => ({
       symbol,
       exchange: this.feedId,
       interval,

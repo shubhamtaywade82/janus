@@ -1,4 +1,3 @@
-import type { CandleInterval } from "../market-data/candle.js";
 import type { MarketStructure, TimeframeAnalysis } from "./market-structure.js";
 import type { OrderBlockAnalysis } from "./order-block.js";
 import type { FvgAnalysis } from "./fvg.js";

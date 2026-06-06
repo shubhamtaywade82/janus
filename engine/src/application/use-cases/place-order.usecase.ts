@@ -1,7 +1,6 @@
 import { nanoid } from "nanoid";
 import type { TradeSignal } from "../../domain/signals/trade-signal.js";
 import type { ExecutionIntent } from "../../domain/signals/execution-intent.js";
-import type { Portfolio } from "../../domain/portfolio/portfolio.js";
 import { RiskEngine } from "../services/risk-engine.js";
 import { ExecutionEngine } from "../services/execution-engine.js";
 import type { PortfolioStorePort } from "../ports/portfolio-store.port.js";

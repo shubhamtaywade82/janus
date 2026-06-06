@@ -1,4 +1,4 @@
-import type { Candle, CandleInterval } from "../market-data/candle.js";
+import type { CandleInterval } from "../market-data/candle.js";
 
 export type Trend = "BULLISH" | "BEARISH" | "RANGING";
 export type Momentum = "STRONG_BULLISH" | "BULLISH" | "WEAKENING" | "NEUTRAL" | "BEARISH" | "STRONG_BEARISH" | "EXHAUSTING" | "RECOVERY";

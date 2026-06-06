@@ -1,7 +1,7 @@
 import { deltaRequest, deltaPublicGet, type DeltaCredentials } from "./delta-rest-client.js";
 import { DeltaWsClient } from "./delta-ws-client.js";
 import {
-  EXCHANGE_ID, mapBalance, mapPosition, mapOrderResult, mapFill, mapOrderbook, mapTrade, mapOrderStatus,
+  EXCHANGE_ID, mapBalance, mapPosition, mapOrderResult, mapFill, mapOrderbook, mapOrderStatus,
 } from "./delta-mapper.js";
 import type {
   ExchangeGatewayPort, PlaceOrderInput, PlaceOrderResult, BalanceSnapshot, PositionSnapshot,

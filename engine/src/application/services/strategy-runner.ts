@@ -1,4 +1,3 @@
-import { nanoid } from "nanoid";
 import type { TradeSignal } from "../../domain/signals/trade-signal.js";
 import type { OrderbookSnapshot } from "../../domain/market-data/orderbook.js";
 import type { Candle } from "../../domain/market-data/candle.js";

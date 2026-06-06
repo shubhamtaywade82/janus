@@ -15,7 +15,6 @@ export class InMemoryPortfolioRepository implements PortfolioStorePort {
   }
 
   async savePosition(position: Position): Promise<void> {
-    const key = position.symbol;
     for (const [accountId, positions] of this.positions.entries()) {
       const idx = positions.findIndex((p) => p.symbol === position.symbol && p.exchange === position.exchange);
       if (idx >= 0) {

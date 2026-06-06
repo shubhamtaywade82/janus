@@ -22,7 +22,7 @@ import type { FairValueGap } from "../../domain/analysis/fvg.js";
 const ANALYSIS_TIMEFRAMES: CandleInterval[] = ["1d", "4h", "1h", "15m", "5m", "1m"];
 const MAX_TRADES = 100_000;
 
-interface OiSnapshot {
+interface _OiSnapshot {
   oi: number;
   price: number;
   ts: number;
