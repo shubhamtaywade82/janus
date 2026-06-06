@@ -7,7 +7,7 @@ interface Props {
   userId: number;
 }
 
-export function RiskStatus({}: Props) {
+export function RiskStatus(_props: Props) {
   const { data: risk, refetch } = trpc.trading.riskStatus.useQuery(
     undefined,
     { refetchInterval: 10_000 }

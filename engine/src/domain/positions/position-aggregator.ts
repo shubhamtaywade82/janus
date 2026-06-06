@@ -19,7 +19,7 @@ export class PositionAggregator {
     let totalSellQty = 0;
     let totalSellNotional = 0;
     let totalFees = 0;
-    let realizedPnl = 0;
+    const realizedPnl = 0;
     let openedAt: number | undefined;
 
     const sorted = [...fills].sort((a, b) => a.ts - b.ts);

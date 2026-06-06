@@ -514,7 +514,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
           from: range.from,
           to: range.to
         }));
-      } catch (err) {}
+      } catch {}
 
       // Show "go live" button when right edge is > 3 bars behind the last loaded bar
       const lastIdx = dataRef.current.length - 1;
@@ -1770,7 +1770,7 @@ const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, o
     return () => {
       try {
         chart.timeScale().unsubscribeVisibleLogicalRangeChange(handleScrollZoom);
-      } catch (err) {
+      } catch {
         // Safe check
       }
     };

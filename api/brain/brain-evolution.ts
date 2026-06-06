@@ -1,12 +1,12 @@
 import { getDb } from "../queries/connection";
 import { brainStrategies, brainEpisodes } from "@db/schema";
 import { callLLM } from "../services/ollama";
-import { eq, desc } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 
 /**
  * Simulates a historical backtest of the strategy
  */
-async function backtestStrategyOnHistory(strategy: any): Promise<{
+async function backtestStrategyOnHistory(_strategy: any): Promise<{
   sharpRatio: number;
   totalPnl: number;
   winRate: number;

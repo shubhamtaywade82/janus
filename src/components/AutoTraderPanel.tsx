@@ -7,7 +7,7 @@ import { KillSwitchButton } from "./KillSwitchButton";
 
 const ALL_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"];
 
-export function AutoTraderPanel({}: { userId?: number }) {
+export function AutoTraderPanel(_props: { userId?: number }) {
   const [expanded, setExpanded] = useState(false);
   const [synced, setSynced] = useState(false);
 

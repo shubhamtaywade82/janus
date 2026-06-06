@@ -254,7 +254,7 @@ export const marketRouter = createRouter({
           }).catch(() => {});
         }
         return trades;
-      } catch (error: any) {
+      } catch {
         return [];
       }
     }),
@@ -270,7 +270,7 @@ export const marketRouter = createRouter({
     .query(async ({ input }) => {
       try {
         return await fetchAggTrades(input.symbol, input.limit);
-      } catch (error: any) {
+      } catch {
         return [];
       }
     }),

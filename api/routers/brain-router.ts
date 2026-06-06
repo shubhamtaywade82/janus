@@ -179,8 +179,8 @@ brainRouter.get("/logs/stream", async (c) => {
 
     // Read last 20KB on initial load
     const stats = fs.statSync(logPath);
-    let startBytes = Math.max(0, stats.size - 20 * 1024);
-    let fd = fs.openSync(logPath, "r");
+    const startBytes = Math.max(0, stats.size - 20 * 1024);
+    const fd = fs.openSync(logPath, "r");
     const buffer = Buffer.alloc(stats.size - startBytes);
     fs.readSync(fd, buffer, 0, buffer.length, startBytes);
     fs.closeSync(fd);
@@ -218,7 +218,7 @@ brainRouter.get("/logs/stream", async (c) => {
           } else {
             currentSize = newStats.size;
           }
-        } catch (watchErr) {
+        } catch {
           // ignore stat/read errors
         }
       }

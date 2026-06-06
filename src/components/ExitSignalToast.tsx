@@ -22,7 +22,7 @@ interface Props {
   userId: number;
 }
 
-export function ExitSignalToast({}: Props) {
+export function ExitSignalToast(_props: Props) {
   const closePosition = trpc.trading.closePosition.useMutation();
   const utils = trpc.useUtils();
   // Deduplicate: only fire one toast per positionId until dismissed

@@ -1,6 +1,6 @@
 import { getDb } from "../queries/connection";
 import { paperAccounts, paperPositions, paperTrades } from "@db/schema";
-import { eq, and } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 export interface ExecutionAdapter {

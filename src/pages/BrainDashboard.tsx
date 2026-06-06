@@ -144,7 +144,7 @@ export default function BrainDashboard() {
       await res.json();
       toast.success("Evaluation complete!");
       fetchBrainData();
-    } catch (e) {
+    } catch {
       toast.error("Brain evaluation failed.");
     }
   };
@@ -156,7 +156,7 @@ export default function BrainDashboard() {
       if (!res.ok) throw new Error("Request failed");
       toast.success("Evolution process completed!");
       fetchBrainData();
-    } catch (e) {
+    } catch {
       toast.error("Brain evolution failed.");
     }
   };
