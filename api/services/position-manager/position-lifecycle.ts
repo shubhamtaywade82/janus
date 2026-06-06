@@ -121,10 +121,13 @@ export class PositionLifecycleManager {
     // First pass: DB positions as baseline
     for (const dbPos of dbPositions) {
       const binanceSym = dbPos.symbol.replace("B-", "").replace("_", "");
-      const markPriceRaw =
-        markPriceCache.get(dbPos.symbol) ??
-        latestTickerCache.get(binanceSym)?.lastPrice ??
-        parseFloat(dbPos.currentPrice);
+      let markPriceRaw = markPriceCache.get(dbPos.symbol) ?? 0;
+      if (markPriceRaw <= 0) {
+        markPriceRaw = latestTickerCache.get(binanceSym)?.lastPrice ?? 0;
+      }
+      if (markPriceRaw <= 0) {
+        markPriceRaw = parseFloat(dbPos.currentPrice) || parseFloat(dbPos.entryPrice) || 0;
+      }
 
       const entryPrice = parseFloat(dbPos.entryPrice);
       const quantity = parseFloat(dbPos.size);
@@ -193,7 +196,7 @@ export class PositionLifecycleManager {
       const key = String(wsPos.orderId ?? wsPos.id ?? "");
       if (managed.has(key)) {
         const existing = managed.get(key)!;
-        const newMarkPrice = wsPos.markPrice ?? existing.markPrice;
+        const newMarkPrice = (wsPos.markPrice && wsPos.markPrice > 0) ? wsPos.markPrice : existing.markPrice;
         const isLong = existing.side === "LONG";
         const unrealizedPnl =
           (isLong ? 1 : -1) *

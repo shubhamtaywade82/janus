@@ -57,17 +57,24 @@ const PositionRow = ({
   return (
     <tr className="border-b border-[#27272a] hover:bg-[#18181b] transition-colors">
       <td className="px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span
-            className={cn(
-              "w-1.5 h-1.5 rounded-full",
-              position.side === "long" ? "bg-j-up" : "bg-j-down"
+        <div className="flex flex-col gap-0.5">
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                "w-1.5 h-1.5 rounded-full",
+                position.side === "long" ? "bg-j-up" : "bg-j-down"
+              )}
+            />
+            <span className="text-xs font-medium text-[#f4f4f5]">{position.symbol}</span>
+            {position.isPaper && (
+              <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-[#f59e0b]/10 text-[#f59e0b] border border-[#f59e0b]/30">
+                PAPER
+              </span>
             )}
-          />
-          <span className="text-xs font-medium text-[#f4f4f5]">{position.symbol}</span>
-          {position.isPaper && (
-            <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-[#f59e0b]/10 text-[#f59e0b] border border-[#f59e0b]/30">
-              PAPER
+          </div>
+          {position.entryReason && (
+            <span className="text-[9px] text-[#71717a] pl-3.5 max-w-[180px] truncate" title={position.entryReason}>
+              {position.entryReason}
             </span>
           )}
         </div>
@@ -160,27 +167,34 @@ const PositionRow = ({
         </div>
       </td>
       <td className="px-3 py-2">
-        <div className="flex items-center gap-2">
-          <span
-            className={cn(
-              "text-xs px-1.5 py-0.5 rounded",
-              position.status === "open"
-                ? "bg-j-up/10 text-j-up"
-                : position.status === "closed"
-                ? "bg-[#27272a] text-[#71717a]"
-                : "bg-j-down/10 text-j-down"
-            )}
-          >
-            {position.status.toUpperCase()}
-          </span>
-          {position.status === "open" && (
-            <button
-              onClick={() => onClose(position, currentPrice, pnl)}
-              disabled={isClosing}
-              className="text-[10px] px-1.5 py-0.5 rounded bg-j-down/10 border border-j-down/20 text-j-down hover:bg-j-down/25 hover:text-white active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
+        <div className="flex flex-col gap-1">
+          <div className="flex items-center gap-2">
+            <span
+              className={cn(
+                "text-xs px-1.5 py-0.5 rounded",
+                position.status === "open"
+                  ? "bg-j-up/10 text-j-up"
+                  : position.status === "closed"
+                  ? "bg-[#27272a] text-[#71717a]"
+                  : "bg-j-down/10 text-j-down"
+              )}
             >
-              {isClosing ? "Closing..." : "Exit"}
-            </button>
+              {position.status.toUpperCase()}
+            </span>
+            {position.status === "open" && (
+              <button
+                onClick={() => onClose(position, currentPrice, pnl)}
+                disabled={isClosing}
+                className="text-[10px] px-1.5 py-0.5 rounded bg-j-down/10 border border-j-down/20 text-j-down hover:bg-j-down/25 hover:text-white active:scale-95 transition-all disabled:opacity-50 disabled:pointer-events-none"
+              >
+                {isClosing ? "Closing..." : "Exit"}
+              </button>
+            )}
+          </div>
+          {position.status !== "open" && position.exitReason && (
+            <span className="text-[9px] text-[#71717a] max-w-[180px] truncate" title={position.exitReason}>
+              {position.exitReason}
+            </span>
           )}
         </div>
       </td>

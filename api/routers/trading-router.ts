@@ -821,6 +821,7 @@ export const tradingRouter = createRouter({
           currentPrice: input.closePrice,
           realizedPnl: input.realizedPnl,
           unrealizedPnl: "0",
+          exitReason: "Manual Close via UI",
           closedAt: new Date(),
           updatedAt: new Date(),
         })

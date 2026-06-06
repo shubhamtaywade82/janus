@@ -130,17 +130,17 @@ export class AutoExecutor {
   private configCacheAt = 0;
   private readonly CONFIG_TTL_MS = 30_000;
 
-  async onSignalBatch(batchSignals: Signal[]): Promise<void> {
-    if (!env.autoExecute) return;
+  async onSignalBatch(batchSignals: Signal[]): Promise<ExecutorDecision[]> {
+    if (!env.autoExecute) return [];
 
     const config = await this.getConfig();
-    if (!config?.enabled) return;
-    if (!globalKillSwitch.canTrade()) return;
+    if (!config?.enabled) return [];
+    if (!globalKillSwitch.canTrade()) return [];
 
     const gated = batchSignals.filter(
       (s) => s.isGated && s.direction !== "neutral" && s.direction !== null
     );
-    if (gated.length === 0) return;
+    if (gated.length === 0) return [];
 
     // Clean up stale dedup entries to prevent unbounded memory growth
     const now = Date.now();
@@ -155,14 +155,23 @@ export class AutoExecutor {
       this.saveDedupCache();
     }
 
+    const decisions: ExecutorDecision[] = [];
     for (const signal of gated) {
       try {
-        await this.processSignal(signal, config);
-      } catch (err) {
+        const dec = await this.processSignal(signal, config);
+        decisions.push(dec);
+      } catch (err: any) {
         console.error(`[auto-executor] processSignal error for ${signal.symbol}:`, err);
+        decisions.push({
+          symbol: signal.symbol,
+          action: "skip",
+          reason: `Execution Error: ${err.message}`,
+          signal: { direction: signal.direction, compositeScore: signal.compositeScore, strategy: "" },
+        });
       }
     }
     this.state.lastRun = Date.now();
+    return decisions;
   }
 
   // Default config used when AUTO_EXECUTE=true but no DB row exists yet
@@ -235,7 +244,7 @@ export class AutoExecutor {
     return this.configCache;
   }
 
-  private skip(signal: Signal, reason: string, extra?: Partial<ExecutorDecision>): void {
+  private skip(signal: Signal, reason: string, extra?: Partial<ExecutorDecision>): ExecutorDecision {
     this.state.skipsToday++;
     this.state.signalsProcessed++;
     const dec: ExecutorDecision = {
@@ -249,9 +258,10 @@ export class AutoExecutor {
     this.state.lastDecision = dec;
     autoExecutorEvents.emit("decision", dec);
     console.log(`[auto-executor] SKIP ${signal.symbol} — ${reason}`);
+    return dec;
   }
 
-  private async processSignal(signal: Signal, config: AutoExecutorConfig): Promise<void> {
+  private async processSignal(signal: Signal, config: AutoExecutorConfig): Promise<ExecutorDecision> {
     this.state.signalsProcessed++;
     // Convert CoinDCX symbol (B-ETH_USDT) → Binance format (ETHUSDT)
     const symbol = signal.symbol.startsWith("B-")
@@ -432,10 +442,13 @@ export class AutoExecutor {
     }
 
     // Position sizing — 4-level price fallback chain
-    let currentPrice: number | undefined =
-      markPriceCache.get(signal.symbol) ??        // CoinDCX mark price (keyed by B-XXX_USDT)
-      latestTickerCache.get(symbol)?.lastPrice ??  // Binance ticker (keyed by XXXUSDT)
-      marketStateManager.get(symbol)?.ltp ?? undefined; // in-memory LTP from trade stream
+    let currentPrice = markPriceCache.get(signal.symbol) ?? 0;
+    if (currentPrice <= 0) {
+      currentPrice = latestTickerCache.get(symbol)?.lastPrice ?? 0;
+    }
+    if (currentPrice <= 0) {
+      currentPrice = marketStateManager.get(symbol)?.ltp ?? 0;
+    }
 
     if (!currentPrice || currentPrice <= 0) {
       // Last resort: fetch via REST
@@ -477,12 +490,15 @@ export class AutoExecutor {
     const notional = Math.min(sizeUsdt * sizeMult, balanceCap);
 
     // Leverage: if useStrategyLeverage=true, use strategy's maxLeverage; else use defaultLeverage
-    // Hard cap at 10× regardless of strategy config to prevent over-leveraged positions
+    // Hard cap at 10× regardless of strategy config to prevent over-leveraged positions (unless manual override specifies leverage)
     const strategyMaxLev = STRATEGY_CONFIGS[regimeData?.strategy ?? "intraday"]?.maxLeverage ?? 5;
-    const rawLeverage = config.useStrategyLeverage
-      ? strategyMaxLev
-      : Math.min(config.defaultLeverage ?? 3, strategyMaxLev);
-    const leverage = Math.min(rawLeverage, 10);
+    const manualLeverage = sigMetadata?.leverage ? parseFloat(String(sigMetadata.leverage)) : undefined;
+    const rawLeverage = manualLeverage !== undefined
+      ? manualLeverage
+      : (config.useStrategyLeverage
+        ? strategyMaxLev
+        : Math.min(config.defaultLeverage ?? 3, strategyMaxLev));
+    const leverage = manualLeverage !== undefined ? rawLeverage : Math.min(rawLeverage, 10);
 
     // Validate size and precision against instrument specifications
     let rawSize = notional / currentPrice;
@@ -512,8 +528,8 @@ export class AutoExecutor {
       console.warn(`[auto-executor] Failed to fetch instrument info for precision mapping:`, err);
     }
     const size = rawSize;
-    const slPct = slPctOverride ?? parseFloat(config.stopLossPct ?? "0.015");
-    const tp1Pct = tp1PctOverride ?? parseFloat(config.tp1Pct ?? "0.015");
+    const slPct = slPctOverride ?? (sigMetadata?.stopLossPct ? parseFloat(String(sigMetadata.stopLossPct)) : parseFloat(config.stopLossPct ?? "0.015"));
+    const tp1Pct = tp1PctOverride ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
 
     const stopLoss = side === "long"
       ? currentPrice * (1 - slPct)
@@ -537,6 +553,16 @@ export class AutoExecutor {
     }
 
     // Execute
+    let entryReason = `Signal composite score ${signal.compositeScore} ≥ threshold ${signal.threshold}`;
+    if (llmDecision?.reasoning) {
+      entryReason = `AI: ${llmDecision.reasoning}`;
+    } else if (sigMetadata?.source === "manual-trigger") {
+      entryReason = sigMetadata?.entryReason
+        ? String(sigMetadata.entryReason)
+        : "Manual Injection from Dashboard";
+    }
+
+    // Execute
     await this.executePosition({
       userId: 1,
       symbol,
@@ -551,6 +577,8 @@ export class AutoExecutor {
       strategyType: (regimeData?.strategy ?? "intraday") as StrategyType,
       creds: creds[0] ? decryptCreds(creds[0]) : undefined,
       isPaper: isPaperMode,
+      disableTrailing: sigMetadata?.disableTrailing === true || sigMetadata?.disableTrailing === "true",
+      entryReason,
     });
 
     // Record execution for dedup gate (Gate 1c)
@@ -586,6 +614,7 @@ export class AutoExecutor {
     this.state.lastDecision = dec;
     autoExecutorEvents.emit("decision", dec);
     console.log(`[auto-executor] EXECUTE ${symbol} ${side} size=${size.toFixed(4)} @ ${currentPrice}`);
+    return dec;
   }
 
   private async executePosition(params: {
@@ -602,6 +631,8 @@ export class AutoExecutor {
     strategyType: StrategyType;
     creds: { apiKey: string; apiSecret: string } | undefined;
     isPaper: boolean;
+    disableTrailing?: boolean;
+    entryReason?: string;
   }): Promise<void> {
     const db = getDb();
     const clientOrderId = `AE-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -629,6 +660,7 @@ export class AutoExecutor {
         signalId: params.signalId,
         strategyType: params.strategyType,
         isPaper: params.isPaper,
+        entryReason: params.entryReason,
       }).returning({ id: positions.id });
       return result[0].id;
     });
@@ -677,15 +709,17 @@ export class AutoExecutor {
       }
     }
 
-    registerPositionForTrailing({
-      id: posId,
-      symbol: params.symbol,
-      side: params.side,
-      entryPrice: params.currentPrice,
-      stopLoss: params.stopLoss,
-      strategyType: params.strategyType,
-      userId: params.userId,
-    });
+    if (!params.disableTrailing) {
+      registerPositionForTrailing({
+        id: posId,
+        symbol: params.symbol,
+        side: params.side,
+        entryPrice: params.currentPrice,
+        stopLoss: params.stopLoss,
+        strategyType: params.strategyType,
+        userId: params.userId,
+      });
+    }
 
     tradingEvents.emit(`portfolio-update:${params.userId}`);
   }
@@ -728,6 +762,7 @@ export class AutoExecutor {
         currentPrice: String(payload.currentPrice),
         realizedPnl: String(realizedPnl),
         unrealizedPnl: String(unrealizedPnl),
+        exitReason: payload.decision.reason,
         closedAt: new Date(),
         updatedAt: new Date(),
       })

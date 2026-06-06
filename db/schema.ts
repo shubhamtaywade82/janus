@@ -144,6 +144,8 @@ export const positions = pgTable(
     priceInInr: decimal("price_in_inr", { precision: 18, scale: 8 }),
     strategyType: strategyTypeEnum("strategy_type").default("intraday"),
     isPaper: boolean("is_paper").default(false).notNull(),
+    entryReason: text("entry_reason"),
+    exitReason: text("exit_reason"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
     closedAt: timestamp("closed_at"),

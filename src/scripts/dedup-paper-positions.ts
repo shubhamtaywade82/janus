@@ -1,5 +1,5 @@
 // src/scripts/dedup-paper-positions.ts
-import { getDb } from "../api/queries/connection";
+import { getDb } from "../../api/queries/connection";
 import { positions } from "@db/schema";
 import { and, eq, desc } from "drizzle-orm";
 
@@ -13,7 +13,7 @@ function weightedEntryPrice(existingEntry: string, existingSize: string, newEntr
   return weighted.toFixed(8);
 }
 
-(async function main() {
+async function main() {
   const db = getDb();
 
   // 1️⃣ Fetch all open paper positions
@@ -47,7 +47,7 @@ function weightedEntryPrice(existingEntry: string, existingSize: string, newEntr
       const margin = parseFloat(r.margin) || 0;
       totalSize += size;
       totalMargin += margin;
-      entryPrice = weightedEntryPrice(entryPrice, totalSize - size, r.entryPrice, r.size);
+      entryPrice = weightedEntryPrice(entryPrice, (totalSize - size).toString(), r.entryPrice, r.size);
     }
 
     const latest = rows[rows.length - 1];
@@ -94,7 +94,9 @@ function weightedEntryPrice(existingEntry: string, existingSize: string, newEntr
 
   console.log("🟢 Deduplication complete.");
   process.exit(0);
-}).catch(err => {
+}
+
+main().catch((err: any) => {
   console.error("❌ Script failed:", err);
   process.exit(1);
 });

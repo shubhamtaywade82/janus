@@ -44,10 +44,13 @@ async function checkPositions(): Promise<void> {
     if (!liqPrice || liqPrice <= 0) continue;
 
     // Current price: mark price cache first (most accurate), then in-memory LTP
-    const markPrice =
-      markPriceCache.get(pos.symbol) ??
-      markPriceCache.get(`B-${pos.symbol.replace("USDT", "_USDT")}`) ??
-      marketStateManager.get(pos.symbol)?.ltp;
+    let markPrice = markPriceCache.get(pos.symbol) ?? 0;
+    if (markPrice <= 0) {
+      markPrice = markPriceCache.get(`B-${pos.symbol.replace("USDT", "_USDT")}`) ?? 0;
+    }
+    if (markPrice <= 0) {
+      markPrice = marketStateManager.get(pos.symbol)?.ltp ?? 0;
+    }
 
     if (!markPrice || markPrice <= 0) continue;
 

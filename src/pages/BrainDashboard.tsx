@@ -1,7 +1,8 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { Brain, Zap, GitBranch, Lightbulb, RefreshCw, Terminal, Trash2, PanelRight, ChevronDown, Send } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { trpc } from "@/providers/trpc";
 
 export default function BrainDashboard() {
   const [episodes, setEpisodes] = useState<any[]>([]);
@@ -18,10 +19,53 @@ export default function BrainDashboard() {
   const [triggerDirection, setTriggerDirection] = useState<"long" | "short">("long");
   const [triggerScore, setTriggerScore] = useState(85);
   const [triggerCapital, setTriggerCapital] = useState("50");
+  const [triggerSl, setTriggerSl] = useState("1.5");
+  const [triggerTp, setTriggerTp] = useState("1.5");
+  const [triggerTrailing, setTriggerTrailing] = useState(true);
   const [triggerLoading, setTriggerLoading] = useState(false);
   const [triggerResult, setTriggerResult] = useState<any>(null);
   // Mode state
   const [tradingMode, setTradingMode] = useState<"paper" | "live" | "unknown">("unknown");
+
+  // Capital mode and values
+  const [capitalMode, setCapitalMode] = useState<"pct" | "fixed">("pct");
+  const [triggerCapitalPct, setTriggerCapitalPct] = useState(30);
+  const [triggerCapitalFixed, setTriggerCapitalFixed] = useState("50");
+  const [triggerLeverage, setTriggerLeverage] = useState("3");
+
+  // Fetch paper wallet details if in paper mode
+  const { data: paperWalletData } = trpc.autoExecutor.paperWallet.useQuery(
+    { userId: 1 },
+    { enabled: tradingMode === "paper", refetchInterval: 5000 }
+  );
+
+  // Fetch live portfolio details if in live mode
+  const { data: livePortfolioData } = trpc.trading.portfolio.useQuery(
+    { userId: 1 },
+    { enabled: tradingMode === "live", refetchInterval: 5000 }
+  );
+
+  const usdtInrRate = livePortfolioData ? parseFloat(livePortfolioData.usdtInrRate || "89.0") : 89.0;
+  const isPaper = tradingMode === "paper";
+
+  const availableEquity = useMemo(() => {
+    if (isPaper) {
+      return paperWalletData?.equity ?? 10000;
+    } else {
+      return livePortfolioData?.totalEquity ?? 0;
+    }
+  }, [isPaper, paperWalletData, livePortfolioData]);
+
+  const availableToTrade = useMemo(() => {
+    if (isPaper) {
+      return paperWalletData?.balance ?? 10000;
+    } else {
+      if (!livePortfolioData) return 0;
+      const rawAvail = parseFloat(livePortfolioData.availableInr || "0");
+      const isCcyInr = livePortfolioData.walletCurrency === "INR";
+      return isCcyInr ? rawAvail / usdtInrRate : rawAvail;
+    }
+  }, [isPaper, paperWalletData, livePortfolioData, usdtInrRate]);
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
   const SYMBOLS = [
@@ -130,6 +174,15 @@ export default function BrainDashboard() {
   };
 
   const handleTriggerSignal = async () => {
+    const capitalValue = capitalMode === "pct"
+      ? (availableEquity * triggerCapitalPct) / 100
+      : parseFloat(triggerCapitalFixed || "0");
+
+    if (!capitalValue || isNaN(capitalValue) || capitalValue <= 0) {
+      toast.error("Invalid Capital amount");
+      return;
+    }
+
     setTriggerLoading(true);
     setTriggerResult(null);
     try {
@@ -140,7 +193,11 @@ export default function BrainDashboard() {
           symbol: triggerSymbol,
           direction: triggerDirection,
           compositeScore: triggerScore,
-          sizeUsdt: triggerCapital ? parseFloat(triggerCapital) : undefined,
+          sizeUsdt: capitalValue,
+          leverage: triggerLeverage ? parseInt(triggerLeverage) : undefined,
+          stopLossPct: triggerSl ? parseFloat(triggerSl) : undefined,
+          takeProfitPct: triggerTp ? parseFloat(triggerTp) : undefined,
+          disableTrailing: !triggerTrailing, // if triggerTrailing is false, disableTrailing is true
         }),
       });
       const data = await res.json();
@@ -315,17 +372,123 @@ export default function BrainDashboard() {
               </div>
             </div>
             {/* Capital */}
+            <div className="flex flex-col">
+              <div className="flex items-center justify-between mb-1">
+                <label className="block text-[10px] text-zinc-500 font-bold uppercase">Capital (USDT)</label>
+                <div className="flex rounded overflow-hidden border border-[#27272a] text-[9px] font-bold">
+                  <button
+                    type="button"
+                    onClick={() => setCapitalMode("pct")}
+                    className={cn(
+                      "px-1.5 py-0.5 transition-colors",
+                      capitalMode === "pct"
+                        ? "bg-emerald-500/15 text-emerald-400"
+                        : "bg-[#09090b] text-[#52525b] hover:text-[#f4f4f5]"
+                    )}
+                  >
+                    %
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setCapitalMode("fixed")}
+                    className={cn(
+                      "px-1.5 py-0.5 border-l border-[#27272a] transition-colors",
+                      capitalMode === "fixed"
+                        ? "bg-emerald-500/15 text-emerald-400"
+                        : "bg-[#09090b] text-[#52525b] hover:text-[#f4f4f5]"
+                    )}
+                  >
+                    $
+                  </button>
+                </div>
+              </div>
+              {capitalMode === "pct" ? (
+                <div className="flex items-center gap-1">
+                  <div className="relative flex-1">
+                    <input
+                      type="number"
+                      min="1"
+                      max="100"
+                      value={triggerCapitalPct}
+                      onChange={(e) => setTriggerCapitalPct(Math.min(100, Math.max(1, parseInt(e.target.value) || 0)))}
+                      className="w-full px-2 py-1.5 rounded bg-[#09090b] border border-[#27272a] text-xs text-zinc-200 focus:border-emerald-500/50 outline-none tabular-nums"
+                    />
+                    <span className="absolute right-2 top-1.5 text-[10px] text-zinc-500 font-semibold">%</span>
+                  </div>
+                  <span className="text-[9px] text-zinc-500 font-medium truncate max-w-[55px]" title={`≈ $${((availableEquity * triggerCapitalPct) / 100).toFixed(2)}`}>
+                    ≈${((availableEquity * triggerCapitalPct) / 100).toFixed(0)}
+                  </span>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1">
+                  <input
+                    type="number"
+                    min="1"
+                    value={triggerCapitalFixed}
+                    onChange={(e) => setTriggerCapitalFixed(e.target.value)}
+                    className="w-full px-2 py-1.5 rounded bg-[#09090b] border border-[#27272a] text-xs text-zinc-200 focus:border-emerald-500/50 outline-none tabular-nums"
+                    placeholder="50"
+                  />
+                  <span className="text-[9px] text-zinc-500 font-medium whitespace-nowrap">
+                    ≈{availableEquity > 0 ? ((parseFloat(triggerCapitalFixed || "0") / availableEquity) * 100).toFixed(0) : 0}%
+                  </span>
+                </div>
+              )}
+            </div>
+            {/* Trailing Toggle */}
+            <div className="flex items-center gap-2 pb-1.5">
+              <label className="flex items-center gap-2 text-xs text-zinc-300 cursor-pointer select-none mt-auto">
+                <input
+                  type="checkbox"
+                  checked={triggerTrailing}
+                  onChange={(e) => setTriggerTrailing(e.target.checked)}
+                  className="rounded bg-[#09090b] border-[#27272a] text-emerald-500 focus:ring-emerald-500 focus:ring-opacity-50"
+                />
+                <span className="text-[10px] text-zinc-400 font-bold uppercase">Enable Trailing</span>
+              </label>
+            </div>
+
+            {/* Row 2: Stop Loss % */}
             <div>
-              <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Capital (USDT)</label>
+              <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Stop Loss %</label>
+              <input
+                type="number"
+                step="0.1"
+                min="0.1"
+                value={triggerSl}
+                onChange={(e) => setTriggerSl(e.target.value)}
+                className="w-full px-2 py-1.5 rounded bg-[#09090b] border border-[#27272a] text-xs text-zinc-200 focus:border-emerald-500/50 outline-none"
+                placeholder="1.5"
+              />
+            </div>
+            {/* Take Profit % */}
+            <div>
+              <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Take Profit %</label>
+              <input
+                type="number"
+                step="0.1"
+                min="0.1"
+                value={triggerTp}
+                onChange={(e) => setTriggerTp(e.target.value)}
+                className="w-full px-2 py-1.5 rounded bg-[#09090b] border border-[#27272a] text-xs text-zinc-200 focus:border-emerald-500/50 outline-none"
+                placeholder="1.5"
+              />
+            </div>
+            {/* Leverage */}
+            <div>
+              <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Leverage</label>
               <input
                 type="number"
                 min="1"
-                value={triggerCapital}
-                onChange={(e) => setTriggerCapital(e.target.value)}
+                max="125"
+                value={triggerLeverage}
+                onChange={(e) => setTriggerLeverage(e.target.value)}
                 className="w-full px-2 py-1.5 rounded bg-[#09090b] border border-[#27272a] text-xs text-zinc-200 focus:border-emerald-500/50 outline-none"
-                placeholder="50"
+                placeholder="3"
               />
             </div>
+            {/* Spacer */}
+            <div></div>
             {/* Fire Button */}
             <div className="flex flex-col justify-end">
               <button

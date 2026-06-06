@@ -122,14 +122,26 @@ brainRouter.post("/trigger-signal", async (c) => {
         imbalance: 0.3,
         source: "manual-trigger",
         sizeUsdt: body.sizeUsdt ? parseFloat(String(body.sizeUsdt)) : undefined,
+        leverage: body.leverage ? parseFloat(String(body.leverage)) : undefined,
+        stopLossPct: body.stopLossPct ? parseFloat(String(body.stopLossPct)) / 100 : undefined,
+        takeProfitPct: body.takeProfitPct ? parseFloat(String(body.takeProfitPct)) / 100 : undefined,
+        disableTrailing: body.disableTrailing === true || body.disableTrailing === "true",
         ...(body.metadata || {}),
       },
     }).returning();
 
     // Fire through the full 8-gate pipeline
-    await globalAutoExecutor.onSignalBatch([insertedSignal]);
+    const decisions = await globalAutoExecutor.onSignalBatch([insertedSignal]);
+    const firstDecision = decisions[0];
 
     const isPaper = env.paperTrading || !env.placeOrders;
+
+    if (firstDecision && firstDecision.action === "skip") {
+      return c.json({
+        error: firstDecision.reason,
+      }, 400);
+    }
+
     return c.json({
       success: true,
       signalId: insertedSignal.id,
@@ -137,7 +149,7 @@ brainRouter.post("/trigger-signal", async (c) => {
       direction,
       score: compositeScore,
       mode: isPaper ? "paper" : "live",
-      message: `Signal injected and processed through 8-gate pipeline (${isPaper ? 'PAPER' : 'LIVE'} mode)`,
+      message: firstDecision?.reason || `Signal injected and processed through 8-gate pipeline (${isPaper ? 'PAPER' : 'LIVE'} mode)`,
     });
   } catch (err: any) {
     console.error("[Brain Router] Trigger signal failed:", err);
