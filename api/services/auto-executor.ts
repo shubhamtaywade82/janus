@@ -517,7 +517,7 @@ export class AutoExecutor {
       }
     }
 
-    // Capital allocation: use configured % of free balance, capped by fixed USDT size
+    // Capital allocation: dynamic % of free balance, adjusted by Brain
     const allocationPct = parseFloat(config.capitalAllocationPct ?? "0.10"); // e.g. 0.10 = 10%
     const balanceCap = isManualOverride
       ? Infinity

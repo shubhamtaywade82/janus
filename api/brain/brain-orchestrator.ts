@@ -54,6 +54,7 @@ export interface BrainDecision {
   };
   verdict: BrainVerdict;
   // Adjustments the Brain proposes
+  adjustedAllocationPct?: number;  // 0.005 - 0.20 (0.5% - 20% of free balance)
   adjustedSizeUsdt?: number;
   adjustedLeverage?: number;
   adjustedSlPct?: number;
@@ -131,6 +132,7 @@ export class BrainOrchestrator {
         signals: signal ? [JSON.stringify(signal)] : [],
       },
       verdict: BrainVerdict[llmOutput.verdict as keyof typeof BrainVerdict] ?? BrainVerdict.CAUTION,
+      adjustedAllocationPct: llmOutput.adjustedAllocationPct,
       adjustedSizeUsdt: llmOutput.adjustedSizeUsdt,
       adjustedLeverage: llmOutput.adjustedLeverage,
       adjustedSlPct: llmOutput.adjustedSlPct,
@@ -242,7 +244,7 @@ You MUST respond in exactly this JSON format (no markdown, no other text):
   "confidence": 0.0-1.0,
   "rationale": "Concise reasoning string",
   "riskNotes": ["note1", "note2"],
-  "adjustedSizePct": 0.1-5.0,
+  "adjustedAllocationPct": 0.005-0.20,
   "adjustedSlPct": 0.5-5.0,
   "adjustedTpPct": 0.5-15.0
 }
@@ -252,6 +254,14 @@ Decision rules:
 - CAUTION: Uncertain — no trade, or trade at minimum size
 - REDUCE_RISK: Signal has merit but conditions are marginal — tighten stops, reduce size
 - EXIT_NOW: Strong rejection — counter-trend, high drawdown, or dangerous conditions
+
+Capital allocation rules:
+- Base allocation is 10% of free balance (configurable)
+- High conviction + aligned regime → can increase to 15-20%
+- Marginal signal + volatile regime → reduce to 3-5%
+- High drawdown or consecutive losses → reduce to 1-3%
+- Never exceed 20% of free balance per trade
+- Never go below 0.5% of free balance per trade
 
 Never approve if:
 - Daily drawdown > 3%
@@ -295,26 +305,26 @@ Render your verdict.`;
       ? Math.abs(Math.min(0, session.realizedPnl)) / session.startingBalance
       : 0;
     if (drawdownPct >= 0.03) {
-      return { verdict: "EXIT_NOW", confidence: 0.95, rationale: `High drawdown ${(drawdownPct * 100).toFixed(1)}%`, riskNotes: ["Drawdown circuit"], adjustedSizePct: 0, adjustedSlPct: 1, adjustedTpPct: 3 };
+      return { verdict: "EXIT_NOW", confidence: 0.95, rationale: `High drawdown ${(drawdownPct * 100).toFixed(1)}%`, riskNotes: ["Drawdown circuit"], adjustedAllocationPct: 0, adjustedSlPct: 1, adjustedTpPct: 3 };
     }
     if (session.inCooldown) {
-      return { verdict: "EXIT_NOW", confidence: 0.95, rationale: `Cooldown active`, riskNotes: ["Cooldown"], adjustedSizePct: 0, adjustedSlPct: 1, adjustedTpPct: 3 };
+      return { verdict: "EXIT_NOW", confidence: 0.95, rationale: `Cooldown active`, riskNotes: ["Cooldown"], adjustedAllocationPct: 0, adjustedSlPct: 1, adjustedTpPct: 3 };
     }
 
     const compositeScore = parseFloat(signal?.compositeScore ?? "0");
     if (compositeScore < 75) {
-      return { verdict: "CAUTION", confidence: 0.6, rationale: `Low confidence ${compositeScore}`, riskNotes: ["Low score"], adjustedSizePct: 0.5, adjustedSlPct: 0.5, adjustedTpPct: 3 };
+      return { verdict: "CAUTION", confidence: 0.6, rationale: `Low confidence ${compositeScore}`, riskNotes: ["Low score"], adjustedAllocationPct: 0.03, adjustedSlPct: 0.5, adjustedTpPct: 3 };
     }
 
     if (regime?.regime?.includes("range") && signal?.direction) {
-      return { verdict: "REDUCE_RISK", confidence: 0.7, rationale: `Trend signal in ranging regime`, riskNotes: ["Regime mismatch"], adjustedSizePct: 1, adjustedSlPct: 0.5, adjustedTpPct: 2 };
+      return { verdict: "REDUCE_RISK", confidence: 0.7, rationale: `Trend signal in ranging regime`, riskNotes: ["Regime mismatch"], adjustedAllocationPct: 0.05, adjustedSlPct: 0.5, adjustedTpPct: 2 };
     }
 
     if (marketSnapshot?.spreadPercent > 0.01) {
-      return { verdict: "CAUTION", confidence: 0.6, rationale: `Wide spread`, riskNotes: ["Liquidity"], adjustedSizePct: 0.5, adjustedSlPct: 0.5, adjustedTpPct: 3 };
+      return { verdict: "CAUTION", confidence: 0.6, rationale: `Wide spread`, riskNotes: ["Liquidity"], adjustedAllocationPct: 0.03, adjustedSlPct: 0.5, adjustedTpPct: 3 };
     }
 
-    return { verdict: "APPROVE", confidence: 0.8, rationale: `All checks pass`, riskNotes: [], adjustedSizePct: 2, adjustedSlPct: 1, adjustedTpPct: 3 };
+    return { verdict: "APPROVE", confidence: 0.8, rationale: `All checks pass`, riskNotes: [], adjustedAllocationPct: 0.10, adjustedSlPct: 1, adjustedTpPct: 3 };
   }
 
   private normalizeSymbol(input: string): string {
