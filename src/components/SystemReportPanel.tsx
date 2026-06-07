@@ -8,7 +8,7 @@ const pnlColor = (n: number) => (n > 0 ? "text-emerald-400" : n < 0 ? "text-red-
 
 interface Bucket { trades: number; wins: number; losses: number; pnl: number; }
 
-function AttributionTable({ title, data }: { title: string; data: Record<string, Bucket> }) {
+function AttributionTable({ title, data, rate }: { title: string; data: Record<string, Bucket>; rate: number }) {
   const rows = Object.entries(data).sort((a, b) => b[1].pnl - a[1].pnl);
   return (
     <div className="rounded border border-[#27272a] bg-[#0f0f11] p-2">
@@ -29,7 +29,12 @@ function AttributionTable({ title, data }: { title: string; data: Record<string,
               <td className="text-[#f4f4f5] py-0.5 truncate max-w-[120px]">{k}</td>
               <td className="text-right text-[#a1a1aa]">{b.trades}</td>
               <td className="text-right text-[#a1a1aa]">{b.trades ? ((b.wins / b.trades) * 100).toFixed(0) : "—"}</td>
-              <td className={cn("text-right tabular-nums", pnlColor(b.pnl))}>{b.pnl >= 0 ? "+" : ""}{fmt(b.pnl)}</td>
+              <td className={cn("text-right tabular-nums", pnlColor(b.pnl))}>
+                <div className="flex flex-col items-end">
+                  <span>{b.pnl >= 0 ? "+" : ""}₹{fmt(b.pnl * rate)}</span>
+                  <span className="text-[8px] text-[#52525b]">{b.pnl >= 0 ? "+" : ""}{fmt(b.pnl)} U</span>
+                </div>
+              </td>
             </tr>
           ))}
         </tbody>
@@ -44,6 +49,11 @@ export function SystemReportPanel() {
     { isPaper: true, lastNTrades: windowN },
     { refetchInterval: 30_000 }
   );
+  const { data: conversion } = trpc.trading.currencyConversion.useQuery(
+    undefined,
+    { staleTime: 5 * 60 * 1000 }
+  );
+  const rate = conversion?.conversion_price ?? 89.0;
 
   const h = data?.headline;
 
@@ -82,22 +92,22 @@ export function SystemReportPanel() {
           <div className="grid grid-cols-3 md:grid-cols-6 gap-2">
             {stat("trades", String(h.trades))}
             {stat("win rate", h.trades ? `${(h.winRate * 100).toFixed(1)}%` : "—")}
-            {stat("net PnL", `${h.totalPnl >= 0 ? "+" : ""}${fmt(h.totalPnl)}`, pnlColor(h.totalPnl))}
-            {stat("expectancy", `${h.expectancy >= 0 ? "+" : ""}${fmt(h.expectancy)}`, pnlColor(h.expectancy))}
+            {stat("net PnL", `${h.totalPnl >= 0 ? "+" : ""}₹${fmt(h.totalPnl * rate)}`, pnlColor(h.totalPnl))}
+            {stat("expectancy", `${h.expectancy >= 0 ? "+" : ""}₹${fmt(h.expectancy * rate)}`, pnlColor(h.expectancy))}
             {stat("profit factor", h.profitFactor == null ? "∞" : fmt(h.profitFactor))}
-            {stat("max DD", fmt(h.maxDrawdown), "text-amber-400")}
+            {stat("max DD", fmt(h.maxDrawdown) + "%", "text-amber-400")}
           </div>
           <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-            {stat("avg win", `+${fmt(h.avgWin)}`, "text-emerald-400")}
-            {stat("avg loss", `-${fmt(h.avgLoss)}`, "text-red-400")}
+            {stat("avg win", `+₹${fmt(h.avgWin * rate)}`, "text-emerald-400")}
+            {stat("avg loss", `-₹${fmt(h.avgLoss * rate)}`, "text-red-400")}
             {stat("avg hold", `${fmt(h.avgHoldMinutes, 0)}m`)}
             {stat("wins / losses", `${h.wins} / ${h.losses}`)}
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-3 gap-2">
-            <AttributionTable title="By source" data={data!.bySource} />
-            <AttributionTable title="By strategy" data={data!.byStrategy} />
-            <AttributionTable title="By symbol" data={data!.bySymbol} />
+            <AttributionTable title="By source" data={data!.bySource} rate={rate} />
+            <AttributionTable title="By strategy" data={data!.byStrategy} rate={rate} />
+            <AttributionTable title="By symbol" data={data!.bySymbol} rate={rate} />
           </div>
 
           {data!.brainQuality.total > 0 && (

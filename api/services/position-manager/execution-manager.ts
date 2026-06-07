@@ -198,7 +198,8 @@ export async function executeAction(
           .where(eq(positions.id, position.id));
 
         if (position.isPaper) {
-          await releasePaperMargin(userId, marginReleased, partialPnl, position.id);
+          const pCcy = (position.marginCurrency as "USDT" | "INR") ?? "USDT";
+          await releasePaperMargin(userId, marginReleased, partialPnl, position.id, pCcy);
         }
 
         await recordPositionTransaction({
@@ -271,7 +272,8 @@ export async function executeAction(
           .where(eq(positions.id, position.id));
 
         if (position.isPaper) {
-          await releasePaperMargin(userId, position.margin, realizedPnl, position.id);
+          const pCcy = (position.marginCurrency as "USDT" | "INR") ?? "USDT";
+          await releasePaperMargin(userId, position.margin, realizedPnl, position.id, pCcy);
         }
 
         await recordPositionTransaction({

@@ -6,6 +6,17 @@ import { positions } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { env } from "../lib/env";
 
+export interface MonitoredPosition {
+  id: number;
+  symbol: string;
+  side: "long" | "short";
+  entryPrice: number;
+  size: number;
+  strategyType: StrategyType;
+  stopLoss: number | null;
+  takeProfit: number | null;
+}
+
 export interface ExitDecision {
   shouldExit: boolean;
   unrealizedPnl: number;

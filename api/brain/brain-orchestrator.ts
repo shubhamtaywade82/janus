@@ -200,10 +200,23 @@ export class BrainOrchestrator {
   private async buildContext(symbol: string, userId: number, signal: any) {
     const db = getDb();
 
+    const configRows = await db
+      .select({
+        paperCurrency: autoExecutorConfig.paperCurrency,
+        paperStartingBalance: autoExecutorConfig.paperStartingBalance,
+      })
+      .from(autoExecutorConfig)
+      .where(eq(autoExecutorConfig.userId, userId))
+      .limit(1);
+    const paperCurrency = configRows[0]?.paperCurrency ?? "INR";
+    const paperStarting = configRows[0]?.paperStartingBalance
+      ? parseFloat(configRows[0].paperStartingBalance)
+      : 1000000;
+
     const [marketSnapshot, portfolioSnapshot, wallet, session] = await Promise.all([
       Promise.resolve(toolRegistry.getMarketSnapshot(symbol)),
       toolRegistry.getPortfolioSnapshot(userId),
-      getPaperWallet(userId),
+      getPaperWallet(userId, paperStarting, paperCurrency),
       getOrCreateSession(userId, 0),
     ]);
 

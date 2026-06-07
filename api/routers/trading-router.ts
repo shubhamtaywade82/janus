@@ -4,20 +4,17 @@ import { getDb } from "../queries/connection";
 import { positions, trades, exchangeCredentials, futuresWallets } from "@db/schema";
 import { desc, eq, and } from "drizzle-orm";
 import {
-  getFuturesOrders,
   getFuturesInstrumentInfo,
   getCrossMarginDetails,
-  walletTransfer,
-  addRemoveMargin,
   getUsdtInrRate,
   getCurrencyConversions,
   getFuturesWallet,
-  getFuturesPositions,
 } from "../services/coindcx";
 import { TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
 import { tradingEvents, initCoinDCXPrivateWs } from "../services/coindcx-ws";
-import { getFeeBreakevenMap, startExitMonitor, stopExitMonitor } from "../services/exit-manager";
+import { startExitMonitor, stopExitMonitor } from "../services/exit-manager";
+import { env } from "../lib/env";
 import { globalRiskEngine, getOrCreateSession, updateSession } from "../services/risk-engine";
 import { unregisterPosition } from "../services/trailing-stop";
 import { encrypt, decryptCreds } from "../lib/crypto";
@@ -34,6 +31,18 @@ export const tradingRouter = createRouter({
       if (input.status) conditions.push(eq(positions.status, input.status));
       if (input.symbol) conditions.push(eq(positions.symbol, input.symbol));
       return db.select().from(positions).where(and(...conditions)).orderBy(desc(positions.createdAt));
+    }),
+
+  position: authedQuery
+    .input(z.object({ id: z.number() }))
+    .query(async ({ input, ctx }) => {
+      const db = getDb();
+      const result = await db
+        .select()
+        .from(positions)
+        .where(and(eq(positions.id, input.id), eq(positions.userId, ctx.user.id)))
+        .limit(1);
+      return result[0] || null;
     }),
 
   createPosition: authedQuery
@@ -115,4 +124,136 @@ export const tradingRouter = createRouter({
         usdtInrRate,
       };
     }),
+
+  // ─── Trade history ───
+  trades: authedQuery
+    .input(z.object({ symbol: z.string().optional(), limit: z.number().default(50) }))
+    .query(async ({ input, ctx }) => {
+      const db = getDb();
+      const conditions = [eq(trades.userId, ctx.user.id)];
+      if (input.symbol) conditions.push(eq(trades.symbol, input.symbol));
+      return db.select().from(trades).orderBy(desc(trades.createdAt)).limit(input.limit).where(and(...conditions));
+    }),
+
+  // ─── Risk session status ───
+  riskStatus: authedQuery.query(async ({ ctx }) => {
+    const session = await getOrCreateSession(ctx.user.id, 10_000);
+    if (!session) return null;
+    const drawdownPct =
+      session.startingBalance > 0
+        ? (Math.abs(Math.min(0, session.realizedPnl)) / session.startingBalance) * 100
+        : 0;
+    return {
+      ...session,
+      drawdownPct,
+      drawdownLimit: globalRiskEngine.config.dailyDrawdownPct * 100,
+      maxPositionPct: globalRiskEngine.config.maxPositionPct * 100,
+      marginHealthHaltPct: globalRiskEngine.config.marginHealthHaltPct * 100,
+    };
+  }),
+
+  // ─── Risk alert stream ───
+  riskAlertStream: authedQuery.subscription(({ ctx }) => {
+    return observable((emit) => {
+      const handler = (payload: unknown) => emit.next(payload);
+      tradingEvents.on(`risk-alert:${ctx.user.id}`, handler);
+      return () => tradingEvents.off(`risk-alert:${ctx.user.id}`, handler);
+    });
+  }),
+
+  // ─── USDT/INR conversion rate ───
+  currencyConversion: authedQuery.query(async () => {
+    const conversions = await getCurrencyConversions();
+    return conversions[0] ?? { symbol: "USDTINR", conversion_price: 89.0 };
+  }),
+
+  // ─── Exit-signal stream (drives exit monitor) ───
+  exitSignalStream: authedQuery.subscription(({ ctx }) => {
+    return observable((emit) => {
+      const onExitSignal = (payload: unknown) => emit.next(payload);
+      tradingEvents.on(`exit-signal:${ctx.user.id}`, onExitSignal);
+
+      const refreshMonitor = () => {
+        const db = getDb();
+        const isPaperMode = env.paperTrading || !env.placeOrders;
+        db.select()
+          .from(positions)
+          .where(and(eq(positions.userId, ctx.user.id), eq(positions.status, "open"), eq(positions.isPaper, isPaperMode)))
+          .then((openPositions) => {
+            const monitored = openPositions.map((p) => ({
+              id: p.id,
+              symbol: p.symbol,
+              side: p.side as "long" | "short",
+              entryPrice: parseFloat(p.entryPrice),
+              size: parseFloat(p.size),
+              strategyType: (p.strategyType ?? "intraday") as any,
+              stopLoss: p.stopLoss ? parseFloat(p.stopLoss) : null,
+              takeProfit: p.takeProfit ? parseFloat(p.takeProfit) : null,
+            }));
+            startExitMonitor(ctx.user.id, monitored);
+          })
+          .catch(() => {});
+      };
+
+      refreshMonitor();
+      tradingEvents.on(`portfolio-update:${ctx.user.id}`, refreshMonitor);
+
+      return () => {
+        tradingEvents.off(`exit-signal:${ctx.user.id}`, onExitSignal);
+        tradingEvents.off(`portfolio-update:${ctx.user.id}`, refreshMonitor);
+        stopExitMonitor(ctx.user.id);
+      };
+    });
+  }),
+
+  // ─── Cached futures wallet + derived margin metrics ───
+  futuresWallet: authedQuery
+    .input(z.object({ marginCurrency: z.enum(["USDT", "INR"]).optional() }))
+    .query(async ({ input, ctx }) => {
+      const db = getDb();
+      const cached = await db
+        .select()
+        .from(futuresWallets)
+        .where(
+          and(
+            eq(futuresWallets.userId, ctx.user.id),
+            eq(futuresWallets.exchange, "coindcx"),
+            input.marginCurrency ? eq(futuresWallets.marginCurrency, input.marginCurrency) : undefined
+          )
+        )
+        .orderBy(desc(futuresWallets.updatedAt))
+        .limit(1);
+      if (!cached[0]) return null;
+
+      const w = cached[0];
+      const balance = parseFloat(w.balance);
+      const lockedBalance = parseFloat(w.lockedBalance);
+      const unrealizedPnl = parseFloat(w.unrealizedPnl);
+      const crossUserMargin = parseFloat(w.crossUserMargin);
+      const crossOrderMargin = parseFloat(w.crossOrderMargin);
+
+      const walletBalance = balance + lockedBalance;
+      const equity = walletBalance + unrealizedPnl;
+      const usedMargin = crossUserMargin + crossOrderMargin;
+      const freeMargin = Math.max(0, equity - usedMargin);
+      const marginUtilization = equity > 0 ? usedMargin / equity : 0;
+      const buyingPower = freeMargin * 10;
+      const maintenanceMargin = parseFloat(w.maintenanceMargin);
+      const marginBuffer = Math.max(0, equity - maintenanceMargin);
+      const marginBufferPct = equity > 0 ? marginBuffer / equity : 1;
+
+      return { ...w, walletBalance, equity, usedMargin, freeMargin, marginUtilization, buyingPower, marginBuffer, marginBufferPct };
+    }),
+
+  // ─── Cross margin details (live from CoinDCX) ───
+  crossMarginDetails: authedQuery.query(async ({ ctx }) => {
+    const db = getDb();
+    const creds = await db
+      .select()
+      .from(exchangeCredentials)
+      .where(and(eq(exchangeCredentials.userId, ctx.user.id), eq(exchangeCredentials.exchange, "coindcx")))
+      .limit(1);
+    if (!creds || !creds[0]) return null;
+    return getCrossMarginDetails(decryptCreds(creds[0]));
+  }),
 });

@@ -30,7 +30,7 @@ import { latestTickerCache } from "./streaming";
 import { marketStateManager } from "./market-state";
 import { markPriceCache, tradingEvents } from "./coindcx-ws";
 import { fetchKlines } from "./binance";
-import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo, getUsdtInrRate } from "./coindcx";
+import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo } from "./coindcx";
 import { registerPositionForTrailing, unregisterPosition } from "./trailing-stop";
 import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
@@ -317,6 +317,52 @@ export class AutoExecutor {
     return dec;
   }
 
+  private async prepareExecutionContext(signal: Signal, config: AutoExecutorConfig) {
+    // Convert CoinDCX symbol (B-ETH_USDT) → Binance format (ETHUSDT)
+    const symbol = signal.symbol.startsWith("B-")
+      ? signal.symbol.slice(2).replace("_USDT", "USDT").replace("_", "")
+      : signal.symbol;
+    const side = signal.direction as "long" | "short";
+    const isPaperMode = !env.placeOrders || env.paperTrading;
+
+    const db = getDb();
+    const openCount = await db
+      .select({ id: positions.id })
+      .from(positions)
+      .where(and(eq(positions.userId, 1), eq(positions.status, "open"), eq(positions.isPaper, isPaperMode)))
+      .then((r) => r.length);
+
+    let walletFree = 0;
+    let walletLocked = 0;
+    const creds = await db
+      .select()
+      .from(exchangeCredentials)
+      .where(and(eq(exchangeCredentials.userId, 1), eq(exchangeCredentials.exchange, "coindcx")))
+      .limit(1);
+
+    if (isPaperMode) {
+      const paperBalance = parseFloat(config.paperStartingBalance ?? "1000000");
+      const paperCurrency = (config.paperCurrency as "USDT" | "INR") ?? "INR";
+      const pw = await getPaperWallet(1, paperBalance, paperCurrency);
+      walletFree = pw.balance;
+      walletLocked = pw.lockedMargin;
+    } else if (creds[0]) {
+      try {
+        const liveWallets = await getFuturesWallet(decryptCreds(creds[0]));
+        for (const w of liveWallets) {
+          walletFree += parseFloat(w.balance ?? "0");
+          walletLocked += parseFloat(w.locked_balance ?? "0");
+        }
+      } catch {
+        return null;
+      }
+    }
+
+    const session = await getOrCreateSession(1, walletFree || 10_000);
+
+    return { symbol, side, isPaperMode, openCount, walletFree, walletLocked, session, creds: creds[0] };
+  }
+
   private async processSignal(signal: Signal, config: AutoExecutorConfig): Promise<ExecutorDecision> {
     this.state.signalsProcessed++;
     const context = await this.prepareExecutionContext(signal, config);
@@ -382,6 +428,8 @@ export class AutoExecutor {
       return this.skip(signal, sizing.skipReason, sizing.skipGate || "sizing");
     }
 
+    const paperCurrency = (config.paperCurrency as "USDT" | "INR") ?? "INR";
+
     // ─── Execution ───
     await this.executePosition({
       userId: 1,
@@ -397,6 +445,7 @@ export class AutoExecutor {
       strategyType: sizing.strategyType,
       creds: context.creds,
       isPaper: isPaperMode,
+      paperCurrency,
       disableTrailing: sigMetadata?.disableTrailing === true || sigMetadata?.disableTrailing === "true",
       entryReason: sizing.entryReason,
     });
@@ -406,7 +455,6 @@ export class AutoExecutor {
     this.recentExecutions.set(dedupKey, Date.now());
     await this.saveDedupCache();
 
-    const paperCurrency = (config.paperCurrency as "USDT" | "INR") ?? "INR";
     if (isPaperMode) {
       await lockPaperMargin(1, sizing.notional / sizing.leverage, undefined, paperCurrency);
     }
@@ -445,7 +493,7 @@ export class AutoExecutor {
     return dec;
   }
 
-  private async evaluateBrainAuthority(signal: Signal, config: AutoExecutorConfig): Promise<{ action: "skip" | "approve"; reason: string; gate: string; llmDecision?: ExecutorDecision["llmDecision"]; brainResult?: any } | null> {
+  private async evaluateBrainAuthority(signal: Signal, _config: AutoExecutorConfig): Promise<{ action: "skip" | "approve"; reason: string; gate: string; llmDecision?: ExecutorDecision["llmDecision"]; brainResult?: any } | null> {
     const brainConfig = await brainOrchestrator.getConfig(1);
     const brainHasAuthority = brainConfig.gateEnabled && !brainConfig.shadowMode;
 
@@ -680,6 +728,7 @@ private async executePosition(params: {
     strategyType: StrategyType;
     creds: { apiKey: string; apiSecret: string } | undefined;
     isPaper: boolean;
+    paperCurrency?: "USDT" | "INR";
     disableTrailing?: boolean;
     entryReason?: string;
   }): Promise<void> {
@@ -700,6 +749,7 @@ private async executePosition(params: {
         size: String(params.size),
         leverage: params.leverage,
         margin: String((params.notional / params.leverage).toFixed(4)),
+        marginCurrency: params.isPaper ? (params.paperCurrency ?? "INR") : "USDT",
         stopLoss: String(params.stopLoss),
         takeProfit: String(params.takeProfit),
         unrealizedPnl: "0",
@@ -850,7 +900,7 @@ private async executePosition(params: {
 
     if (position.isPaper) {
       const cfg = await this.getConfig();
-      const paperCurrency = (cfg.paperCurrency as "USDT" | "INR") ?? "INR";
+      const paperCurrency = (position.marginCurrency as "USDT" | "INR") ?? (cfg?.paperCurrency as "USDT" | "INR") ?? "INR";
       await releasePaperMargin(position.userId, parseFloat(position.margin), realizedPnl, position.id, paperCurrency);
     } else {
       // Place exit order on live exchange (CoinDCX)

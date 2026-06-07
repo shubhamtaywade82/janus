@@ -54,12 +54,15 @@ const Dashboard = () => {
   useEffect(() => { localStorage.setItem("janus_overlay_toggles", JSON.stringify(overlayToggles)); }, [overlayToggles]);
   useEffect(() => { localStorage.setItem("janus_indicator_cfg", JSON.stringify(indicatorCfg)); }, [indicatorCfg]);
 
-  const [interval, setInterval] = useState("1m");
-  const { data: klines, refetch: refetchKlines } = trpc.market.klines.useQuery({ symbol: selectedSymbol, interval, limit: 300 });
+  const [interval] = useState("1m");
+  const { data: klines } = trpc.market.klines.useQuery({ symbol: selectedSymbol, interval, limit: 300 });
   const { data: positions } = trpc.trading.positions.useQuery({ status: "open" }, { refetchInterval: 5000 });
   const { data: ticker24h } = trpc.market.ticker24h.useQuery({});
-  
-  const tickerData = useMemo(() => ticker24h?.find((t) => t.symbol === selectedSymbol), [ticker24h, selectedSymbol]);
+
+  const tickerData = useMemo(
+    () => (Array.isArray(ticker24h) ? ticker24h.find((t) => t.symbol === selectedSymbol) : undefined),
+    [ticker24h, selectedSymbol]
+  );
   const activePositions = useMemo(() => positions?.filter((p) => p.symbol === selectedSymbol) || [], [positions, selectedSymbol]);
 
   const [liquidityEvents, setLiquidityEvents] = useState<any[]>([]);
@@ -74,7 +77,7 @@ const Dashboard = () => {
         <div className="w-80 flex flex-col border-r border-[#27272a] bg-[#09090b]">
           <div className="p-3 border-b border-[#27272a]"><RegimeIndicator symbol={selectedSymbol} /></div>
           <div className="flex-1 overflow-y-auto scrollbar-thin"><LlmActivityFeed /></div>
-          <div className="p-3 border-t border-[#27272a]"><RiskStatus /></div>
+          <div className="p-3 border-t border-[#27272a]"><RiskStatus userId={1} /></div>
         </div>
 
         {/* Center: Chart & Controls */}
@@ -92,7 +95,7 @@ const Dashboard = () => {
             />
           </div>
           <div className="h-64 border-t border-[#27272a] flex">
-            <div className="flex-1 border-r border-[#27272a]"><AutoTraderPanel symbol={selectedSymbol} /></div>
+            <div className="flex-1 border-r border-[#27272a]"><AutoTraderPanel userId={1} /></div>
             <div className="w-64"><RecentTrades symbol={selectedSymbol} /></div>
           </div>
         </div>
@@ -108,13 +111,13 @@ const Dashboard = () => {
             />
           </div>
           <div className="h-1/2 overflow-y-auto scrollbar-thin p-3 space-y-4">
-            <ChartOverlayPanel toggles={overlayToggles} onChange={setOverlayToggles} />
-            <IndicatorPanel config={indicatorCfg!} onChange={setIndicatorCfg} />
-            <AlertConfigPanel symbol={selectedSymbol} />
+            <ChartOverlayPanel onChange={setOverlayToggles} />
+            <IndicatorPanel onChange={setIndicatorCfg} />
+            <AlertConfigPanel onChange={() => {}} />
           </div>
         </div>
       </div>
-      <ExitSignalToast />
+      <ExitSignalToast userId={1} />
     </div>
   );
 };

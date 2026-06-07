@@ -15,7 +15,7 @@ import type {
 } from "./types";
 import { PositionAction as PA } from "./types";
 import { getDb } from "../../queries/connection";
-import { positions, futuresWallets, signals } from "@db/schema";
+import { positions, futuresWallets, signals, autoExecutorConfig } from "@db/schema";
 import { aiAssessments } from "@db/position-manager-schema";
 import { eq, and, desc, gte as _gte } from "drizzle-orm";
 import { userPositionsCache, markPriceCache } from "../coindcx-ws";
@@ -180,6 +180,7 @@ export class PositionLifecycleManager {
         source: dbPos.signalId ? "BOT" : "MANUAL",
         lifecycleState,
         isPaper: dbPos.isPaper,
+        marginCurrency: dbPos.marginCurrency ?? "USDT",
         openedAt: dbPos.createdAt,
         updatedAt: dbPos.updatedAt,
         riskRewardRatio,
@@ -410,7 +411,21 @@ export class PositionLifecycleManager {
     try {
       const isPaper = env.paperTrading || !env.placeOrders;
       if (isPaper) {
-        const pw = await getPaperWallet(this.config.userId);
+        const db = getDb();
+        const configRows = await db
+          .select({
+            paperCurrency: autoExecutorConfig.paperCurrency,
+            paperStartingBalance: autoExecutorConfig.paperStartingBalance,
+          })
+          .from(autoExecutorConfig)
+          .where(eq(autoExecutorConfig.userId, this.config.userId))
+          .limit(1);
+        const paperCurrency = configRows[0]?.paperCurrency ?? "INR";
+        const paperStarting = configRows[0]?.paperStartingBalance
+          ? parseFloat(configRows[0].paperStartingBalance)
+          : 1000000;
+
+        const pw = await getPaperWallet(this.config.userId, paperStarting, paperCurrency);
         return pw.balance;
       }
       const db = getDb();
@@ -435,7 +450,21 @@ export class PositionLifecycleManager {
     try {
       const isPaper = env.paperTrading || !env.placeOrders;
       if (isPaper) {
-        const pw = await getPaperWallet(this.config.userId);
+        const db = getDb();
+        const configRows = await db
+          .select({
+            paperCurrency: autoExecutorConfig.paperCurrency,
+            paperStartingBalance: autoExecutorConfig.paperStartingBalance,
+          })
+          .from(autoExecutorConfig)
+          .where(eq(autoExecutorConfig.userId, this.config.userId))
+          .limit(1);
+        const paperCurrency = configRows[0]?.paperCurrency ?? "INR";
+        const paperStarting = configRows[0]?.paperStartingBalance
+          ? parseFloat(configRows[0].paperStartingBalance)
+          : 1000000;
+
+        const pw = await getPaperWallet(this.config.userId, paperStarting, paperCurrency);
         return pw.equity;
       }
       const db = getDb();

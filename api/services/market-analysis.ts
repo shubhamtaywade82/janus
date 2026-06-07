@@ -8,7 +8,6 @@ import {
 } from "@db/schema";
 import { desc, eq, and, gte } from "drizzle-orm";
 import { marketStateManager } from "./market-state";
-import { fetchKlines, fetchOpenInterest } from "./binance";
 
 // ─── Types ───
 
@@ -339,6 +338,63 @@ export async function getLiquidationStats(symbol: string) {
 
   const rows = await getDb().select().from(liquidationEvents).where(and(eq(liquidationEvents.symbol, symbol), gte(liquidationEvents.tradeTime, new Date(sinceMs)))).orderBy(desc(liquidationEvents.tradeTime)).limit(500).catch(() => []);
   return rows.reduce((acc, r) => { const q = parseFloat(r.quantity), p = parseFloat(r.price), n = q * p; if (r.side === "SELL") { acc.longQty += q; acc.longNotional += n; } else { acc.shortQty += q; acc.shortNotional += n; } acc.count++; return acc; }, { longQty: 0, shortQty: 0, longNotional: 0, shortNotional: 0, count: 0 });
+}
+
+export async function analyzeCvd(symbol: string, candles: AnalysisCandle[]): Promise<{ trend: string; signal_strength: string }> {
+  const state = marketStateManager.get(symbol);
+  let points = state?.cvdWindow.values().map((p) => ({
+    price: p.price,
+    cumulative: p.cumulative,
+    timestamp: p.timestamp,
+  })) ?? [];
+
+  if (points.length < 20) {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(recentTicks)
+      .where(eq(recentTicks.symbol, symbol))
+      .orderBy(desc(recentTicks.tradeTime))
+      .limit(1000)
+      .catch(() => []);
+    let cumulative = 0;
+    points = rows.reverse().map((row) => {
+      const price = parseFloat(row.price);
+      const qty = parseFloat(row.size);
+      cumulative += row.side === "buy" ? price * qty : -price * qty;
+      return { price, cumulative, timestamp: row.tradeTime.getTime() };
+    });
+  }
+
+  if (points.length < 20 || candles.length < 20) {
+    return { trend: "NEUTRAL", signal_strength: "WEAK" };
+  }
+
+  const recentPoints = points.slice(-20);
+  const recentCandles = candles.slice(-20);
+  const firstPriceLow = Math.min(...recentCandles.slice(0, 10).map((c) => c.low));
+  const secondPriceLow = Math.min(...recentCandles.slice(10).map((c) => c.low));
+  const firstPriceHigh = Math.max(...recentCandles.slice(0, 10).map((c) => c.high));
+  const secondPriceHigh = Math.max(...recentCandles.slice(10).map((c) => c.high));
+  const firstCvdLow = Math.min(...recentPoints.slice(0, 10).map((p) => p.cumulative));
+  const secondCvdLow = Math.min(...recentPoints.slice(10).map((p) => p.cumulative));
+  const firstCvdHigh = Math.max(...recentPoints.slice(0, 10).map((p) => p.cumulative));
+  const secondCvdHigh = Math.max(...recentPoints.slice(10).map((p) => p.cumulative));
+
+  if (secondPriceLow < firstPriceLow && secondCvdLow > firstCvdLow) {
+    return { trend: "BULLISH_DIVERGENCE", signal_strength: "STRONG" };
+  }
+  if (secondPriceHigh > firstPriceHigh && secondCvdHigh < firstCvdHigh) {
+    return { trend: "BEARISH_DIVERGENCE", signal_strength: "STRONG" };
+  }
+
+  const cvdChange = recentPoints[recentPoints.length - 1].cumulative - recentPoints[0].cumulative;
+  const priceChange = recentCandles[recentCandles.length - 1].close - recentCandles[0].close;
+  if ((cvdChange > 0 && priceChange > 0) || (cvdChange < 0 && priceChange < 0)) {
+    return { trend: "CONTINUATION", signal_strength: Math.abs(cvdChange) > Math.abs(recentPoints[0].cumulative) * 0.1 ? "STRONG" : "MODERATE" };
+  }
+
+  return { trend: "NEUTRAL", signal_strength: "WEAK" };
 }
 
 export async function comprehensiveAnalysis(symbol: string): Promise<any> {

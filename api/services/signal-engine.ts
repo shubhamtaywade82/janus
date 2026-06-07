@@ -10,7 +10,6 @@ import { fetchKlines, SUPPORTED_PAIRS } from "./binance";
 import { subscribeToSymbol, marketEvents } from "./streaming";
 import { marketStateManager } from "./market-state";
 import { STRATEGY_CONFIGS, type StrategyType } from "./strategy-config";
-import { globalLlmAdvisor } from "./llm-advisor";
 import {
   evaluateGridStrategy,
   evaluateMomentumReversal,
@@ -25,25 +24,13 @@ import {
 import { globalAutoExecutor } from "./auto-executor";
 import {
   computeKnnSupertrend,
-  knnSnapshotCache,
   type KnnSupertrendSnapshot,
 } from "./knn-supertrend";
 import { alertEngine } from "./alert-engine";
 import {
   ema,
   calculateRSI,
-  clamp,
-  round,
   analyzeTimeframeStructure,
-  detectOrderBlocks,
-  detectFVGs,
-  buildVolumeProfile,
-  analyzeVolumeFromCandles,
-  analyzeOpenInterest,
-  analyzeFunding,
-  analyzeCvd,
-  getLiquidationStats,
-  formatCompact,
   type AnalysisCandle,
   type AnalysisTimeframe,
   type OrderBlock,
@@ -90,7 +77,8 @@ export async function runAnalysisForSymbol(binanceSymbol: string) {
     const db = getDb();
     const regimeVal = await detectRegimeForSymbol(binanceSymbol);
     latestRegimeCache.set(binanceSymbol, regimeVal);
-    const strategy = regimeVal.strategy as StrategyType;
+    // Manual override pins strategy when regime auto-switch is disabled
+    const strategy = (autoSwitchEnabled ? regimeVal.strategy : (manualStrategy ?? regimeVal.strategy)) as StrategyType;
 
     const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = await getConfluenceInput(binanceSymbol);
     const currentPrice = prices[prices.length - 1] || 0;
@@ -98,6 +86,7 @@ export async function runAnalysisForSymbol(binanceSymbol: string) {
     let knnSnapshot: KnnSupertrendSnapshot | null = null;
     if (prices.length >= 30) {
       knnSnapshot = computeKnnSupertrend(binanceSymbol, "1m", prices, highs, lows, volumes);
+      if (knnSnapshot) signalEvents.emit("knn-snapshot", { symbol: binanceSymbol, snapshot: knnSnapshot });
     }
 
     const signalData = evaluateSymbolSignal(pair.coindcx, strategy, currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraMetrics);
@@ -133,7 +122,7 @@ export async function runAnalysisForSymbol(binanceSymbol: string) {
 
 // ─── Internal Helpers ───
 
-async function getConfluenceInput(binanceSymbol: string) {
+export async function getConfluenceInput(binanceSymbol: string) {
   const state = marketStateManager.get(binanceSymbol);
   const obMetrics = state?.metrics ?? { spread: 0, spreadPercent: 0.05, bidDepth: 0, askDepth: 0, imbalance: 0, midPrice: 0 };
   const tapeMetrics = state ? aggregateTradeTape(state.tradeWindow.values().map(t => ({ price: String(t.price), qty: String(t.quantity), isBuyerMaker: t.side === "SELL" }))) : { buyVolume: 0, sellVolume: 0, delta: 0, makerRatio: 0.5, avgTradeSize: 0, tradeCount: 0 };
@@ -175,7 +164,11 @@ export async function bootstrapHistoricalKlines() {
 }
 
 let klineUpdateListener: any = null;
-export function startAutoAnalysis() {
+let manualStrategy: StrategyType | null = null;
+let autoSwitchEnabled = true;
+export function startAutoAnalysis(strategyType?: StrategyType, autoSwitch = true) {
+  autoSwitchEnabled = autoSwitch;
+  manualStrategy = autoSwitch ? null : (strategyType ?? manualStrategy);
   bootstrapHistoricalKlines();
   for (const pair of SUPPORTED_PAIRS) subscribeToSymbol(pair.binance);
   if (klineUpdateListener) marketEvents.off("kline-update", klineUpdateListener);

@@ -1,6 +1,6 @@
 {
-  "id": "51701572-6df9-4e49-a534-c214e4109419",
-  "prevId": "00000000-0000-0000-0000-000000000000",
+  "id": "da69c5f6-3022-4781-9bc4-cc08412668c9",
+  "prevId": "51701572-6df9-4e49-a534-c214e4109419",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -439,7 +439,15 @@
           "type": "numeric(12, 2)",
           "primaryKey": false,
           "notNull": false,
-          "default": "'10000'"
+          "default": "'1000000'"
+        },
+        "paper_currency": {
+          "name": "paper_currency",
+          "type": "margin_currency",
+          "typeSchema": "public",
+          "primaryKey": false,
+          "notNull": true,
+          "default": "'INR'"
         },
         "brain_driver_enabled": {
           "name": "brain_driver_enabled",

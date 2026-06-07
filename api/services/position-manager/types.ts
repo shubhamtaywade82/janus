@@ -63,6 +63,7 @@ export interface ManagedPosition {
   source: PositionSource;
   lifecycleState: PositionLifecycleState;
   isPaper: boolean;
+  marginCurrency: string;
   openedAt: Date;
   updatedAt: Date;
   // Derived
