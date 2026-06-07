@@ -30,7 +30,7 @@ import { latestTickerCache } from "./streaming";
 import { marketStateManager } from "./market-state";
 import { markPriceCache, tradingEvents } from "./coindcx-ws";
 import { fetchKlines } from "./binance";
-import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo } from "./coindcx";
+import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo, getOrderStatus, cancelOrder } from "./coindcx";
 import { registerPositionForTrailing, unregisterPosition } from "./trailing-stop";
 import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
@@ -79,6 +79,53 @@ export interface AutoExecutorState {
 }
 
 const brainOrchestrator = new BrainOrchestrator(); // mode read per-call from config
+
+const LIMIT_ENTRY_TIMEOUT_MS = 5_000;
+const LIMIT_ENTRY_POLL_MS = 1_000;
+
+/**
+ * Places an entry order. When `preferLimitEntry` is true and the order book has live
+ * quotes, places a marketable limit order at the best ask (long) / best bid (short) —
+ * this caps slippage at the displayed top-of-book instead of sweeping deeper into the
+ * book like a market order would. If unfilled after a short timeout, cancels and falls
+ * back to a market order so the entry isn't missed entirely.
+ */
+async function placeEntryOrder(
+  creds: { apiKey: string; apiSecret: string },
+  order: { market: string; side: "buy" | "sell"; total_quantity: number; price: number; leverage: number; client_order_id: string },
+  preferLimitEntry: boolean,
+  symbol: string
+): Promise<any> {
+  const book = marketStateManager.get(symbol)?.orderBook;
+  const bestBid = book?.bids?.[0]?.[0] ?? 0;
+  const bestAsk = book?.asks?.[0]?.[0] ?? 0;
+
+  if (!preferLimitEntry || bestBid <= 0 || bestAsk <= 0) {
+    return createFuturesOrder(creds, { ...order, order_type: "market" });
+  }
+
+  const limitPrice = order.side === "buy" ? bestAsk : bestBid;
+  const placed = await createFuturesOrder(creds, { ...order, order_type: "limit", price: limitPrice });
+  const orderId = placed?.id;
+  if (!orderId) return placed;
+
+  const deadline = Date.now() + LIMIT_ENTRY_TIMEOUT_MS;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, LIMIT_ENTRY_POLL_MS));
+    const status = await getOrderStatus(creds, orderId).catch(() => null);
+    const remaining = parseFloat(status?.remaining_quantity ?? status?.total_quantity ?? "0");
+    if (status && remaining <= 0) {
+      console.log(`[auto-executor] Limit entry ${orderId} filled at ${limitPrice} (symbol=${symbol})`);
+      return status;
+    }
+  }
+
+  console.warn(`[auto-executor] Limit entry ${orderId} not filled within ${LIMIT_ENTRY_TIMEOUT_MS}ms — cancelling and falling back to market (symbol=${symbol})`);
+  await cancelOrder(creds, orderId, order.market).catch((err) =>
+    console.warn(`[auto-executor] Failed to cancel unfilled limit entry ${orderId}:`, err.message)
+  );
+  return createFuturesOrder(creds, { ...order, order_type: "market" });
+}
 
 export class AutoExecutor {
   constructor() {
@@ -811,17 +858,18 @@ private async executePosition(params: {
     if (params.creds && !params.isPaper) {
       try {
         const coindcxSym = `B-${params.symbol.replace("USDT", "_USDT")}`;
-        const order = await createFuturesOrder(
+        const order = await placeEntryOrder(
           { apiKey: params.creds.apiKey, apiSecret: params.creds.apiSecret },
           {
             market: coindcxSym,
             side: params.side === "long" ? "buy" : "sell",
-            order_type: "market",
             total_quantity: params.size,
             price: params.currentPrice,
             leverage: params.leverage,
             client_order_id: clientOrderId,
-          }
+          },
+          STRATEGY_CONFIGS[params.strategyType]?.preferLimitEntry ?? false,
+          params.symbol
         );
         exchangeOrderId = order?.id;
         console.log(`[auto-executor] Exchange order placed: ${exchangeOrderId} (client=${clientOrderId})`);
