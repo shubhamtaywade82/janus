@@ -187,6 +187,10 @@ export class PositionLifecycleManager {
         slDistancePct,
         liqDistancePct,
         holdingMinutes,
+        // NEW persisted state fields (will be hydrated from DB in Task 6)
+        breakevenApplied: false,
+        extremePrice: null,
+        openedAlertSent: false,
       };
 
       managed.set(String(dbPos.id), mp);
