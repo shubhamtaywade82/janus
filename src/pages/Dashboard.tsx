@@ -77,10 +77,11 @@ const Dashboard = () => {
         <div className="w-80 flex flex-col border-r border-[#27272a] bg-[#09090b]">
           <div className="p-3 border-b border-[#27272a]"><RegimeIndicator symbol={selectedSymbol} /></div>
           <div className="flex-1 overflow-y-auto scrollbar-thin"><LlmActivityFeed /></div>
+          <div className="p-3 border-t border-[#27272a]"><AutoTraderPanel userId={1} /></div>
           <div className="p-3 border-t border-[#27272a]"><RiskStatus userId={1} /></div>
         </div>
 
-        {/* Center: Chart & Controls */}
+        {/* Center: Chart */}
         <div className="flex-1 flex flex-col min-w-0 bg-black">
           <div className="flex-1 relative">
             <MiniChart 
@@ -94,23 +95,24 @@ const Dashboard = () => {
               liquidityEvents={liquidityEvents}
             />
           </div>
-          <div className="h-64 border-t border-[#27272a] flex">
-            <div className="flex-1 border-r border-[#27272a]"><AutoTraderPanel userId={1} /></div>
-            <div className="w-64"><RecentTrades symbol={selectedSymbol} /></div>
-          </div>
         </div>
 
         {/* Right Sidebar: Orderbook & Config */}
         <div className="w-80 flex flex-col border-l border-[#27272a] bg-[#09090b]">
-          <div className="flex-1 overflow-hidden border-b border-[#27272a]">
-            <OrderBook 
-              symbol={selectedSymbol} 
-              tickerData={tickerData} 
-              liquidityEvents={liquidityEvents} 
-              onLiquidityEvent={onLiquidityEvent} 
-            />
+          <div className="flex-1 flex flex-col overflow-hidden border-b border-[#27272a]">
+            <div className="flex-1 overflow-hidden">
+              <OrderBook 
+                symbol={selectedSymbol} 
+                tickerData={tickerData} 
+                liquidityEvents={liquidityEvents} 
+                onLiquidityEvent={onLiquidityEvent} 
+              />
+            </div>
+            <div className="h-64 border-t border-[#27272a]">
+              <RecentTrades symbol={selectedSymbol} />
+            </div>
           </div>
-          <div className="h-1/2 overflow-y-auto scrollbar-thin p-3 space-y-4">
+          <div className="h-[35%] overflow-y-auto scrollbar-thin p-3 space-y-4">
             <ChartOverlayPanel onChange={setOverlayToggles} />
             <IndicatorPanel onChange={setIndicatorCfg} />
             <AlertConfigPanel onChange={() => {}} />
