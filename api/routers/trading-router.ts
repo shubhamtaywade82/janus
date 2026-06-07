@@ -9,11 +9,12 @@ import {
   getUsdtInrRate,
   getCurrencyConversions,
   getFuturesWallet,
+  getFuturesPositions,
 } from "../services/coindcx";
 import { TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
 import { tradingEvents, initCoinDCXPrivateWs } from "../services/coindcx-ws";
-import { startExitMonitor, stopExitMonitor } from "../services/exit-manager";
+import { startExitMonitor, stopExitMonitor, getFeeBreakevenMap } from "../services/exit-manager";
 import { env } from "../lib/env";
 import { globalRiskEngine, getOrCreateSession, updateSession } from "../services/risk-engine";
 import { unregisterPosition } from "../services/trailing-stop";
@@ -96,32 +97,62 @@ export const tradingRouter = createRouter({
   instrumentInfo: authedQuery
     .input(z.object({ symbol: z.string() }))
     .query(async ({ input, ctx }) => {
-      const instrument = await getFuturesInstrumentInfo(input.symbol).catch(() => null);
-      const [creds] = await getDb().select().from(exchangeCredentials).where(and(eq(exchangeCredentials.userId, ctx.user.id), eq(exchangeCredentials.exchange, "coindcx"))).limit(1);
-      
-      let availableUsdt = 0, availableInr = 0, usdtInrRate = 89;
-      if (creds) {
+      const [instrument, creds] = await Promise.all([
+        getFuturesInstrumentInfo(input.symbol).catch(() => null),
+        getDb().select().from(exchangeCredentials)
+          .where(and(eq(exchangeCredentials.userId, ctx.user.id), eq(exchangeCredentials.exchange, "coindcx")))
+          .limit(1),
+      ]);
+
+      let availableUsdt = 0;
+      let availableInr = 0;
+      let usdtInrRate = 89;
+      if (creds[0]) {
         try {
-          const [wallets, rate] = await Promise.all([getFuturesWallet(decryptCreds(creds)), getUsdtInrRate()]);
+          const [wallets, rate] = await Promise.all([
+            getFuturesWallet(decryptCreds(creds[0])),
+            getUsdtInrRate(),
+          ]);
           usdtInrRate = rate;
-          wallets.forEach(w => {
+          for (const w of wallets) {
             const avail = parseFloat(w.balance || "0") - parseFloat(w.locked_balance || "0");
-            if (w.currency_short_name === "USDT") availableUsdt += avail;
-            if (w.currency_short_name === "INR") availableInr += avail;
-          });
+            if (w.currency_short_name === "USDT") availableUsdt += Math.max(0, avail);
+            if (w.currency_short_name === "INR") availableInr += Math.max(0, avail);
+          }
         } catch {}
       }
 
+      // Current leverage from open position for this pair (best proxy)
+      let currentLeverage: number | null = null;
+      if (creds[0]) {
+        try {
+          const livePositions = await getFuturesPositions(decryptCreds(creds[0]));
+          const coindcxPair = `B-${input.symbol.replace("USDT", "_USDT")}`;
+          const pos = livePositions.find((p: any) => p.pair === coindcxPair && parseFloat(p.active_pos) !== 0);
+          if (pos) currentLeverage = pos.leverage;
+        } catch {}
+      }
+
+      const maxLeverage = instrument?.max_leverage || 10;
+
       return {
         symbol: input.symbol,
+        pair: instrument?.pair ?? `B-${input.symbol.replace("USDT", "_USDT")}`,
         minQuantity: instrument?.min_quantity ?? 0.001,
+        maxQuantity: instrument?.max_quantity ?? 1000000,
+        maxQuantityMarket: instrument?.max_quantity_market ?? null,
         minNotional: instrument?.min_notional ?? 5.5,
+        step: instrument?.step ?? 0.001,
         basePrecision: instrument?.base_currency_precision ?? 2,
         targetPrecision: instrument?.target_currency_precision ?? 4,
-        maxLeverage: instrument?.max_leverage ?? 10,
+        orderTypes: instrument?.order_types ?? ["market_order", "limit_order"],
+        maxLeverage: maxLeverage > 0 ? maxLeverage : 10,
+        currentLeverage,
         availableUsdt,
         availableInr,
+        availableUsdtEquivalent: availableUsdt + availableInr / usdtInrRate,
         usdtInrRate,
+        marginCurrency: availableInr > availableUsdt * usdtInrRate ? "INR" : "USDT",
       };
     }),
 
@@ -166,6 +197,11 @@ export const tradingRouter = createRouter({
     const conversions = await getCurrencyConversions();
     return conversions[0] ?? { symbol: "USDTINR", conversion_price: 89.0 };
   }),
+
+  // ─── Fee breakeven map — min price move needed to cover entry+exit fees per symbol ───
+  feeBreakevenMap: authedQuery
+    .input(z.object({ takerFeeRate: z.number().min(0).max(0.01).default(0.0005) }))
+    .query(({ input }) => getFeeBreakevenMap(input.takerFeeRate)),
 
   // ─── Exit-signal stream (drives exit monitor) ───
   exitSignalStream: authedQuery.subscription(({ ctx }) => {
@@ -256,8 +292,12 @@ export const tradingRouter = createRouter({
         .limit(1);
       if (!creds || !creds[0]) return null;
       return await getCrossMarginDetails(decryptCreds(creds[0]));
-    } catch (err) {
-      console.warn("[trading-router] Failed to fetch cross margin details from CoinDCX:", err);
+    } catch (err: any) {
+      const msg = err?.message ?? String(err);
+      // Only log once-style: 404 is expected when cross-margin is unavailable
+      if (!msg.includes("404")) {
+        console.warn("[trading-router] Failed to fetch cross margin details:", msg);
+      }
       return null;
     }
   }),
