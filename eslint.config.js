@@ -31,4 +31,22 @@ export default defineConfig([
       'no-empty': ['error', { allowEmptyCatch: true }],
     },
   },
+  // shadcn/ui primitives are vendored and must not be modified (see CLAUDE.md).
+  // Their variant-export pattern inherently trips react-refresh; the experimental
+  // react-hooks RC rules also fire on these correct upstream patterns.
+  {
+    files: ['src/components/ui/**/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+      'react-hooks/purity': 'off',
+    },
+  },
+  // Provider files intentionally colocate a context hook with their provider
+  // component — a standard, accepted pattern that trips react-refresh.
+  {
+    files: ['src/providers/**/*.{ts,tsx}'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])
