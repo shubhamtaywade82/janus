@@ -194,16 +194,6 @@ export class PositionLifecycleManager {
       };
 
       managed.set(String(dbPos.id), mp);
-
-      // If we just discovered this position and it hasn't been alerted yet,
-      // mark it as alerted in the DB so restarts don't re-alert.
-      const justDiscovered = !existing;
-      if (justDiscovered && !mp.openedAlertSent) {
-        db.update(positions)
-          .set({ openedAlertSent: true })
-          .where(eq(positions.id, dbPos.id))
-          .catch(() => {});
-      }
     }
 
     // Second pass: overlay live WS data
@@ -231,9 +221,27 @@ export class PositionLifecycleManager {
       }
     }
 
+    // Track which positions are newly discovered before upserting
+    const newlyDiscoveredIds = new Set<number>();
+    for (const mp of managed.values()) {
+      if (!positionStore.get(mp.id)) {
+        newlyDiscoveredIds.add(mp.id);
+      }
+    }
+
     // Upsert into store
     for (const mp of managed.values()) {
       positionStore.upsert(mp);
+    }
+
+    // Mark newly discovered positions as alerted in DB so restarts don't re-alert
+    for (const mp of managed.values()) {
+      if (newlyDiscoveredIds.has(mp.id) && !mp.openedAlertSent) {
+        db.update(positions)
+          .set({ openedAlertSent: true })
+          .where(eq(positions.id, mp.id))
+          .catch(() => {});
+      }
     }
 
     // Remove positions that are no longer in DB as open
