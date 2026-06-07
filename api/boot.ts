@@ -208,6 +208,10 @@ alertEngine.start(5_000);
 import { startTelegramCommandBot } from "./services/telegram-bot";
 startTelegramCommandBot();
 
+// Start Position Manager → Telegram notifier (auto-alerts on open, close, partial exit, etc.)
+import { startPositionTelegramNotifier } from "./services/position-telegram-notifier";
+startPositionTelegramNotifier();
+
 // Start AI Brain scheduler (periodic strategy evolution). The Brain evaluates signals
 // inline inside the auto-executor (Signal → Governor → Brain → Executor).
 import { startBrainScheduler } from "./brain/brain-scheduler";
@@ -221,6 +225,7 @@ startLiquidationMonitor(10_000);
 // Called on SIGTERM, SIGINT, uncaughtException, and unhandledRejection.
 // Stops all background services before exit so PM2/Docker can restart cleanly.
 import { stopTelegramCommandBot } from "./services/telegram-bot";
+import { stopPositionTelegramNotifier } from "./services/position-telegram-notifier";
 // globalKillSwitch already imported above for DB state init
 
 let _shutdownInProgress = false;
@@ -238,6 +243,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
   alertEngine.stop();
   positionReconciler.stop();
   stopTelegramCommandBot();
+  stopPositionTelegramNotifier();
   stopLiquidationMonitor();
   positionLifecycleManager.stop?.();
 
