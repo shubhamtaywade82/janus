@@ -69,7 +69,7 @@ export async function executeAction(
             "position:action-executed",
             position.id,
             action,
-            "rejected",
+            "failed",
             `MOVE_TO_BREAKEVEN rejected: ${newSl.toFixed(4)} is worse than current ${position.stopLoss?.toFixed(4)}`
           );
           return { success: false, detail: `Breakeven rejected: would lower SL` };
@@ -121,7 +121,7 @@ export async function executeAction(
             "position:action-executed",
             position.id,
             action,
-            "rejected",
+            "failed",
             `TRAIL_SL rejected: ${newSl.toFixed(4)} is worse than current ${position.stopLoss?.toFixed(4)}`
           );
           return { success: false, detail: `Trail rejected: would reverse SL` };

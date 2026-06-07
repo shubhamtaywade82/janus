@@ -5,6 +5,7 @@ import type {
 } from "./types";
 import { PositionAction as PA } from "./types";
 import { positionStore } from "./position-store";
+import { isSlImprovement } from "./execution-manager";
 
 // ─── Policy Guard ────────────────────────────────────────────────────────────
 // Validates AI / code-based recommendations against hard risk rules.
@@ -78,11 +79,7 @@ export function policyGuard(
     const newSl = recommendation.newStopLoss;
     const currentSl = position.stopLoss;
     if (currentSl !== null) {
-      const isImprovement =
-        position.side === "LONG"
-          ? newSl > currentSl
-          : newSl < currentSl;
-      if (!isImprovement) {
+      if (!isSlImprovement(position.side, currentSl, newSl)) {
         return {
           approved: false,
           action: PA.KEEP_OPEN,
