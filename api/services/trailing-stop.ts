@@ -176,6 +176,10 @@ export function unregisterPosition(positionId: number) {
   trackedPositions.delete(positionId);
 }
 
+export function isPositionTracked(positionId: number): boolean {
+  return trackedPositions.has(positionId);
+}
+
 // Called by position manager when it moves a SL so the trailing engine
 // doesn't roll it back on the next 2s tick.
 export function syncTrailingStopLoss(positionId: number, newStopLoss: number): void {

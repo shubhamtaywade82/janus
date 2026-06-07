@@ -75,6 +75,7 @@ export interface ManagedPosition {
   breakevenApplied: boolean;
   extremePrice: number | null;
   openedAlertSent: boolean;
+  strategyType: string;
 }
 
 /** Aggregated market context for a symbol at assessment time */

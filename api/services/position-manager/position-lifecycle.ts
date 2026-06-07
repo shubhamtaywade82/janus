@@ -22,7 +22,7 @@ import { userPositionsCache, markPriceCache } from "../coindcx-ws";
 import { latestTickerCache } from "../streaming";
 import { env } from "../../lib/env";
 import { getPaperWallet } from "../paper-wallet";
-import { registerPositionForTrailing, syncTrailingStopLoss } from "../trailing-stop";
+import { registerPositionForTrailing, syncTrailingStopLoss, isPositionTracked, unregisterPosition } from "../trailing-stop";
 import type { StrategyType } from "../strategy-config";
 // ─── Position Lifecycle Manager ──────────────────────────────────────────────
 // Central orchestrator: syncs positions, runs assessment loops,
@@ -118,11 +118,9 @@ export class PositionLifecycleManager {
 
     // Build merged set keyed by exchangeOrderId / DB id
     const managed = new Map<string, ManagedPosition>();
-    const strategyTypes = new Map<number, string>();
 
     // First pass: DB positions as baseline
     for (const dbPos of dbPositions) {
-      strategyTypes.set(dbPos.id, dbPos.strategyType ?? "intraday");
       const binanceSym = dbPos.symbol.replace("B-", "").replace("_", "");
       let markPriceRaw = markPriceCache.get(dbPos.symbol) ?? 0;
       if (markPriceRaw <= 0) {
@@ -194,6 +192,7 @@ export class PositionLifecycleManager {
         breakevenApplied: dbPos.breakevenApplied ?? false,
         extremePrice: dbPos.extremePrice ? parseFloat(dbPos.extremePrice) : null,
         openedAlertSent: dbPos.openedAlertSent ?? false,
+        strategyType: dbPos.strategyType ?? "intraday",
       };
 
       managed.set(String(dbPos.id), mp);
@@ -241,17 +240,21 @@ export class PositionLifecycleManager {
     // (critical after restart when trackedPositions is empty)
     for (const mp of managed.values()) {
       if (mp.stopLoss) {
-        registerPositionForTrailing({
-          id: mp.id,
-          symbol: mp.binanceSymbol,
-          side: mp.side === "LONG" ? "long" : "short",
-          entryPrice: mp.entryPrice,
-          stopLoss: mp.stopLoss,
-          strategyType: (strategyTypes.get(mp.id) ?? "intraday") as StrategyType,
-          userId: mp.userId,
-          size: mp.quantity,
-        });
-        syncTrailingStopLoss(mp.id, mp.stopLoss);
+        if (!isPositionTracked(mp.id)) {
+          registerPositionForTrailing({
+            id: mp.id,
+            symbol: mp.binanceSymbol,
+            side: mp.side === "LONG" ? "long" : "short",
+            entryPrice: mp.entryPrice,
+            stopLoss: mp.stopLoss,
+            strategyType: mp.strategyType as StrategyType,
+            userId: mp.userId,
+            size: mp.quantity,
+          });
+        } else {
+          // Position already tracked — sync DB stop-loss if it has improved
+          syncTrailingStopLoss(mp.id, mp.stopLoss);
+        }
       }
     }
 
@@ -270,6 +273,7 @@ export class PositionLifecycleManager {
     for (const stored of positionStore.getAll()) {
       if (!dbIds.has(stored.id)) {
         positionStore.remove(stored.id);
+        unregisterPosition(stored.id);
       }
     }
   }
