@@ -187,13 +187,23 @@ export class PositionLifecycleManager {
         slDistancePct,
         liqDistancePct,
         holdingMinutes,
-        // NEW persisted state fields (will be hydrated from DB in Task 6)
-        breakevenApplied: false,
-        extremePrice: null,
-        openedAlertSent: false,
+        // Persisted state fields
+        breakevenApplied: dbPos.breakevenApplied ?? false,
+        extremePrice: dbPos.extremePrice ? parseFloat(dbPos.extremePrice) : null,
+        openedAlertSent: dbPos.openedAlertSent ?? false,
       };
 
       managed.set(String(dbPos.id), mp);
+
+      // If we just discovered this position and it hasn't been alerted yet,
+      // mark it as alerted in the DB so restarts don't re-alert.
+      const justDiscovered = !existing;
+      if (justDiscovered && !mp.openedAlertSent) {
+        db.update(positions)
+          .set({ openedAlertSent: true })
+          .where(eq(positions.id, dbPos.id))
+          .catch(() => {});
+      }
     }
 
     // Second pass: overlay live WS data
