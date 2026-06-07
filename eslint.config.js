@@ -58,4 +58,13 @@ export default defineConfig([
       'react-refresh/only-export-components': 'off',
     },
   },
+  // lightweight-charts plugin primitives use the documented `const self = this`
+  // pattern inside nested renderer object literals to bridge into the chart's
+  // render callbacks — `this` cannot be lexically preserved there.
+  {
+    files: ['src/lib/chart/primitives/**/*.{ts,tsx}'],
+    rules: {
+      '@typescript-eslint/no-this-alias': 'off',
+    },
+  },
 ])
