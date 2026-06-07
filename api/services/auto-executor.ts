@@ -110,21 +110,42 @@ async function placeEntryOrder(
   if (!orderId) return placed;
 
   const deadline = Date.now() + LIMIT_ENTRY_TIMEOUT_MS;
+  let lastStatus: any = null;
   while (Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, LIMIT_ENTRY_POLL_MS));
     const status = await getOrderStatus(creds, orderId).catch(() => null);
-    const remaining = parseFloat(status?.remaining_quantity ?? status?.total_quantity ?? "0");
-    if (status && remaining <= 0) {
+    if (!status) continue;
+    lastStatus = status;
+    const remaining = parseFloat(status.remaining_quantity ?? status.total_quantity ?? "0");
+    if (remaining <= 0) {
       console.log(`[auto-executor] Limit entry ${orderId} filled at ${limitPrice} (symbol=${symbol})`);
       return status;
     }
   }
 
-  console.warn(`[auto-executor] Limit entry ${orderId} not filled within ${LIMIT_ENTRY_TIMEOUT_MS}ms — cancelling and falling back to market (symbol=${symbol})`);
+  // Cancel the rest and top up with a market order sized to the unfilled remainder only —
+  // a partially-filled limit order followed by a full-size market order would overfill.
+  const remainingQty = parseFloat(lastStatus?.remaining_quantity ?? String(order.total_quantity));
   await cancelOrder(creds, orderId, order.market).catch((err) =>
     console.warn(`[auto-executor] Failed to cancel unfilled limit entry ${orderId}:`, err.message)
   );
-  return createFuturesOrder(creds, { ...order, order_type: "market" });
+
+  if (remainingQty <= 0) {
+    console.log(`[auto-executor] Limit entry ${orderId} fully filled by cancel-time (symbol=${symbol})`);
+    return lastStatus;
+  }
+
+  const filledQty = order.total_quantity - remainingQty;
+  console.warn(
+    `[auto-executor] Limit entry ${orderId} not filled within ${LIMIT_ENTRY_TIMEOUT_MS}ms ` +
+    `(filled=${filledQty}/${order.total_quantity}) — cancelling remainder and topping up with market order for ${remainingQty} (symbol=${symbol})`
+  );
+  const topUp = await createFuturesOrder(creds, { ...order, order_type: "market", total_quantity: remainingQty });
+  // Note: the position record below tracks `topUp.id` as exchangeOrderId — the partially-filled
+  // limit order (`orderId`) is logged above for traceability but not separately persisted.
+  // The position-reconciler corrects size against the exchange's actual aggregate fill regardless.
+  console.log(`[auto-executor] Top-up market order ${topUp?.id} filled remainder for entry ${orderId} (symbol=${symbol})`);
+  return topUp;
 }
 
 export class AutoExecutor {
