@@ -120,6 +120,13 @@
       "when": 1780821012121,
       "tag": "0016_gorgeous_jetstream",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1780824183864,
+      "tag": "0017_purple_gauntlet",
+      "breakpoints": true
     }
   ]
 }
