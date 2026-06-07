@@ -188,6 +188,11 @@ startMarketRegimeRecorder();
 import { startAutoAnalysis } from "./routers/signal-router";
 startAutoAnalysis("intraday", true); // true = regime auto-switch on
 
+// Start adaptive R-profile refresh — empirically derives realistic TP R-multiples
+// per symbol/horizon from each symbol's own historical price action (every 6h)
+import { startRProfileRefresh } from "./services/r-profile-engine";
+startRProfileRefresh();
+
 // Init LLM advisor (loads keys from DB + env-level Ollama config)
 import { globalLlmAdvisor } from "./services/llm-advisor";
 globalLlmAdvisor.init().catch((err) => {
