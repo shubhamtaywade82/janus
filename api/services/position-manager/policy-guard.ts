@@ -89,13 +89,20 @@ export function policyGuard(
     }
   }
 
-  // ── MOVE_TO_BREAKEVEN: only if profitable ────────────────────────────
+  // ── MOVE_TO_BREAKEVEN: only if profitable and not already applied ────
   if (action === PA.MOVE_TO_BREAKEVEN) {
     if (position.unrealizedPnl <= 0) {
       return {
         approved: false,
         action: PA.KEEP_OPEN,
         reason: "MOVE_TO_BREAKEVEN rejected: position not yet in profit",
+      };
+    }
+    if (position.breakevenApplied) {
+      return {
+        approved: false,
+        action: PA.KEEP_OPEN,
+        reason: "MOVE_TO_BREAKEVEN rejected: breakeven already applied to this position",
       };
     }
   }
