@@ -48,13 +48,18 @@ export interface DerivedAccountMetrics {
 export async function getOrCreateAccount(
   userId: number,
   mode: AccountMode,
-  initialBalance = 10_000
+  initialBalance = 10_000,
+  currency: "USDT" | "INR" = "USDT"
 ): Promise<TradingAccount> {
   const db = getDb();
   const existing = await db
     .select()
     .from(tradingAccounts)
-    .where(and(eq(tradingAccounts.userId, userId), eq(tradingAccounts.mode, mode)))
+    .where(and(
+      eq(tradingAccounts.userId, userId),
+      eq(tradingAccounts.mode, mode),
+      eq(tradingAccounts.currency, currency)
+    ))
     .limit(1);
 
   if (existing[0]) return existing[0];
@@ -65,6 +70,7 @@ export async function getOrCreateAccount(
     .values({
       userId,
       mode,
+      currency,
       initialBalance: bal,
       walletBalance: bal,
       availableBalance: bal,
@@ -81,7 +87,7 @@ export async function getOrCreateAccount(
     balanceBefore: 0,
     balanceAfter: initialBalance,
     referenceType: "manual",
-    metadata: { note: "initial_capital" },
+    metadata: { note: "initial_capital", currency },
   });
 
   return inserted[0];

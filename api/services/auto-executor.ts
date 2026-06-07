@@ -30,7 +30,7 @@ import { latestTickerCache } from "./streaming";
 import { marketStateManager } from "./market-state";
 import { markPriceCache, tradingEvents } from "./coindcx-ws";
 import { fetchKlines } from "./binance";
-import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo } from "./coindcx";
+import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo, getUsdtInrRate } from "./coindcx";
 import { registerPositionForTrailing, unregisterPosition } from "./trailing-stop";
 import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
@@ -200,7 +200,8 @@ export class AutoExecutor {
     llmConfidenceThreshold: 70,
     maxPositionsPerSymbol: 1,
     maxTotalPositions: 3,
-    paperStartingBalance: "10000",
+    paperStartingBalance: "1000000",
+    paperCurrency: "INR",
     brainDriverEnabled: false,
     brainGateEnabled: false,
     brainShadowMode: true,
@@ -284,6 +285,7 @@ export class AutoExecutor {
       capitalAllocationPct: AutoExecutor.DEFAULT_CONFIG.capitalAllocationPct,
       useStrategyLeverage: AutoExecutor.DEFAULT_CONFIG.useStrategyLeverage,
       paperStartingBalance: AutoExecutor.DEFAULT_CONFIG.paperStartingBalance,
+      paperCurrency: AutoExecutor.DEFAULT_CONFIG.paperCurrency,
       useLlmAdvisor: true,
       brainGateEnabled: true,
       brainDriverEnabled: true,
@@ -404,12 +406,17 @@ export class AutoExecutor {
     this.recentExecutions.set(dedupKey, Date.now());
     await this.saveDedupCache();
 
-    if (isPaperMode) await lockPaperMargin(1, sizing.notional / sizing.leverage);
+    const paperCurrency = (config.paperCurrency as "USDT" | "INR") ?? "INR";
+    if (isPaperMode) {
+      await lockPaperMargin(1, sizing.notional / sizing.leverage, undefined, paperCurrency);
+    }
 
     session.tradeCount++;
     await updateSession(session);
 
-    const equity = isPaperMode ? await getPaperEquity(1) : walletFree - sizing.notional / sizing.leverage;
+    const equity = isPaperMode
+      ? await getPaperEquity(1, paperCurrency)
+      : walletFree - sizing.notional / sizing.leverage;
     await snapshotEquity(1, equity, 0, session.realizedPnl);
 
     this.state.executionsToday++;
@@ -842,7 +849,9 @@ private async executePosition(params: {
       .where(eq(positions.id, payload.positionId));
 
     if (position.isPaper) {
-      await releasePaperMargin(position.userId, parseFloat(position.margin), realizedPnl, position.id);
+      const cfg = await this.getConfig();
+      const paperCurrency = (cfg.paperCurrency as "USDT" | "INR") ?? "INR";
+      await releasePaperMargin(position.userId, parseFloat(position.margin), realizedPnl, position.id, paperCurrency);
     } else {
       // Place exit order on live exchange (CoinDCX)
       const creds = await db

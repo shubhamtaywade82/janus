@@ -330,7 +330,8 @@ export const autoExecutorConfig = pgTable("auto_executor_config", {
   maxTotalPositions: integer("max_total_positions").default(3),
   capitalAllocationPct: decimal("capital_allocation_pct", { precision: 5, scale: 3 }).default("0.100"), // fraction of free balance per trade, e.g. 0.100 = 10%
   useStrategyLeverage: boolean("use_strategy_leverage").default(true).notNull(), // true = use STRATEGY_CONFIGS[strategy].maxLeverage, false = use defaultLeverage
-  paperStartingBalance: decimal("paper_starting_balance", { precision: 12, scale: 2 }).default("10000"),
+  paperStartingBalance: decimal("paper_starting_balance", { precision: 12, scale: 2 }).default("1000000"),
+  paperCurrency: marginCurrencyEnum("paper_currency").default("INR").notNull(),
   // AI Brain participation in the autonomous loop
   brainDriverEnabled: boolean("brain_driver_enabled").default(false).notNull(), // brain autonomously proposes/opens trades
   brainGateEnabled: boolean("brain_gate_enabled").default(false).notNull(),     // brain acts as an extra confirmation gate on confluence signals

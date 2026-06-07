@@ -60,12 +60,13 @@ function buildOpenMessage(p: ManagedPosition, isPaper: boolean): string {
   const mode = isPaper ? "🧪 PAPER" : "💰 LIVE";
   const sideEmoji = p.side === "LONG" ? "🟢" : "🔴";
   const pnlEmoji = p.unrealizedPnl >= 0 ? "📈" : "📉";
+  const currency = isPaper ? "₹" : "USDT";
   return (
     `${sideEmoji} <b>Position Opened</b> ${mode}\n\n` +
     `<b>${escapeHtml(p.symbol)}</b> ${p.side} ×${p.leverage}\n` +
     `Entry: <code>${p.entryPrice.toFixed(4)}</code>\n` +
-    `Size: <code>${p.quantity.toFixed(4)}</code> | Margin: <code>${p.margin.toFixed(2)} USDT</code>\n` +
-    `${pnlEmoji} uPnL: <code>${p.unrealizedPnl.toFixed(2)} USDT</code> | ROE: <code>${p.roe.toFixed(2)}%</code>\n` +
+    `Size: <code>${p.quantity.toFixed(4)}</code> | Margin: <code>${p.margin.toFixed(2)} ${currency}</code>\n` +
+    `${pnlEmoji} uPnL: <code>${p.unrealizedPnl.toFixed(2)} ${currency}</code> | ROE: <code>${p.roe.toFixed(2)}%</code>\n` +
     (p.stopLoss ? `SL: <code>${p.stopLoss.toFixed(4)}</code>  ` : "") +
     (p.takeProfit ? `TP: <code>${p.takeProfit.toFixed(4)}</code>` : "")
   );
@@ -73,6 +74,7 @@ function buildOpenMessage(p: ManagedPosition, isPaper: boolean): string {
 
 async function buildCloseMessage(positionId: number, reason: string, isPaper: boolean): Promise<string> {
   const mode = isPaper ? "🧪 PAPER" : "💰 LIVE";
+  const currency = isPaper ? "₹" : "USDT";
   try {
     const db = getDb();
     const [row] = await db
@@ -106,7 +108,7 @@ async function buildCloseMessage(positionId: number, reason: string, isPaper: bo
       `<b>${escapeHtml(row.symbol)}</b> ${side} ×${row.leverage}\n` +
       `Entry: <code>${entry.toFixed(4)}</code> → Exit: <code>${exit.toFixed(4)}</code>\n` +
       `Size: <code>${row.size}</code>\n` +
-      `PnL: <b>${isProfit ? "+" : ""}${pnl.toFixed(2)} USDT</b>\n` +
+      `PnL: <b>${isProfit ? "+" : ""}${pnl.toFixed(2)} ${currency}</b>\n` +
       `Reason: <i>${escapeHtml(reason)}</i>`
     );
   } catch {
