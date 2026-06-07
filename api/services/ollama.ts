@@ -107,6 +107,7 @@ export async function callLLM(prompt: string): Promise<string> {
         model: MODEL,
         prompt,
         stream: false,
+        think: false,   // reasoning models (qwen3.x) else return empty `response`
         keep_alive: KEEP_ALIVE,
         options: { num_predict: NUM_PREDICT },
       })
