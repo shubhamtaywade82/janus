@@ -124,8 +124,10 @@ async function handleStatus(chatId: string, creds: BotCredentials): Promise<void
         ? "  (none)"
         : openPositions
             .map(
-              (p) =>
-                `  • <b>${p.symbol}</b> ${p.side.toUpperCase()} ×${p.leverage} @ ${p.entryPrice} | uPnL: ${parseFloat(p.unrealizedPnl ?? "0").toFixed(2)} USDT`
+              (p) => {
+                const curr = p.isPaper ? "₹" : "USDT";
+                return `  • <b>${p.symbol}</b> ${p.side.toUpperCase()} ×${p.leverage} @ ${p.entryPrice} | uPnL: ${parseFloat(p.unrealizedPnl ?? "0").toFixed(2)} ${curr}`;
+              }
             )
             .join("\n");
 
@@ -193,6 +195,7 @@ async function handlePos(symbol: string, chatId: string, creds: BotCredentials):
     const upnl = parseFloat(p.unrealizedPnl ?? "0");
     const margin = parseFloat(p.margin ?? "0");
     const roe = margin > 0 ? ((upnl / margin) * 100).toFixed(2) : "n/a";
+    const curr = p.isPaper ? "₹" : "USDT";
 
     const text =
       `<b>${p.symbol} ${p.side.toUpperCase()}</b>\n\n` +
@@ -200,10 +203,10 @@ async function handlePos(symbol: string, chatId: string, creds: BotCredentials):
       `Current: <code>${p.currentPrice ?? "–"}</code>\n` +
       `Size: <code>${p.size}</code>\n` +
       `Leverage: <code>×${p.leverage}</code>\n` +
-      `Margin: <code>${margin.toFixed(2)} USDT</code>\n` +
+      `Margin: <code>${margin.toFixed(2)} ${curr}</code>\n` +
       `Stop Loss: <code>${p.stopLoss ?? "–"}</code>\n` +
       `Take Profit: <code>${p.takeProfit ?? "–"}</code>\n` +
-      `Unrealized PnL: <code>${upnl.toFixed(2)} USDT (${roe}% ROE)</code>\n` +
+      `Unrealized PnL: <code>${upnl.toFixed(2)} ${curr} (${roe}% ROE)</code>\n` +
       `Strategy: <code>${p.strategyType ?? "–"}</code>\n` +
       `Opened: <code>${p.createdAt.toISOString()}</code>`;
 
@@ -405,13 +408,14 @@ async function sendHeartbeat(): Promise<void> {
     const killStr = globalKillSwitch.isActive ? "🔴 KILL SWITCH ACTIVE" : "🟢 trading enabled";
     const modeStr = env.paperTrading ? "🧪 PAPER MODE" : env.placeOrders ? "💰 LIVE" : "📋 Dry-run";
 
+    const curr = env.paperTrading ? "₹" : "USDT";
     const text =
       `💓 <b>Heartbeat</b>\n\n` +
       `Uptime: ${hours}h ${mins}m\n` +
       `Mode: ${modeStr}\n` +
       `Open positions: ${openPositions.length}\n` +
-      `Unrealized PnL: ${unrealized >= 0 ? "+" : ""}${unrealized.toFixed(2)} USDT\n` +
-      `Today realized: ${todayPnl >= 0 ? "+" : ""}${todayPnl.toFixed(2)} USDT\n` +
+      `Unrealized PnL: ${unrealized >= 0 ? "+" : ""}${unrealized.toFixed(2)} ${curr}\n` +
+      `Today realized: ${todayPnl >= 0 ? "+" : ""}${todayPnl.toFixed(2)} ${curr}\n` +
       `Status: ${killStr}`;
 
     await sendTelegramMessage({ botToken: creds.botToken, chatId: creds.chatId, text, parseMode: "HTML" });

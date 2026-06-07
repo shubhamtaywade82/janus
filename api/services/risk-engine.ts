@@ -141,88 +141,89 @@ export const DEFAULT_RISK_CONFIG: RiskConfig = {
   marginHealthHaltPct: 0.85,
 };
 
-// In-memory session store — L1 cache keyed by userId, persisted to DB as L2
-export const sessions = new Map<number, RiskSession>();
+// ─── PostgreSQL-backed Risk Session Store ───
+// Replaces the in-memory Map so restarts don't wipe state.
 
-export function getOrCreateSession(userId: number, walletBalance: number): RiskSession {
-  const today = new Date().toISOString().slice(0, 10);
-  const existing = sessions.get(userId);
-  if (existing && existing.date === today) return existing;
+export const riskSessionStore = {
+  async getOrCreate(userId: number, walletBalance: number): Promise<RiskSession> {
+    const db = getDb();
+    const today = new Date().toISOString().slice(0, 10);
 
-  const fresh: RiskSession = {
-    userId,
-    date: today,
-    startingBalance: walletBalance,
-    realizedPnl: 0,
-    tradeCount: 0,
-    consecutiveLosses: 0,
-    inCooldown: false,
-    cooldownUntil: null,
-  };
-  sessions.set(userId, fresh);
-  return fresh;
-}
+    const rows = await db
+      .select()
+      .from(riskSessions)
+      .where(and(eq(riskSessions.userId, userId), eq(riskSessions.tradingDay, today)))
+      .limit(1);
 
-export function updateSession(session: RiskSession) {
-  sessions.set(session.userId, session);
-  _persistSessionToDb(session).catch((err) =>
-    console.error("[risk-engine] Failed to persist session to DB:", err)
-  );
-}
+    if (rows.length > 0) {
+      const row = rows[0];
+      return {
+        userId: row.userId,
+        date: row.tradingDay,
+        startingBalance: parseFloat(row.startingEquity),
+        realizedPnl: parseFloat(row.realizedPnl),
+        tradeCount: row.tradeCount,
+        consecutiveLosses: row.consecutiveLosses,
+        inCooldown: row.cooldownUntil ? Date.now() < new Date(row.cooldownUntil).getTime() : false,
+        cooldownUntil: row.cooldownUntil ? new Date(row.cooldownUntil).getTime() : null,
+      };
+    }
 
-async function _persistSessionToDb(session: RiskSession): Promise<void> {
-  const db = getDb();
-  await db
-    .insert(riskSessions)
-    .values({
-      userId: session.userId,
-      date: session.date,
-      startingBalance: String(session.startingBalance),
-      realizedPnl: String(session.realizedPnl),
-      tradeCount: session.tradeCount,
-      consecutiveLosses: session.consecutiveLosses,
-      inCooldown: session.inCooldown,
-      cooldownUntil: session.cooldownUntil ? new Date(session.cooldownUntil) : null,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: [riskSessions.userId, riskSessions.date],
-      set: {
-        startingBalance: String(session.startingBalance),
-        realizedPnl: String(session.realizedPnl),
+    // Create fresh session
+    const fresh: RiskSession = {
+      userId,
+      date: today,
+      startingBalance: walletBalance,
+      realizedPnl: 0,
+      tradeCount: 0,
+      consecutiveLosses: 0,
+      inCooldown: false,
+      cooldownUntil: null,
+    };
+
+    await db.insert(riskSessions).values({
+      userId,
+      tradingDay: today,
+      startingEquity: walletBalance.toFixed(4),
+      currentEquity: walletBalance.toFixed(4),
+      realizedPnl: "0",
+      unrealizedPnl: "0",
+      tradeCount: 0,
+      consecutiveLosses: 0,
+      cooldownUntil: null,
+      maxDrawdownHit: false,
+    });
+
+    return fresh;
+  },
+
+  async save(session: RiskSession): Promise<void> {
+    const db = getDb();
+    await db
+      .update(riskSessions)
+      .set({
+        currentEquity: session.startingBalance.toFixed(4),
+        realizedPnl: session.realizedPnl.toFixed(8),
         tradeCount: session.tradeCount,
         consecutiveLosses: session.consecutiveLosses,
-        inCooldown: session.inCooldown,
         cooldownUntil: session.cooldownUntil ? new Date(session.cooldownUntil) : null,
+        maxDrawdownHit:
+          session.startingBalance > 0 &&
+          Math.abs(Math.min(0, session.realizedPnl)) / session.startingBalance >= DEFAULT_RISK_CONFIG.dailyDrawdownPct,
         updatedAt: new Date(),
-      },
-    });
+      })
+      .where(and(eq(riskSessions.userId, session.userId), eq(riskSessions.tradingDay, session.date)));
+  },
+};
+
+// ─── Compatibility wrappers (keeps existing call sites working) ───
+
+export async function getOrCreateSession(userId: number, walletBalance: number): Promise<RiskSession> {
+  return riskSessionStore.getOrCreate(userId, walletBalance);
 }
 
-// Called once at startup to reload today's sessions from DB into memory cache.
-export async function loadRiskSessionsFromDb(): Promise<void> {
-  const db = getDb();
-  const today = new Date().toISOString().slice(0, 10);
-  const rows = await db
-    .select()
-    .from(riskSessions)
-    .where(eq(riskSessions.date, today));
-
-  for (const row of rows) {
-    sessions.set(row.userId, {
-      userId: row.userId,
-      date: row.date,
-      startingBalance: parseFloat(row.startingBalance),
-      realizedPnl: parseFloat(row.realizedPnl),
-      tradeCount: row.tradeCount,
-      consecutiveLosses: row.consecutiveLosses,
-      inCooldown: row.inCooldown,
-      cooldownUntil: row.cooldownUntil ? row.cooldownUntil.getTime() : null,
-    });
-  }
-  if (rows.length > 0) {
-    console.log(`[risk-engine] Restored ${rows.length} session(s) from DB for ${today}`);
-  }
+export async function updateSession(session: RiskSession): Promise<void> {
+  return riskSessionStore.save(session);
 }
 
 export const globalRiskEngine = new RiskEngine(DEFAULT_RISK_CONFIG);

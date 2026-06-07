@@ -18,7 +18,7 @@ import {
   type BinanceKline,
 } from "../services/binance";
 import { getDb } from "../queries/connection";
-import { marketData, orderBookSnapshots, recentTicks } from "@db/schema";
+import { marketData, orderBookSnapshots, recentTicks, marketRegimes } from "@db/schema";
 import { desc, eq, and } from "drizzle-orm";
 
 // ─── Interval → milliseconds ───
@@ -470,5 +470,32 @@ export const marketRouter = createRouter({
         }
       }
       return results;
+    }),
+
+  // ─── Get latest market regime for a symbol ───
+  regime: authedQuery
+    .input(z.object({ symbol: z.string().default("BTCUSDT") }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      const rows = await db
+        .select()
+        .from(marketRegimes)
+        .where(eq(marketRegimes.symbol, input.symbol))
+        .orderBy(desc(marketRegimes.timestamp))
+        .limit(1);
+      return rows[0] || null;
+    }),
+
+  // ─── Get regime history for a symbol ───
+  regimeHistory: authedQuery
+    .input(z.object({ symbol: z.string().default("BTCUSDT"), limit: z.number().default(50) }))
+    .query(async ({ input }) => {
+      const db = getDb();
+      return db
+        .select()
+        .from(marketRegimes)
+        .where(eq(marketRegimes.symbol, input.symbol))
+        .orderBy(desc(marketRegimes.timestamp))
+        .limit(input.limit);
     }),
 });

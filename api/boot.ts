@@ -160,10 +160,9 @@ if (env.isProduction) {
   console.log(`[ws] Production WebSocket Server attached to HTTP port ${port}`);
 }
 
-// Restore persisted state from DB before starting any trading services
-import { loadRiskSessionsFromDb } from "./services/risk-engine";
+// Restore persisted state from DB before starting any trading services.
+// (Risk sessions are read on-demand from DB by riskSessionStore — no preload needed.)
 import { globalKillSwitch } from "./services/kill-switch";
-loadRiskSessionsFromDb().catch((err) => console.error("[risk-engine] Failed to restore sessions from DB:", err));
 globalKillSwitch.initFromDb().catch((err) => console.error("[kill-switch] Failed to restore state from DB:", err));
 
 // Start CoinDCX Private WebSocket client
@@ -180,6 +179,10 @@ positionReconciler.start();
 // Start position exit manager background daemon (SL/TP monitoring)
 import { startDaemon as startExitDaemon } from "./services/exit-manager";
 startExitDaemon();
+
+// Start market regime recorder (persists regime snapshots every 5 min)
+import { startMarketRegimeRecorder } from "./services/market-regime-recorder";
+startMarketRegimeRecorder();
 
 // Start auto signal analysis loop with regime detection enabled
 import { startAutoAnalysis } from "./routers/signal-router";
@@ -205,26 +208,28 @@ alertEngine.start(5_000);
 import { startTelegramCommandBot } from "./services/telegram-bot";
 startTelegramCommandBot();
 
-// Start AI Brain (Vector Store + Scheduler)
-import { initVectorStore } from "./brain/brain-memory";
-import { startBrainScheduler, startBrainDriver, stopBrainDriver } from "./brain/brain-scheduler";
-initVectorStore().catch((err) => console.error("[Brain] Vector store initialization failed:", err));
+// Start Position Manager → Telegram notifier (auto-alerts on open, close, partial exit, etc.)
+import { startPositionTelegramNotifier } from "./services/position-telegram-notifier";
+startPositionTelegramNotifier();
+
+// Start AI Brain scheduler (periodic strategy evolution). The Brain evaluates signals
+// inline inside the auto-executor (Signal → Governor → Brain → Executor).
+import { startBrainScheduler } from "./brain/brain-scheduler";
 startBrainScheduler();
-// Autonomous brain driver (paper-only). Only auto-starts when BOT_AUTO_START=true.
-if (env.botAutoStart) {
-  const paper = !env.placeOrders || env.paperTrading;
-  console.log(`[boot] Brain driver auto-start — PAPER mode=${paper} (PLACE_ORDERS=${env.placeOrders})`);
-  startBrainDriver();
-}
 
 // Start liquidation proximity monitor (alerts + auto-reduce when within 5%/2% of liq price)
 import { startLiquidationMonitor, stopLiquidationMonitor } from "./services/liquidation-monitor";
 startLiquidationMonitor(10_000);
 
+// Start key rotation monitor (daily Telegram reminder when exchange API credentials are stale)
+import { keyRotationMonitor } from "./services/key-rotation-monitor";
+keyRotationMonitor.start();
+
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 // Called on SIGTERM, SIGINT, uncaughtException, and unhandledRejection.
 // Stops all background services before exit so PM2/Docker can restart cleanly.
 import { stopTelegramCommandBot } from "./services/telegram-bot";
+import { stopPositionTelegramNotifier } from "./services/position-telegram-notifier";
 // globalKillSwitch already imported above for DB state init
 
 let _shutdownInProgress = false;
@@ -242,8 +247,9 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
   alertEngine.stop();
   positionReconciler.stop();
   stopTelegramCommandBot();
+  stopPositionTelegramNotifier();
   stopLiquidationMonitor();
-  stopBrainDriver();
+  keyRotationMonitor.stop();
   positionLifecycleManager.stop?.();
 
   // 3. Brief pause for in-flight DB writes to complete

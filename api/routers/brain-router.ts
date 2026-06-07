@@ -4,23 +4,41 @@ import * as fs from "fs";
 import * as path from "path";
 import { BrainOrchestrator } from "../brain/brain-orchestrator";
 import { getDb } from "../queries/connection";
-import { brainEpisodes, brainStrategies, brainReflections, signals } from "@db/schema";
+import { brainEpisodes, brainStrategies, brainReflections } from "@db/schema";
 import { desc } from "drizzle-orm";
 import { globalKillSwitch } from "../services/kill-switch";
 import { proposeTradeAsSignal } from "../brain/signal-bridge";
 import { env } from "../lib/env";
+import { SUPPORTED_SYMBOLS } from "../../contracts/constants";
+
+const VALID_SYMBOLS = new Set<string>(SUPPORTED_SYMBOLS);
+
+function validateSymbol(input: string): string | null {
+  const normalized = input.replace("B-", "").replace("_", "");
+  if (VALID_SYMBOLS.has(normalized)) return normalized;
+  return null;
+}
 
 export const brainRouter = new Hono();
-const orchestrator = new BrainOrchestrator(true); // Shadow Mode active
+const orchestrator = new BrainOrchestrator(); // mode read per-call from config
 
 // POST /api/brain/decide?symbol=BTCUSDT
 brainRouter.post("/decide", async (c) => {
-  const symbol = c.req.query("symbol") || "BTCUSDT";
+  const rawSymbol = c.req.query("symbol") || "BTCUSDT";
+  const symbol = validateSymbol(rawSymbol);
+  if (!symbol) {
+    return c.json({ error: `Unsupported symbol: ${rawSymbol}. Supported: ${SUPPORTED_SYMBOLS.join(", ")}` }, 400);
+  }
   // Default to User ID 1 for single-user system context
   const userId = 1;
   
   try {
-    const result = await orchestrator.decide(symbol, userId);
+    // Manual probe — evaluate a synthetic signal for the symbol.
+    const direction = (c.req.query("direction") as "long" | "short") || "long";
+    const result = await orchestrator.evaluate(
+      { symbol, direction, compositeScore: "80", metadata: { source: "manual-decide" } },
+      userId
+    );
     return c.json(result);
   } catch (err: any) {
     console.error("[Brain Router] Decide failed:", err);
@@ -86,7 +104,11 @@ brainRouter.post("/evolution/run", async (c) => {
 brainRouter.post("/trigger-signal", async (c) => {
   try {
     const body = await c.req.json();
-    const symbol = body.symbol || "B-BTC_USDT";
+    const rawSymbol = body.symbol || "B-BTC_USDT";
+    const symbol = validateSymbol(rawSymbol);
+    if (!symbol) {
+      return c.json({ error: `Unsupported symbol: ${rawSymbol}. Supported: ${SUPPORTED_SYMBOLS.join(", ")}` }, 400);
+    }
     const direction = body.direction || "long";
     const compositeScore = String(body.compositeScore ?? 85);
     const threshold = String(body.threshold ?? 75);

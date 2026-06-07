@@ -18,6 +18,12 @@ export function AutoTraderPanel(_props: { userId?: number }) {
     refetchInterval: 5_000,
   });
 
+  const { data: conversion } = trpc.trading.currencyConversion.useQuery(
+    undefined,
+    { staleTime: 5 * 60 * 1000 }
+  );
+  const usdtInrRate = conversion?.conversion_price ?? 89.0;
+
   const { data: paperWallet, refetch: refetchPaperWallet } = trpc.autoExecutor.paperWallet.useQuery(
     undefined,
     { refetchInterval: 10_000, enabled: status?.isPaperMode ?? true }
@@ -27,6 +33,27 @@ export function AutoTraderPanel(_props: { userId?: number }) {
     onSuccess: () => { toast.success("Paper wallet reset"); refetchPaperWallet(); },
     onError: (err) => toast.error("Reset failed", { description: err.message }),
   });
+
+  const [depositOpen, setDepositOpen] = useState(false);
+  const [depositAmount, setDepositAmount] = useState("");
+  const depositPaper = trpc.autoExecutor.depositPaperFunds.useMutation({
+    onSuccess: () => {
+      toast.success("Deposit successful");
+      refetchPaperWallet();
+      setDepositOpen(false);
+      setDepositAmount("");
+    },
+    onError: (err) => toast.error("Deposit failed", { description: err.message }),
+  });
+
+  const handleDeposit = () => {
+    const amount = parseFloat(depositAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    depositPaper.mutate({ amount });
+  };
 
   const saveConfig = trpc.autoExecutor.saveConfig.useMutation({
     onSuccess: () => { toast.success("AutoTrader config saved"); refetch(); },
@@ -45,7 +72,8 @@ export function AutoTraderPanel(_props: { userId?: number }) {
     useLlmAdvisor: true,
     llmConfidenceThreshold: 70,
     maxTotalPositions: 3,
-    paperStartingBalance: "10000",
+    paperStartingBalance: "100000",
+    paperCurrency: "INR" as "USDT" | "INR",
   });
 
   // Sync form from DB config
@@ -63,7 +91,8 @@ export function AutoTraderPanel(_props: { userId?: number }) {
         useLlmAdvisor: config.useLlmAdvisor ?? true,
         llmConfidenceThreshold: config.llmConfidenceThreshold ?? 70,
         maxTotalPositions: config.maxTotalPositions ?? 3,
-        paperStartingBalance: config.paperStartingBalance ?? "10000",
+        paperStartingBalance: config.paperStartingBalance ?? "100000",
+        paperCurrency: (config.paperCurrency as "USDT" | "INR") ?? "INR",
       });
       setSynced(true);
     }
@@ -153,35 +182,96 @@ export function AutoTraderPanel(_props: { userId?: number }) {
       )}
 
       {/* Paper wallet stats */}
-      {status?.isPaperMode && paperWallet && (
-        <div className="px-3 py-2 border-t border-[#27272a] bg-[#0a0a0a]">
-          <div className="flex items-center justify-between text-[9px] mb-1">
-            <span className="text-[#52525b]">Paper Balance</span>
-            <button
-              onClick={() => resetPaper.mutate({ newBalance: parseFloat(config?.paperStartingBalance ?? "10000") })}
-              className="text-[#52525b] hover:text-[#f4f4f5] underline"
-            >
-              Reset
-            </button>
-          </div>
-          <div className="grid grid-cols-3 gap-2 text-[9px]">
-            <div>
-              <div className="text-[#52525b]">Free</div>
-              <div className="text-[#f4f4f5] tabular-nums font-medium">${Number(paperWallet.balance).toFixed(2)}</div>
+      {status?.isPaperMode && paperWallet && (() => {
+        const isPaperCcyInr = paperWallet.currency === "INR";
+        const balanceVal = Number(paperWallet.balance);
+        const lockedVal = Number(paperWallet.lockedMargin);
+        const realizedVal = Number(paperWallet.realizedPnl);
+
+        const balanceInr = isPaperCcyInr ? balanceVal : balanceVal * usdtInrRate;
+        const balanceUsdt = isPaperCcyInr ? balanceVal / usdtInrRate : balanceVal;
+
+        const lockedInr = isPaperCcyInr ? lockedVal : lockedVal * usdtInrRate;
+        const lockedUsdt = isPaperCcyInr ? lockedVal / usdtInrRate : lockedVal;
+
+        const realizedInr = isPaperCcyInr ? realizedVal : realizedVal * usdtInrRate;
+        const realizedUsdt = isPaperCcyInr ? realizedVal / usdtInrRate : realizedVal;
+
+        return (
+          <div className="px-3 py-2 border-t border-[#27272a] bg-[#0a0a0a]">
+            <div className="flex items-center justify-between text-[9px] mb-1">
+              <span className="text-[#52525b]">Paper Balance</span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setDepositOpen((v) => !v)}
+                  className="text-[#52525b] hover:text-[#f4f4f5] underline text-[8px]"
+                >
+                  + Deposit
+                </button>
+                <button
+                  onClick={() => resetPaper.mutate({ newBalance: parseFloat(config?.paperStartingBalance ?? "100000") })}
+                  className="text-[#52525b] hover:text-[#f4f4f5] underline text-[8px]"
+                >
+                  Reset
+                </button>
+              </div>
             </div>
-            <div>
-              <div className="text-[#52525b]">Locked</div>
-              <div className="text-[#f59e0b] tabular-nums">${Number(paperWallet.lockedMargin).toFixed(2)}</div>
-            </div>
-            <div>
-              <div className="text-[#52525b]">PnL</div>
-              <div className={Number(paperWallet.realizedPnl) >= 0 ? "text-j-up tabular-nums" : "text-j-down tabular-nums"}>
-                {Number(paperWallet.realizedPnl) >= 0 ? "+" : ""}{Number(paperWallet.realizedPnl).toFixed(2)}
+            {depositOpen && (
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="Amount in ₹"
+                  value={depositAmount}
+                  onChange={(e) => setDepositAmount(e.target.value)}
+                  className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-1.5 py-0.5 text-[8px] text-[#f4f4f5] outline-none focus:border-[#52525b]"
+                />
+                <button
+                  onClick={handleDeposit}
+                  disabled={depositPaper.isPending}
+                  className="px-1.5 py-0.5 rounded text-[8px] border border-[#27272a] text-[#f4f4f5] hover:bg-[#18181b] disabled:opacity-50"
+                >
+                  Add
+                </button>
+              </div>
+            )}
+            <div className="grid grid-cols-3 gap-2 text-[8px] leading-tight">
+              <div>
+                <div className="text-[#52525b]">Free</div>
+                <div className="text-[#f4f4f5] tabular-nums font-semibold" title={`${balanceUsdt.toFixed(2)} USDT`}>
+                  ₹{balanceInr.toFixed(2)}
+                </div>
+                <div className="text-[#52525b]/70 tabular-nums">
+                  {balanceUsdt.toFixed(2)} USDT
+                </div>
+                {paperWallet.totalDeposited != null && (
+                  <div className="text-[#52525b]/70 tabular-nums mt-0.5">
+                    Deposited: ₹{Number(paperWallet.totalDeposited).toFixed(2)}
+                  </div>
+                )}
+              </div>
+              <div>
+                <div className="text-[#52525b]">Locked</div>
+                <div className="text-[#f59e0b] tabular-nums font-semibold" title={`${lockedUsdt.toFixed(2)} USDT`}>
+                  ₹{lockedInr.toFixed(2)}
+                </div>
+                <div className="text-[#52525b]/70 tabular-nums">
+                  {lockedUsdt.toFixed(2)} USDT
+                </div>
+              </div>
+              <div>
+                <div className="text-[#52525b]">PnL</div>
+                <div className={cn("tabular-nums font-semibold", realizedUsdt >= 0 ? "text-j-up" : "text-j-down")} title={`${realizedUsdt.toFixed(2)} USDT`}>
+                  {realizedInr >= 0 ? "+" : ""}₹{realizedInr.toFixed(2)}
+                </div>
+                <div className={cn("tabular-nums opacity-75", realizedUsdt >= 0 ? "text-j-up" : "text-j-down")}>
+                  {realizedUsdt >= 0 ? "+" : ""}{realizedUsdt.toFixed(2)} USDT
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* Settings panel */}
       {expanded && (
@@ -368,9 +458,31 @@ export function AutoTraderPanel(_props: { userId?: number }) {
             ))}
           </div>
 
+          {/* Paper Wallet Currency */}
+          <div>
+            <div className="text-[9px] text-[#71717a] mb-1.5">Paper Wallet Currency</div>
+            <div className="flex gap-2">
+              {["USDT", "INR"].map((ccy) => (
+                <button
+                  key={ccy}
+                  type="button"
+                  onClick={() => setForm((f) => ({ ...f, paperCurrency: ccy as "USDT" | "INR" }))}
+                  className={cn(
+                    "flex-1 py-1 rounded text-[9px] border transition-colors",
+                    form.paperCurrency === ccy
+                      ? "bg-[#f59e0b]/10 text-[#f59e0b] border-[#f59e0b]/30"
+                      : "bg-[#18181b] text-[#52525b] border-[#27272a] hover:text-[#f4f4f5]"
+                  )}
+                >
+                  {ccy}
+                </button>
+              ))}
+            </div>
+          </div>
+
           {/* Paper starting balance */}
           <div>
-            <div className="text-[9px] text-[#71717a] mb-1">Paper Starting Balance (USDT)</div>
+            <div className="text-[9px] text-[#71717a] mb-1">Paper Starting Balance</div>
             <input
               type="number"
               value={form.paperStartingBalance}

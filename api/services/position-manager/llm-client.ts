@@ -155,8 +155,12 @@ async function callOllama(key: LlmKey, prompt: string): Promise<string> {
       model: key.model,
       prompt,
       stream: false,
+      think: false,                      // qwen3.x are reasoning models — without this the
+                                          // output lands in `thinking` and `response` is empty
+      keep_alive: "30m",
+      options: { num_predict: 512 },
     }),
-    signal: AbortSignal.timeout(25_000),
+    signal: AbortSignal.timeout(30_000),
   });
 
   if (!res.ok) {

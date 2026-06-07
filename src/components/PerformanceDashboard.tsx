@@ -3,6 +3,7 @@ import { cn } from "@/lib/utils";
 import { createChart, ColorType, LineSeries, AreaSeries } from "lightweight-charts";
 import { useEffect, useRef } from "react";
 import { TrendingUp, TrendingDown, Target, Zap } from "lucide-react";
+import { SystemReportPanel } from "./SystemReportPanel";
 
 interface EquityPoint {
   snapshotAt: string | Date;
@@ -193,6 +194,12 @@ export function PerformanceDashboard({ isFullPage = false }: { userId?: number; 
     { refetchInterval: 30_000 }
   );
 
+  const { data: conversion } = trpc.trading.currencyConversion.useQuery(
+    undefined,
+    { staleTime: 5 * 60 * 1000 }
+  );
+  const rate = conversion?.conversion_price ?? 89.0;
+
   if (!metrics) return null;
 
   const winPct = metrics.totalTrades > 0
@@ -232,15 +239,15 @@ export function PerformanceDashboard({ isFullPage = false }: { userId?: number; 
           />
           <StatCardLarge
             label="Avg Win"
-            value={`$${metrics.avgWin.toFixed(2)}`}
-            sub={`Max $${metrics.largestWin.toFixed(2)}`}
+            value={`₹${(metrics.avgWin * rate).toFixed(2)}`}
+            sub={`Max ₹${(metrics.largestWin * rate).toFixed(2)} (${metrics.avgWin.toFixed(2)} / ${metrics.largestWin.toFixed(2)} USDT)`}
             icon={<Zap size={18} />}
             color="green"
           />
           <StatCardLarge
             label="Streak"
             value={streakLabel}
-            sub={`Avg loss $${metrics.avgLoss.toFixed(2)}`}
+            sub={`Avg loss ₹${(metrics.avgLoss * rate).toFixed(2)} (${metrics.avgLoss.toFixed(2)} USDT)`}
             icon={<TrendingDown size={18} />}
             color={metrics.currentStreak >= 0 ? "green" : "red"}
           />
@@ -300,7 +307,10 @@ export function PerformanceDashboard({ isFullPage = false }: { userId?: number; 
                           <span className="text-j-down">{data.losses}</span>
                         </td>
                         <td className={cn("px-3 py-2 tabular-nums font-semibold", data.pnl >= 0 ? "text-j-up" : "text-j-down")}>
-                          {data.pnl >= 0 ? "+" : ""}{data.pnl.toFixed(2)}
+                          <div className="flex flex-col">
+                            <span>{data.pnl >= 0 ? "+" : ""}₹{(data.pnl * rate).toFixed(2)}</span>
+                            <span className="text-[10px] text-[#71717a] font-normal">{data.pnl >= 0 ? "+" : ""}{data.pnl.toFixed(2)} USDT</span>
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -315,6 +325,9 @@ export function PerformanceDashboard({ isFullPage = false }: { userId?: number; 
             </div>
           </div>
         </div>
+
+        {/* Full system performance report (attribution by subsystem) */}
+        <SystemReportPanel />
       </div>
     );
   }
@@ -339,10 +352,10 @@ export function PerformanceDashboard({ isFullPage = false }: { userId?: number; 
         <StatCard label="Profit Factor" value={pfDisplay}
           sub={`${metrics.totalTrades} trades`} icon={<TrendingUp size={11} />}
           color={metrics.profitFactor >= 1.5 ? "green" : metrics.profitFactor >= 1 ? "yellow" : "red"} />
-        <StatCard label="Avg Win" value={`$${metrics.avgWin.toFixed(2)}`}
-          sub={`Max $${metrics.largestWin.toFixed(2)}`} icon={<Zap size={11} />} color="green" />
+        <StatCard label="Avg Win" value={`₹${(metrics.avgWin * rate).toFixed(2)}`}
+          sub={`Max ₹${(metrics.largestWin * rate).toFixed(2)}`} icon={<Zap size={11} />} color="green" />
         <StatCard label="Streak" value={streakLabel}
-          sub={`Avg loss $${metrics.avgLoss.toFixed(2)}`} icon={<TrendingDown size={11} />}
+          sub={`Avg loss ₹${(metrics.avgLoss * rate).toFixed(2)}`} icon={<TrendingDown size={11} />}
           color={metrics.currentStreak >= 0 ? "green" : "red"} />
       </div>
 
@@ -371,7 +384,10 @@ export function PerformanceDashboard({ isFullPage = false }: { userId?: number; 
                     <span className="text-j-down">{data.losses}</span>
                   </td>
                   <td className={cn("px-3 py-1.5 tabular-nums font-medium", data.pnl >= 0 ? "text-j-up" : "text-j-down")}>
-                    {data.pnl >= 0 ? "+" : ""}{data.pnl.toFixed(2)}
+                    <div className="flex flex-col">
+                      <span>{data.pnl >= 0 ? "+" : ""}₹{(data.pnl * rate).toFixed(2)}</span>
+                      <span className="text-[9px] text-[#71717a] font-normal">{data.pnl >= 0 ? "+" : ""}{data.pnl.toFixed(2)} USDT</span>
+                    </div>
                   </td>
                 </tr>
               ))}

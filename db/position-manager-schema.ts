@@ -87,3 +87,37 @@ export const positionActionLogs = pgTable(
 );
 
 export type PositionActionLog = typeof positionActionLogs.$inferSelect;
+
+// ─── Position Transaction Ledger ───
+// Immutable record of every material change to a position.
+// Used for audit trails, tax reporting, PnL attribution, and cost-basis tracking.
+
+export const positionTransactions = pgTable(
+  "position_transactions",
+  {
+    id: serial("id").primaryKey(),
+    positionId: integer("position_id").notNull(),
+    userId: integer("user_id").notNull(),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    type: varchar("type", { length: 20 }).notNull(), // OPEN, SCALE_IN, PARTIAL_EXIT, FULL_EXIT, SL_UPDATE, TP_UPDATE, LIQUIDATED
+    side: varchar("side", { length: 10 }).notNull(), // long, short
+    quantityBefore: decimal("quantity_before", { precision: 18, scale: 8 }).default("0"),
+    quantityAfter: decimal("quantity_after", { precision: 18, scale: 8 }).default("0"),
+    quantityDelta: decimal("quantity_delta", { precision: 18, scale: 8 }).default("0"), // + = added, - = removed
+    price: decimal("price", { precision: 18, scale: 8 }), // entry/exit price for this transaction
+    avgEntryPrice: decimal("avg_entry_price", { precision: 18, scale: 8 }), // weighted avg after this tx
+    realizedPnl: decimal("realized_pnl", { precision: 18, scale: 8 }).default("0"),
+    fee: decimal("fee", { precision: 18, scale: 8 }).default("0"),
+    marginBefore: decimal("margin_before", { precision: 18, scale: 8 }).default("0"),
+    marginAfter: decimal("margin_after", { precision: 18, scale: 8 }).default("0"),
+    metadata: jsonb("metadata"), // { oldSl, newSl, oldTp, newTp, reason, exchangeOrderId, etc. }
+    createdAt: timestamp("created_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    positionTxIdx: index("idx_position_transactions_position").on(table.positionId, table.createdAt),
+    userTxIdx: index("idx_position_transactions_user").on(table.userId, table.createdAt),
+    symbolTxIdx: index("idx_position_transactions_symbol").on(table.symbol, table.createdAt),
+  })
+);
+
+export type PositionTransaction = typeof positionTransactions.$inferSelect;

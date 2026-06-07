@@ -45,7 +45,7 @@ Everything you need to go from a fresh clone to a running bot in any mode: **dev
 |---|---|---|
 | Node.js | 20+ | https://nodejs.org or `nvm install 20` |
 | npm | 10+ | Bundled with Node.js |
-| PostgreSQL | 14+ | See [Section 3](#3-postgresql-setup) |
+| PostgreSQL | 14+ with **pgvector** | See [Section 3](#3-postgresql-setup) |
 | Git | Any | https://git-scm.com |
 
 ### Optional (needed for specific modes)
@@ -118,7 +118,10 @@ docker run -d \
   -e POSTGRES_PASSWORD=your_strong_password \
   -p 5432:5432 \
   -v janus_pgdata:/var/lib/postgresql/data \
-  postgres:16-alpine
+  ankane/pgvector:latest
+
+# Create the pgvector extension (one-time)
+docker exec -it janus-postgres psql -U janus -d janus_production -c "CREATE EXTENSION IF NOT EXISTS vector;"
 ```
 
 ### Option C — Docker Compose (full stack)
@@ -222,8 +225,8 @@ npm run db:push
 Core tables (22):
 `users`, `market_data`, `signals`, `positions`, `trades`, `order_book_snapshots`, `recent_ticks`, `futures_wallets`, `exchange_credentials`, `transactions`, `system_logs`, `llm_api_keys`, `auto_executor_config`, `equity_snapshots`, `trading_accounts`, `account_ledger`, `account_snapshots`, `open_interest_data`, `funding_rate_history`, `liquidation_events`
 
-Position manager tables (3, via `db:push`):
-`ai_assessments`, `position_snapshots`, `position_action_logs`
+Position manager tables (4, via `db:push`):
+`ai_assessments`, `position_snapshots`, `position_action_logs`, `position_transactions`
 
 ---
 
@@ -796,10 +799,14 @@ npm run build
 # DATABASE_URL must use "postgres" as hostname (the service name):
 # DATABASE_URL=postgres://janus:password@postgres:5432/janus_production
 
-# 3. Start all services
+# 3. Pull and start services (pull ensures you get the pgvector image)
+docker compose pull
 docker compose up -d
 
-# 4. Apply migrations (first time only)
+# 4. Create the pgvector extension (first time only)
+docker compose exec postgres psql -U janus -d janus_production -c "CREATE EXTENSION IF NOT EXISTS vector;"
+
+# 5. Apply migrations (first time only)
 docker compose exec janus npm run db:migrate
 docker compose exec janus npm run db:push
 ```
@@ -809,8 +816,8 @@ docker compose exec janus npm run db:push
 | Service | Image | Port | Notes |
 |---|---|---|---|
 | `janus` | Built from `Dockerfile` | `3010` | App server, depends on postgres |
-| `postgres` | `postgres:16-alpine` | Internal only | Persisted to `pgdata` volume |
-| `pgbackup` | `postgres:16-alpine` | — | Optional, `--profile backup` |
+| `postgres` | `ankane/pgvector:latest` | Internal only | Persisted to `pgdata` volume; pgvector pre-installed |
+| `pgbackup` | `ankane/pgvector:latest` | — | Optional, `--profile backup` |
 
 **Docker commands:**
 
@@ -1135,6 +1142,58 @@ curl http://localhost:3010/api/trpc/llm.keyStatus | jq .
 psql $DATABASE_URL -c "TRUNCATE order_book_snapshots;"
 psql $DATABASE_URL -c "TRUNCATE recent_ticks;"
 ```
+
+---
+
+### `type "vector" does not exist` or `CREATE EXTENSION vector` fails
+
+The pgvector extension is not installed in the database.
+
+**Docker Compose:**
+```bash
+# Verify the container is using the pgvector image
+docker compose exec postgres psql -U janus -d janus_production -c "SELECT * FROM pg_extension WHERE extname = 'vector';"
+# If empty, create it:
+docker compose exec postgres psql -U janus -d janus_production -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+**Local PostgreSQL:**
+```bash
+# macOS
+brew install pgvector
+# Then in psql:
+CREATE EXTENSION vector;
+```
+
+**If `CREATE EXTENSION` fails with "could not open extension control file":**
+The running container is still on the old `postgres:16-alpine` image. Force a refresh:
+```bash
+docker compose down
+docker rmi ankane/pgvector:latest 2>/dev/null; docker compose pull postgres
+docker compose up -d postgres
+docker compose exec postgres psql -U janus -d janus_production -c "CREATE EXTENSION IF NOT EXISTS vector;"
+```
+
+---
+
+### Drizzle `db:migrate` fails with snapshot collision / metadata error
+
+`drizzle-kit` tracks snapshots in `db/migrations/meta/`. When schema drift or manual changes occur, the snapshot metadata may reject new migrations.
+
+**Workaround — apply migrations manually:**
+```bash
+for f in db/migrations/0011_*.sql db/migrations/0012_*.sql db/migrations/0013_*.sql db/migrations/0014_*.sql db/migrations/0015_*.sql; do
+  echo "=== Applying $f ==="
+  docker compose exec -T postgres psql -U janus -d janus_production < "$f"
+done
+```
+
+Then verify the schema:
+```bash
+docker compose exec postgres psql -U janus -d janus_production -c "\d brain_episodes"
+```
+
+After manual application, `db:push` should work for additive changes.
 
 ---
 

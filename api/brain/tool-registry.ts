@@ -1,5 +1,8 @@
 import { marketStateManager } from "../services/market-state";
 import { getPaperWallet } from "../services/paper-wallet";
+import { getDb } from "../queries/connection";
+import { autoExecutorConfig } from "@db/schema";
+import { eq } from "drizzle-orm";
 
 export interface MarketSnapshot {
   symbol: string;
@@ -58,7 +61,21 @@ export const toolRegistry = {
    * Retrieves a snapshot of the paper trading portfolio state for a user
    */
   getPortfolioSnapshot: async (userId: number): Promise<PortfolioSnapshot> => {
-    const wallet = await getPaperWallet(userId);
+    const db = getDb();
+    const configRows = await db
+      .select({
+        paperCurrency: autoExecutorConfig.paperCurrency,
+        paperStartingBalance: autoExecutorConfig.paperStartingBalance,
+      })
+      .from(autoExecutorConfig)
+      .where(eq(autoExecutorConfig.userId, userId))
+      .limit(1);
+    const paperCurrency = configRows[0]?.paperCurrency ?? "INR";
+    const paperStarting = configRows[0]?.paperStartingBalance
+      ? parseFloat(configRows[0].paperStartingBalance)
+      : 1000000;
+
+    const wallet = await getPaperWallet(userId, paperStarting, paperCurrency);
     return {
       userId: wallet.userId,
       startingBalance: wallet.startingBalance,

@@ -51,320 +51,162 @@ export class LiquidityEngine extends EventEmitter {
     const events: LiquidityEvent[] = [];
     const now = Date.now();
 
-    // ─── 1. Liquidations & Squeezes (SS Priority) ───
-    const recentLiqs = state.liquidationWindow.values().filter(l => now - l.timestamp < 60000);
-    const longLiqs = recentLiqs.filter(l => l.side === "SELL");
-    const shortLiqs = recentLiqs.filter(l => l.side === "BUY");
-    
-    const longLiqVol = longLiqs.reduce((sum, l) => sum + (l.quantity * l.price), 0);
-    const shortLiqVol = shortLiqs.reduce((sum, l) => sum + (l.quantity * l.price), 0);
+    this.checkLiquidations(symbol, state, events, now);
+    this.checkFundingSqueezes(symbol, state, events, now);
+    this.checkAbsorption(symbol, state, events, now);
+    this.checkSweeps(symbol, state, events, now);
+    this.checkLiquidityPools(symbol, state, events, now);
+    this.checkHuntsAndTraps(symbol, state, events, now);
+    this.checkVoidsAndExhaustion(symbol, state, events, now);
+    this.checkValueAreas(symbol, state, events, now);
+    this.checkDepthShifts(symbol, state, events, now);
 
-    // 15. LONG_LIQUIDATION_CASCADE (Hardened: 10 liqs, 500k vol, 120s cooldown)
+    for (const ev of events) {
+      this.emit("liquidity_event", ev);
+      if (ev.priority === "SSS" || ev.priority === "SS") {
+        this.notifyTelegram(ev);
+      }
+    }
+  }
+
+  private checkLiquidations(symbol: string, state: any, events: LiquidityEvent[], now: number) {
+    const recentLiqs = state.liquidationWindow.values().filter((l: any) => now - l.timestamp < 60000);
+    const longLiqs = recentLiqs.filter((l: any) => l.side === "SELL");
+    const shortLiqs = recentLiqs.filter((l: any) => l.side === "BUY");
+    
+    const longLiqVol = longLiqs.reduce((sum: number, l: any) => sum + (l.quantity * l.price), 0);
+    const shortLiqVol = shortLiqs.reduce((sum: number, l: any) => sum + (l.quantity * l.price), 0);
+
     if (longLiqs.length >= 10 && longLiqVol > 500000 && this.shouldFireEvent(symbol, "LONG_LIQUIDATION_CASCADE", 120000)) {
-      events.push({
-        id: Math.random().toString(),
-        type: "LONG_LIQUIDATION_CASCADE",
-        priority: "SS",
-        symbol,
-        timestamp: now,
-        message: `Long Liquidation Cascade: ${longLiqs.length} liquidations ($${(longLiqVol/1000).toFixed(0)}k volume)`,
-        data: { volume: longLiqVol, count: longLiqs.length }
-      });
+      events.push(this.createEvent("LONG_LIQUIDATION_CASCADE", "SS", symbol, now, `Long Liquidation Cascade: ${longLiqs.length} liqs ($${(longLiqVol/1000).toFixed(0)}k)`, { volume: longLiqVol, count: longLiqs.length }));
     }
-
-    // 16. SHORT_LIQUIDATION_CASCADE (Hardened: 10 liqs, 500k vol, 120s cooldown)
     if (shortLiqs.length >= 10 && shortLiqVol > 500000 && this.shouldFireEvent(symbol, "SHORT_LIQUIDATION_CASCADE", 120000)) {
-      events.push({
-        id: Math.random().toString(),
-        type: "SHORT_LIQUIDATION_CASCADE",
-        priority: "SS",
-        symbol,
-        timestamp: now,
-        message: `Short Liquidation Cascade: ${shortLiqs.length} liquidations ($${(shortLiqVol/1000).toFixed(0)}k volume)`,
-        data: { volume: shortLiqVol, count: shortLiqs.length }
-      });
+      events.push(this.createEvent("SHORT_LIQUIDATION_CASCADE", "SS", symbol, now, `Short Liquidation Cascade: ${shortLiqs.length} liqs ($${(shortLiqVol/1000).toFixed(0)}k)`, { volume: shortLiqVol, count: shortLiqs.length }));
     }
+  }
 
-    // Funding Rate & Squeezes
-    if (state.latestFunding) {
-      const fr = state.latestFunding.fundingRate;
-      const pctChange = state.metrics.sweepScore;
-      
-      // 17. SHORT_SQUEEZE (Hardened: -0.1% funding, 60 sweepScore, 300s cooldown)
-      if (fr < -0.001 && pctChange > 60 && this.shouldFireEvent(symbol, "SHORT_SQUEEZE", 300000)) {
-        events.push({
-          id: Math.random().toString(),
-          type: "SHORT_SQUEEZE",
-          priority: "SS",
-          symbol,
-          timestamp: now,
-          message: `Short Squeeze Risk: Extreme negative funding (${(fr * 100).toFixed(4)}%) with buying pressure`,
-          data: { fundingRate: fr, sweepScore: pctChange }
-        });
-      }
-      
-      // 18. LONG_SQUEEZE (Hardened: +0.1% funding, 60 sweepScore, 300s cooldown)
-      if (fr > 0.001 && pctChange > 60 && state.ltp < state.previousLtp && this.shouldFireEvent(symbol, "LONG_SQUEEZE", 300000)) {
-        events.push({
-          id: Math.random().toString(),
-          type: "LONG_SQUEEZE",
-          priority: "SS",
-          symbol,
-          timestamp: now,
-          message: `Long Squeeze Risk: High positive funding (${(fr * 100).toFixed(4)}%) with selling pressure`,
-          data: { fundingRate: fr, sweepScore: pctChange }
-        });
-      }
-    }
-
-    // ─── 2. Orderbook Absorption & Sweeps (SSS Priority) ───
+  private checkFundingSqueezes(symbol: string, state: any, events: LiquidityEvent[], now: number) {
+    if (!state.latestFunding) return;
+    const fr = state.latestFunding.fundingRate;
+    const sweepScore = state.metrics.sweepScore;
     
-    // 13. ABSORPTION (Extreme Buy/Sell Absorption)
-    // Hardened: require substantial volume (>= 2% book depth) and 60s cooldown. SSS requires >= 5% book depth and > 80 score.
+    if (fr < -0.001 && sweepScore > 60 && this.shouldFireEvent(symbol, "SHORT_SQUEEZE", 300000)) {
+      events.push(this.createEvent("SHORT_SQUEEZE", "SS", symbol, now, `Short Squeeze Risk: Negative funding (${(fr * 100).toFixed(4)}%)`, { fundingRate: fr, sweepScore }));
+    }
+    if (fr > 0.001 && sweepScore > 60 && state.ltp < state.previousLtp && this.shouldFireEvent(symbol, "LONG_SQUEEZE", 300000)) {
+      events.push(this.createEvent("LONG_SQUEEZE", "SS", symbol, now, `Long Squeeze Risk: High funding (${(fr * 100).toFixed(4)}%)`, { fundingRate: fr, sweepScore }));
+    }
+  }
+
+  private checkAbsorption(symbol: string, state: any, events: LiquidityEvent[], now: number) {
     const bookDepth = state.metrics.bidDepth + state.metrics.askDepth;
-    const tradesForAbs = state.tradeWindow.values().slice(-100);
-    const buyVol = tradesForAbs.filter(t => t.side === "BUY").reduce((s, t) => s + t.quantity, 0);
-    const sellVol = tradesForAbs.filter(t => t.side === "SELL").reduce((s, t) => s + t.quantity, 0);
+    const trades = state.tradeWindow.values().slice(-100);
+    const buyVol = trades.filter((t: any) => t.side === "BUY").reduce((s: number, t: any) => s + t.quantity, 0);
+    const sellVol = trades.filter((t: any) => t.side === "SELL").reduce((s: number, t: any) => s + t.quantity, 0);
     const totalVol = buyVol + sellVol;
-    const type = buyVol > sellVol ? "BUY_ABSORPTION" : "SELL_ABSORPTION";
 
-    if (state.metrics.absorptionScore > 40 && 
-        bookDepth > 0 && 
-        totalVol >= bookDepth * 0.02 && 
-        this.shouldFireEvent(symbol, "ABSORPTION", 60000)) {
-      
+    if (state.metrics.absorptionScore > 40 && bookDepth > 0 && totalVol >= bookDepth * 0.02 && this.shouldFireEvent(symbol, "ABSORPTION", 60000)) {
+      const type = buyVol > sellVol ? "BUY_ABSORPTION" : "SELL_ABSORPTION";
       const isExtreme = state.metrics.absorptionScore > 80 && totalVol >= bookDepth * 0.05;
-      events.push({
-        id: Math.random().toString(),
-        type,
-        priority: isExtreme ? "SSS" : "S",
-        symbol,
-        timestamp: now,
-        message: `${type === "BUY_ABSORPTION" ? "Buy Absorption" : "Sell Absorption"} detected`,
-        data: { absorptionScore: state.metrics.absorptionScore, buyVol, sellVol }
-      });
+      events.push(this.createEvent(type, isExtreme ? "SSS" : "S", symbol, now, `${type.replace("_", " ")} detected`, { absorptionScore: state.metrics.absorptionScore, buyVol, sellVol }));
     }
+  }
 
-    // 2. LIQUIDITY SWEEP (Buy/Sell Side Sweeps)
-    // Breaks above/below local extreme then rejects back inside range
-    // Hardened: Requires sweepScore >= 65, min 30-tick range >= 0.08%, and 60s cooldown
+  private checkSweeps(symbol: string, state: any, events: LiquidityEvent[], now: number) {
     const ltpWindow = state.ltpWindow.values();
-    if (ltpWindow.length >= 30) {
-      const prices = ltpWindow.map(x => x.price);
-      const lastPrice = state.ltp;
-      const prevPrice = state.previousLtp;
-      
-      const localHigh = Math.max(...prices.slice(0, -1));
-      const localLow = Math.min(...prices.slice(0, -1));
-      const rangePct = (localHigh - localLow) / (localLow || 1);
+    if (ltpWindow.length < 30) return;
 
-      // Buy-side Sweep
-      if (prevPrice >= localHigh && 
-          lastPrice < localHigh && 
-          state.metrics.sweepScore >= 65 && 
-          rangePct >= 0.0008 && 
-          this.shouldFireEvent(symbol, "BUY_SIDE_SWEEP", 60000)) {
-        events.push({
-          id: Math.random().toString(),
-          type: "BUY_SIDE_SWEEP",
-          priority: "SSS",
-          symbol,
-          timestamp: now,
-          message: `Buy-Side Sweep: Price broke local high and rejected`,
-          data: { level: localHigh, direction: "BEARISH" }
-        });
-      }
-      
-      // Sell-side Sweep
-      if (prevPrice <= localLow && 
-          lastPrice > localLow && 
-          state.metrics.sweepScore >= 65 && 
-          rangePct >= 0.0008 && 
-          this.shouldFireEvent(symbol, "SELL_SIDE_SWEEP", 60000)) {
-        events.push({
-          id: Math.random().toString(),
-          type: "SELL_SIDE_SWEEP",
-          priority: "SSS",
-          symbol,
-          timestamp: now,
-          message: `Sell-Side Sweep: Price broke local low and rejected`,
-          data: { level: localLow, direction: "BULLISH" }
-        });
-      }
+    const prices = ltpWindow.map((x: any) => x.price);
+    const localHigh = Math.max(...prices.slice(0, -1));
+    const localLow = Math.min(...prices.slice(0, -1));
+    const rangePct = (localHigh - localLow) / (localLow || 1);
+
+    if (rangePct < 0.0008 || state.metrics.sweepScore < 65) return;
+
+    if (state.previousLtp >= localHigh && state.ltp < localHigh && this.shouldFireEvent(symbol, "BUY_SIDE_SWEEP", 60000)) {
+      events.push(this.createEvent("BUY_SIDE_SWEEP", "SSS", symbol, now, "Buy-Side Sweep: Price broke local high and rejected", { level: localHigh, direction: "BEARISH" }));
     }
+    if (state.previousLtp <= localLow && state.ltp > localLow && this.shouldFireEvent(symbol, "SELL_SIDE_SWEEP", 60000)) {
+      events.push(this.createEvent("SELL_SIDE_SWEEP", "SSS", symbol, now, "Sell-Side Sweep: Price broke local low and rejected", { level: localLow, direction: "BULLISH" }));
+    }
+  }
 
-    // ─── 3. Liquidity Pool Creation (S Priority) ───
+  private checkLiquidityPools(symbol: string, state: any, events: LiquidityEvent[], now: number) {
+    if (!state.orderBook) return;
+    const { bids, asks } = state.orderBook;
     
-    // 1. LIQUIDITY POOL CREATION (BSL/SSL stops accumulation)
-    if (state.orderBook) {
-      const bids = state.orderBook.bids;
-      const asks = state.orderBook.asks;
-      
-      const bslLevel = asks.find(a => a[1] > state.metrics.askDepth * 0.08); // Lowered to 8%
-      const sslLevel = bids.find(b => b[1] > state.metrics.bidDepth * 0.08);
+    const bsl = asks.find((a: any) => a[1] > state.metrics.askDepth * 0.08);
+    const ssl = bids.find((b: any) => b[1] > state.metrics.bidDepth * 0.08);
 
-      if (bslLevel && this.shouldFireEvent(symbol, "BUY_SIDE_LIQUIDITY_CREATED", 30000)) {
-        events.push({
-          id: Math.random().toString(),
-          type: "BS_LIQUIDITY_CREATED",
-          priority: "S",
-          symbol,
-          timestamp: now,
-          message: `Buy-Side Pool at $${bslLevel[0].toFixed(2)}`,
-          data: { level: bslLevel[0], strength: "HIGH" }
-        });
-      }
-      if (sslLevel && this.shouldFireEvent(symbol, "SELL_SIDE_LIQUIDITY_CREATED", 30000)) {
-        events.push({
-          id: Math.random().toString(),
-          type: "SS_LIQUIDITY_CREATED",
-          priority: "S",
-          symbol,
-          timestamp: now,
-          message: `Sell-Side Pool at $${sslLevel[0].toFixed(2)}`,
-          data: { level: sslLevel[0], strength: "HIGH" }
-        });
-      }
+    if (bsl && this.shouldFireEvent(symbol, "BUY_SIDE_LIQUIDITY_CREATED", 30000)) {
+      events.push(this.createEvent("BS_LIQUIDITY_CREATED", "S", symbol, now, `Buy-Side Pool at $${bsl[0].toFixed(2)}`, { level: bsl[0] }));
     }
+    if (ssl && this.shouldFireEvent(symbol, "SELL_SIDE_LIQUIDITY_CREATED", 30000)) {
+      events.push(this.createEvent("SS_LIQUIDITY_CREATED", "S", symbol, now, `Sell-Side Pool at $${ssl[0].toFixed(2)}`, { level: ssl[0] }));
+    }
+  }
 
-    // ─── 4. Stop Hunt & Inducement & Grab (S Priority) ───
-
-    // 3. LIQUIDITY_GRAB (Fast sweep rejection)
+  private checkHuntsAndTraps(symbol: string, state: any, events: LiquidityEvent[], now: number) {
     const trades = state.tradeWindow.values();
-    const tradeVolume = trades.slice(-50).reduce((sum, t) => sum + t.quantity, 0);
+    const tradeVolume = trades.slice(-50).reduce((sum: number, t: any) => sum + t.quantity, 0);
+
     if (state.metrics.sweepScore > 40 && tradeVolume > state.metrics.bidDepth * 0.03 && this.shouldFireEvent(symbol, "LIQUIDITY_GRAB", 15000)) {
-      events.push({
-        id: Math.random().toString(),
-        type: "LIQUIDITY_GRAB",
-        priority: "S",
-        symbol,
-        timestamp: now,
-        message: `Fast Liquidity Grab on high volume`,
-        data: { strength: "EXTREME", volume: tradeVolume }
-      });
+      events.push(this.createEvent("LIQUIDITY_GRAB", "S", symbol, now, "Fast Liquidity Grab on high volume", { volume: tradeVolume }));
     }
 
-    // 4. LIQUIDITY RUN (Continuation - Equal Highs Broken with force)
     if (state.metrics.sweepScore > 50 && Math.abs(state.ltp - state.previousLtp) > state.ltp * 0.0005 && this.shouldFireEvent(symbol, "LIQUIDITY_RUN", 15000)) {
       const side = state.ltp > state.previousLtp ? "BUY_SIDE" : "SELL_SIDE";
-      events.push({
-        id: Math.random().toString(),
-        type: "LIQUIDITY_RUN",
-        priority: "S",
-        symbol,
-        timestamp: now,
-        message: `Liquidity Run in progress (${side})`,
-        data: { side, strength: "STRONG" }
-      });
+      events.push(this.createEvent("LIQUIDITY_RUN", "S", symbol, now, `Liquidity Run (${side})`, { side }));
     }
 
-    // 5. STOP HUNT (Retail Stop Extraction)
+    const recentLiqs = state.liquidationWindow.values().filter((l: any) => now - l.timestamp < 60000);
     if (recentLiqs.length >= 1 && state.metrics.absorptionScore > 30 && this.shouldFireEvent(symbol, "STOP_HUNT", 15000)) {
-      const victim_side = recentLiqs[0].side === "SELL" ? "LONGS" : "SHORTS";
-      events.push({
-        id: Math.random().toString(),
-        type: "STOP_HUNT",
-        priority: "S",
-        symbol,
-        timestamp: now,
-        message: `Stop Hunt: extracting ${victim_side}`,
-        data: { victim_side }
-      });
+      const victim = recentLiqs[0].side === "SELL" ? "LONGS" : "SHORTS";
+      events.push(this.createEvent("STOP_HUNT", "S", symbol, now, `Stop Hunt: extracting ${victim}`, { victim }));
     }
 
-    // 6. INDUCEMENT (Fake move / Trap buyers/sellers)
     if (state.metrics.sweepScore > 40 && state.metrics.absorptionScore > 40 && this.shouldFireEvent(symbol, "INDUCEMENT", 20000)) {
       const isBullishTrap = state.ltp > state.previousLtp;
-      events.push({
-        id: Math.random().toString(),
-        type: "INDUCEMENT",
-        priority: "S",
-        symbol,
-        timestamp: now,
-        message: `Inducement Alert: ${isBullishTrap ? "Bullish" : "Bearish"} Trap`,
-        data: { direction: isBullishTrap ? "BULLISH_TRAP" : "BEARISH_TRAP" }
-      });
+      events.push(this.createEvent("INDUCEMENT", "S", symbol, now, `Inducement: ${isBullishTrap ? "Bullish" : "Bearish"} Trap`, { direction: isBullishTrap ? "BULLISH_TRAP" : "BEARISH_TRAP" }));
     }
+  }
 
-    // ─── 5. Liquidity Void & Fill (A Priority) ───
-    
-    // 7. LIQUIDITY_VOID (Displacement range, e.g. FVG)
+  private checkVoidsAndExhaustion(symbol: string, state: any, events: LiquidityEvent[], now: number) {
     if (Math.abs(state.ltp - state.previousLtp) > state.ltp * 0.0015 && this.shouldFireEvent(symbol, "LIQUIDITY_VOID", 30000)) {
-      const lowRange = Math.min(state.previousLtp, state.ltp);
-      const highRange = Math.max(state.previousLtp, state.ltp);
-      events.push({
-        id: Math.random().toString(),
-        type: "LIQUIDITY_VOID",
-        priority: "A",
-        symbol,
-        timestamp: now,
-        message: `Liquidity Void created`,
-        data: { range: { low: lowRange, high: highRange } }
-      });
+      events.push(this.createEvent("LIQUIDITY_VOID", "A", symbol, now, "Liquidity Void created", { range: { low: Math.min(state.previousLtp, state.ltp), high: Math.max(state.previousLtp, state.ltp) } }));
     }
 
-    // 8. LIQUIDITY_FILL (Filling of voids/gaps)
     if (state.metrics.absorptionScore > 40 && Math.abs(state.ltp - state.previousLtp) < state.ltp * 0.0003 && this.shouldFireEvent(symbol, "LIQUIDITY_FILL", 30000)) {
-      events.push({
-        id: Math.random().toString(),
-        type: "LIQUIDITY_FILL",
-        priority: "A",
-        symbol,
-        timestamp: now,
-        message: `Liquidity Fill in progress`,
-        data: { completion: 100 }
-      });
+      events.push(this.createEvent("LIQUIDITY_FILL", "A", symbol, now, "Liquidity Fill in progress"));
     }
 
-    // 14. EXHAUSTION
     if (state.metrics.volatilityRegime !== "LOW" && state.metrics.absorptionScore > 50 && this.shouldFireEvent(symbol, "EXHAUSTION", 20000)) {
       const side = state.ltp > state.previousLtp ? "BUYER_EXHAUSTION" : "SELLER_EXHAUSTION";
-      events.push({
-        id: Math.random().toString(),
-        type: side,
-        priority: "A",
-        symbol,
-        timestamp: now,
-        message: `Momentum Exhaustion: ${side.split('_')[0]}`
-      });
+      events.push(this.createEvent(side, "A", symbol, now, `Momentum Exhaustion: ${side.split("_")[0]}`));
     }
+  }
 
-    // ─── 6. Volume Profile Rejection & Acceptance (A Priority) ───
-    const prices = ltpWindow.map(t => t.price).sort((a,b)=>a-b);
-    if (prices.length >= 20) {
-      const val = prices[Math.floor(prices.length * 0.2)]; // Value Area Low
-      const vah = prices[Math.floor(prices.length * 0.8)]; // Value Area High
-      
-      // 19. VALUE_AREA_REJECTION
-      if ((state.ltp <= vah && state.previousLtp >= vah && this.shouldFireEvent(symbol, "VALUE_AREA_REJECTION", 25000)) ||
-          (state.ltp >= val && state.previousLtp <= val && this.shouldFireEvent(symbol, "VALUE_AREA_REJECTION", 25000))) {
-        events.push({
-          id: Math.random().toString(),
-          type: "VALUE_AREA_REJECTION",
-          priority: "A",
-          symbol,
-          timestamp: now,
-          message: "Value Area Rejection"
-        });
-      }
+  private checkValueAreas(symbol: string, state: any, events: LiquidityEvent[], now: number) {
+    const prices = state.ltpWindow.values().map((t: any) => t.price).sort((a: number, b: number) => a - b);
+    if (prices.length < 20) return;
 
-      // 20. VALUE_AREA_ACCEPTANCE
-      if ((state.ltp >= vah && state.previousLtp < vah && this.shouldFireEvent(symbol, "VALUE_AREA_ACCEPTANCE", 25000)) ||
-          (state.ltp <= val && state.previousLtp > val && this.shouldFireEvent(symbol, "VALUE_AREA_ACCEPTANCE", 25000))) {
-        events.push({
-          id: Math.random().toString(),
-          type: "VALUE_AREA_ACCEPTANCE",
-          priority: "A",
-          symbol,
-          timestamp: now,
-          message: "Value Area Acceptance"
-        });
-      }
+    const val = prices[Math.floor(prices.length * 0.2)];
+    const vah = prices[Math.floor(prices.length * 0.8)];
+    
+    const rejected = (state.ltp <= vah && state.previousLtp >= vah) || (state.ltp >= val && state.previousLtp <= val);
+    const accepted = (state.ltp >= vah && state.previousLtp < vah) || (state.ltp <= val && state.previousLtp > val);
+
+    if (rejected && this.shouldFireEvent(symbol, "VALUE_AREA_REJECTION", 25000)) {
+      events.push(this.createEvent("VALUE_AREA_REJECTION", "A", symbol, now, "Value Area Rejection"));
     }
+    if (accepted && this.shouldFireEvent(symbol, "VALUE_AREA_ACCEPTANCE", 25000)) {
+      events.push(this.createEvent("VALUE_AREA_ACCEPTANCE", "A", symbol, now, "Value Area Acceptance"));
+    }
+  }
 
-    // ─── 7. Orderbook Resting Depth shifts (B Priority) ───
+  private checkDepthShifts(symbol: string, state: any, events: LiquidityEvent[], now: number) {
     const deltas = state.deltaWindow.values().slice(-20);
-    const recentDelta = deltas.reduce((acc, d) => ({
+    const recent = deltas.reduce((acc: any, d: any) => ({
       bidAdded: acc.bidAdded + d.bidAdded,
       bidRemoved: acc.bidRemoved + d.bidRemoved,
       askAdded: acc.askAdded + d.askAdded,
@@ -372,110 +214,48 @@ export class LiquidityEngine extends EventEmitter {
     }), { bidAdded: 0, bidRemoved: 0, askAdded: 0, askRemoved: 0 });
 
     const totalDepth = state.metrics.bidDepth + state.metrics.askDepth;
-    if (totalDepth > 0) {
-      // 9. RESTING_LIQUIDITY_ADDED
-      if (recentDelta.bidAdded > state.metrics.bidDepth * 0.05 && this.shouldFireEvent(symbol, "RESTING_LIQUIDITY_ADDED:BID", 15000)) {
-        events.push({
-          id: Math.random().toString(),
-          type: "RESTING_LIQ_ADDED",
-          priority: "B",
-          symbol,
-          timestamp: now,
-          message: "BIDs Added (+5%)",
-          data: { side: "BID" }
-        });
-      }
-      if (recentDelta.askAdded > state.metrics.askDepth * 0.05 && this.shouldFireEvent(symbol, "RESTING_LIQUIDITY_ADDED:ASK", 15000)) {
-        events.push({
-          id: Math.random().toString(),
-          type: "RESTING_LIQ_ADDED",
-          priority: "B",
-          symbol,
-          timestamp: now,
-          message: "ASKs Added (+5%)",
-          data: { side: "ASK" }
-        });
-      }
+    if (totalDepth <= 0) return;
 
-      // 10. RESTING_LIQUIDITY_REMOVED
-      if (recentDelta.bidRemoved > state.metrics.bidDepth * 0.05 && this.shouldFireEvent(symbol, "RESTING_LIQUIDITY_REMOVED:BID", 15000)) {
-        events.push({
-          id: Math.random().toString(),
-          type: "RESTING_LIQ_REMOVED",
-          priority: "B",
-          symbol,
-          timestamp: now,
-          message: "BIDs Removed (-5%)",
-          data: { side: "BID" }
-        });
-      }
-      if (recentDelta.askRemoved > state.metrics.askDepth * 0.05 && this.shouldFireEvent(symbol, "RESTING_LIQUIDITY_REMOVED:ASK", 15000)) {
-        events.push({
-          id: Math.random().toString(),
-          type: "RESTING_LIQ_REMOVED",
-          priority: "B",
-          symbol,
-          timestamp: now,
-          message: "ASKs Removed (-5%)",
-          data: { side: "ASK" }
-        });
-      }
-
-      // 11. LIQUIDITY PULL
-      if ((recentDelta.bidRemoved > state.metrics.bidDepth * 0.1 || recentDelta.askRemoved > state.metrics.askDepth * 0.1) && this.shouldFireEvent(symbol, "LIQUIDITY_PULL", 15000)) {
-        const side = recentDelta.bidRemoved > recentDelta.askRemoved ? "BID" : "ASK";
-        events.push({
-          id: Math.random().toString(),
-          type: "LIQUIDITY_PULL",
-          priority: "B",
-          symbol,
-          timestamp: now,
-          message: `Depth thinned (${side})`,
-          data: { side, severity: "HIGH" }
-        });
-      }
-
-      // 12. LIQUIDITY_STACK
-      if (state.orderBook) {
-        const stackBids = state.orderBook.bids.filter(b => b[1] > state.metrics.bidDepth * 0.05);
-        const stackAsks = state.orderBook.asks.filter(a => a[1] > state.metrics.askDepth * 0.05);
-        
-        if (stackBids.length >= 2 && this.shouldFireEvent(symbol, "LIQUIDITY_STACK:BID", 30000)) {
-          events.push({
-            id: Math.random().toString(),
-            type: "LIQUIDITY_STACK",
-            priority: "B",
-            symbol,
-            timestamp: now,
-            message: "Bid Stack Detected",
-            data: { side: "BID", strength: "HIGH" }
-          });
-        }
-        if (stackAsks.length >= 2 && this.shouldFireEvent(symbol, "LIQUIDITY_STACK:ASK", 30000)) {
-          events.push({
-            id: Math.random().toString(),
-            type: "LIQUIDITY_STACK",
-            priority: "B",
-            symbol,
-            timestamp: now,
-            message: "Ask Stack Detected",
-            data: { side: "ASK", strength: "HIGH" }
-          });
-        }
-      }
+    if (recent.bidAdded > state.metrics.bidDepth * 0.05 && this.shouldFireEvent(symbol, "RESTING_LIQUIDITY_ADDED:BID", 15000)) {
+      events.push(this.createEvent("RESTING_LIQ_ADDED", "B", symbol, now, "BIDs Added (+5%)", { side: "BID" }));
+    }
+    if (recent.askAdded > state.metrics.askDepth * 0.05 && this.shouldFireEvent(symbol, "RESTING_LIQUIDITY_ADDED:ASK", 15000)) {
+      events.push(this.createEvent("RESTING_LIQ_ADDED", "B", symbol, now, "ASKs Added (+5%)", { side: "ASK" }));
+    }
+    if (recent.bidRemoved > state.metrics.bidDepth * 0.05 && this.shouldFireEvent(symbol, "RESTING_LIQUIDITY_REMOVED:BID", 15000)) {
+      events.push(this.createEvent("RESTING_LIQ_REMOVED", "B", symbol, now, "BIDs Removed (-5%)", { side: "BID" }));
+    }
+    if (recent.askRemoved > state.metrics.askDepth * 0.05 && this.shouldFireEvent(symbol, "RESTING_LIQUIDITY_REMOVED:ASK", 15000)) {
+      events.push(this.createEvent("RESTING_LIQ_REMOVED", "B", symbol, now, "ASKs Removed (-5%)", { side: "ASK" }));
     }
 
-    // ─── Emit Events ───
-    for (const ev of events) {
-      this.emit("liquidity_event", ev);
+    if ((recent.bidRemoved > state.metrics.bidDepth * 0.1 || recent.askRemoved > state.metrics.askDepth * 0.1) && this.shouldFireEvent(symbol, "LIQUIDITY_PULL", 15000)) {
+      const side = recent.bidRemoved > recent.askRemoved ? "BID" : "ASK";
+      events.push(this.createEvent("LIQUIDITY_PULL", "B", symbol, now, `Depth thinned (${side})`, { side }));
+    }
+
+    if (state.orderBook) {
+      const { bids, asks } = state.orderBook;
+      const stackBids = bids.filter((b: any) => b[1] > state.metrics.bidDepth * 0.05);
+      const stackAsks = asks.filter((a: any) => a[1] > state.metrics.askDepth * 0.05);
       
-      // Broadcast extreme high-priority events to Telegram
-      if (ev.priority === "SSS" || ev.priority === "SS") {
-        const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-        const text = `🚨 <b>[${ev.priority}] ${esc(ev.symbol)} Liquidity Alert</b>\n\n<b>Type:</b> ${esc(ev.type.replace(/_/g, " "))}\n<b>Message:</b> ${esc(ev.message)}`;
-        broadcastTelegramAlert(text).catch(err => console.error("Failed to broadcast telegram alert", err));
+      if (stackBids.length >= 2 && this.shouldFireEvent(symbol, "LIQUIDITY_STACK:BID", 30000)) {
+        events.push(this.createEvent("LIQUIDITY_STACK", "B", symbol, now, "Bid Stack Detected", { side: "BID" }));
+      }
+      if (stackAsks.length >= 2 && this.shouldFireEvent(symbol, "LIQUIDITY_STACK:ASK", 30000)) {
+        events.push(this.createEvent("LIQUIDITY_STACK", "B", symbol, now, "Ask Stack Detected", { side: "ASK" }));
       }
     }
+  }
+
+  private createEvent(type: string, priority: LiquidityPriority, symbol: string, timestamp: number, message: string, data?: any): LiquidityEvent {
+    return { id: Math.random().toString(36).substring(7), type, priority, symbol, timestamp, message, data };
+  }
+
+  private notifyTelegram(ev: LiquidityEvent) {
+    const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    const text = `🚨 <b>[${ev.priority}] ${esc(ev.symbol)} Liquidity Alert</b>\n\n<b>Type:</b> ${esc(ev.type.replace(/_/g, " "))}\n<b>Message:</b> ${esc(ev.message)}`;
+    broadcastTelegramAlert(text).catch(err => console.error("Failed to broadcast telegram alert", err));
   }
 }
 

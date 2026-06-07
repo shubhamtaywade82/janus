@@ -20,7 +20,8 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import SettingsModal from "./SettingsModal";
-import AlertsModal, { playAlertChime } from "./AlertsModal";
+import AlertsModal from "./AlertsModal";
+import { playAlertChime } from "@/lib/alert-sound";
 
 const navItems = [
   { path: "/", label: "Dashboard", icon: TrendingUp },

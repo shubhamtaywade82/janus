@@ -16,7 +16,7 @@ import type { RegimeResult } from "./regime-detector";
 
 const BASE_URL   = process.env.OLLAMA_BASE_URL ?? "http://localhost:11434";
 const MODEL      = process.env.OLLAMA_MODEL     ?? "llama3.2";
-const TIMEOUT_MS = parseInt(process.env.OLLAMA_TIMEOUT_MS ?? "30000", 10);
+const TIMEOUT_MS = parseInt(process.env.OLLAMA_TIMEOUT_MS ?? "90000", 10);
 // Keep the model resident between sporadic calls (avoids cold-reload latency)
 // and cap output length so a rambling generation can't blow the timeout.
 const KEEP_ALIVE = process.env.OLLAMA_KEEP_ALIVE ?? "30m";
@@ -107,6 +107,7 @@ export async function callLLM(prompt: string): Promise<string> {
         model: MODEL,
         prompt,
         stream: false,
+        think: false,   // reasoning models (qwen3.x) else return empty `response`
         keep_alive: KEEP_ALIVE,
         options: { num_predict: NUM_PREDICT },
       })

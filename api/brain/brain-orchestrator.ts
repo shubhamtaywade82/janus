@@ -1,240 +1,348 @@
+/**
+ * BrainOrchestrator — LLM-Powered Decision Engine
+ *
+ * Uses Ollama (qwen3:4b-q8) for structured reasoning on every signal.
+ * Gathers full context: market snapshot, portfolio, regime, episodic memory, signal metadata.
+ *
+ * Operating modes (controlled by autoExecutorConfig):
+ *   shadowMode=true  → Logs verdict, does NOT affect execution (default)
+ *   brainGateEnabled → Brain verdict can veto or modify approved trades
+ *   brainDriverEnabled → Brain can autonomously propose trades
+ *
+ * Safety: Governor always runs as the final hard gate. Brain cannot override
+ * kill switch, max drawdown, or position limits.
+ */
+
 import { EventEmitter } from "events";
-import { callLLM } from "../services/ollama";
-import { toolRegistry } from "./tool-registry";
 import { getDb } from "../queries/connection";
-import { brainEpisodes } from "@db/schema";
-import { eq } from "drizzle-orm";
-import { brainDecisionSchema } from "./schemas";
-import type { BrainDecision } from "./schemas";
+import { brainEpisodes, autoExecutorConfig, marketRegimes } from "@db/schema";
+import { desc, eq } from "drizzle-orm";
+import { toolRegistry } from "./tool-registry";
 import { brainGovernor } from "./brain-governor";
+import { latestRegimeCache } from "../services/regime-detector";
+import { getOrCreateSession } from "../services/risk-engine";
+import { getPaperWallet } from "../services/paper-wallet";
+import { callLLM } from "../services/ollama";
+import { memoryStore } from "./brain-memory";
 
-/** Live bus for brain decisions — consumed by the tRPC brain.decisionStream subscription. */
 export const brainEvents = new EventEmitter();
-brainEvents.setMaxListeners(50);
+brainEvents.setMaxListeners(20);
 
-/** Update the executed/vetoed outcome on a previously-logged episode (best-effort). */
-export async function updateEpisodeOutcome(episodeId: number, actualAction: any): Promise<void> {
-  if (!episodeId) return;
-  try {
-    await getDb().update(brainEpisodes).set({ actualAction }).where(eq(brainEpisodes.id, episodeId));
-  } catch {
-    /* best-effort */
-  }
+// const-union instead of enum (enums are banned under erasableSyntaxOnly)
+export const BrainVerdict = {
+  APPROVE: "APPROVE",
+  CAUTION: "CAUTION",
+  REDUCE_RISK: "REDUCE_RISK",
+  EXIT_NOW: "EXIT_NOW",
+} as const;
+export type BrainVerdict = (typeof BrainVerdict)[keyof typeof BrainVerdict];
+
+export interface BrainDecision {
+  mode: "hold" | "enter" | "scale_in" | "scale_out" | "exit" | "pause";
+  symbol?: string;
+  side?: "long" | "short";
+  confidence: number;
+  rationale: string;
+  sizePct?: number;
+  stopLossPct?: number;
+  takeProfitPct?: number;
+  timeInForce?: "ioc" | "gtt" | "market" | "limit";
+  riskNotes: string[];
+  evidence: {
+    market: string[];
+    memory: string[];
+    signals: string[];
+  };
+  verdict: BrainVerdict;
+  // Adjustments the Brain proposes
+  adjustedAllocationPct?: number;  // 0.005 - 0.20 (0.5% - 20% of free balance)
+  adjustedSizeUsdt?: number;
+  adjustedLeverage?: number;
+  adjustedSlPct?: number;
+  adjustedTpPct?: number;
+}
+
+interface BrainConfig {
+  shadowMode: boolean;
+  gateEnabled: boolean;
+  driverEnabled: boolean;
 }
 
 export class BrainOrchestrator {
-  private shadowMode: boolean;
+  private defaultConfig: BrainConfig = {
+    shadowMode: true,
+    gateEnabled: false,
+    driverEnabled: false,
+  };
 
-  constructor(shadowMode = true) {
-    this.shadowMode = shadowMode;
+  async getConfig(userId: number = 1): Promise<BrainConfig> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(autoExecutorConfig)
+      .where(eq(autoExecutorConfig.userId, userId))
+      .limit(1);
+    if (rows[0]) {
+      return {
+        shadowMode: rows[0].brainShadowMode ?? true,
+        gateEnabled: rows[0].brainGateEnabled ?? false,
+        driverEnabled: rows[0].brainDriverEnabled ?? false,
+      };
+    }
+    return this.defaultConfig;
   }
 
   /**
-   * Run the ReAct loop on a market signal trigger.
-   * @param opts.shadowMode  per-call override (authoritative); falls back to the constructor value.
+   * Evaluate a signal using LLM (Ollama qwen3:4b-q8).
+   * Gathers full context and returns a structured decision.
    */
-  async decide(
-    symbol: string,
-    userId: number,
-    signalDetails?: any,
-    opts?: { shadowMode?: boolean }
-  ): Promise<any> {
-    const shadowMode = opts?.shadowMode ?? this.shadowMode;
+  async evaluate(signal: any, userId: number = 1): Promise<BrainDecision & { episodeId: number }> {
     const db = getDb();
-    
-    // 1. Observe: Build initial market and portfolio snapshots
-    const marketSnapshot = toolRegistry.getMarketSnapshot(symbol);
-    const portfolioSnapshot = await toolRegistry.getPortfolioSnapshot(userId);
+    const config = await this.getConfig(userId);
+    const symbol = this.normalizeSymbol(signal.symbol || "BTCUSDT");
 
-    // Context preparation
-    const currentContext = {
-      timestamp: new Date().toISOString(),
-      market: marketSnapshot,
-      portfolio: portfolioSnapshot,
-      signal: signalDetails || null,
+    // 1. Build full context
+    const context = await this.buildContext(symbol, userId, signal);
+
+    // 2. LLM reasoning
+    let llmOutput: any;
+    try {
+      llmOutput = await this.callLLMReasoner(context);
+    } catch (err: any) {
+      console.warn(`[Brain Orchestrator] LLM failed: ${err.message}. Falling back to rule-based.`);
+      llmOutput = this.ruleBasedFallback(context);
+    }
+
+    // 3. Build structured decision
+    const decision: BrainDecision = {
+      mode: llmOutput.verdict === "APPROVE" ? "enter" : "hold",
+      symbol,
+      side: signal.direction as "long" | "short",
+      confidence: llmOutput.confidence ?? 0.7,
+      rationale: llmOutput.rationale ?? "No rationale provided",
+      sizePct: llmOutput.adjustedSizePct ?? 2.0,
+      stopLossPct: llmOutput.adjustedSlPct ?? 1.0,
+      takeProfitPct: llmOutput.adjustedTpPct ?? 3.0,
+      timeInForce: "limit",
+      riskNotes: llmOutput.riskNotes ?? [],
+      evidence: {
+        market: [JSON.stringify(context.marketSnapshot)],
+        memory: context.similarEpisodes.map((e: any) =>
+          JSON.stringify({ verdict: e.brainVerdict, pnl: e.outcomePnl, symbol: e.marketSymbol })
+        ),
+        signals: signal ? [JSON.stringify(signal)] : [],
+      },
+      verdict: BrainVerdict[llmOutput.verdict as keyof typeof BrainVerdict] ?? BrainVerdict.CAUTION,
+      adjustedAllocationPct: llmOutput.adjustedAllocationPct,
+      adjustedSizeUsdt: llmOutput.adjustedSizeUsdt,
+      adjustedLeverage: llmOutput.adjustedLeverage,
+      adjustedSlPct: llmOutput.adjustedSlPct,
+      adjustedTpPct: llmOutput.adjustedTpPct,
     };
 
-    // 2. Build the ReAct prompt
-    const systemPrompt = `You are a quantitative trading brain. You must decide whether to LONG, SHORT, or HOLD based on current market dynamics and risk profiles.
-You have access to these read-only tools (written as function call syntax):
-- getMarketSnapshot(symbol)
-- getPortfolioSnapshot()
-
-You must respond in exactly this format:
-Thought: <reasoning about current status>
-Action: <tool_name>(<arguments>)
-Observation: <result from tool>
-... repeat until you have enough info, then:
-Final Answer: PROPOSE_TRADE LONG|SHORT|HOLD <size_pct> <stop_loss_pct> <take_profit_pct> <rationale>
-
-Ensure Final Answer matches this Zod validation constraints schema:
-- size_pct: 0.1 to 5.0 (percent of portfolio balance)
-- stop_loss_pct: 0.5 to 5.0
-- take_profit_pct: 0.5 to 15.0
-- rationale: A concise summary string.
-
-If you decide not to trade, return:
-Final Answer: PROPOSE_TRADE HOLD 0 0 0 "No clear setup"
-
-Current Context:
-${JSON.stringify(currentContext, null, 2)}
-`;
-
-    let conversationLog = `Prompt:\n${systemPrompt}\n\n`;
-    let steps = 0;
-    let finalAnswerText = "";
-    let lastResponse = "";
-
-    // 3. ReAct loop execution (limit to 3 iterations for latency control)
-    while (steps < 3) {
-      console.log(`[Brain Orchestrator] Running step ${steps + 1}...`);
-      const response = await callLLM(systemPrompt + "\n" + lastResponse);
-      
-      if (!response) {
-        console.warn("[Brain Orchestrator] LLM returned empty response or timed out.");
-        finalAnswerText = 'PROPOSE_TRADE HOLD 0 0 0 "LLM Timeout"';
-        break;
-      }
-
-      conversationLog += `Response Step ${steps + 1}:\n${response}\n\n`;
-      console.log(`[Brain Orchestrator] LLM output:\n`, response);
-
-      // Parse output
-      const finalMatch = response.match(/Final Answer:\s*(PROPOSE_TRADE\s+.*)/i);
-      if (finalMatch) {
-        finalAnswerText = finalMatch[1];
-        break;
-      }
-
-      const actionMatch = response.match(/Action:\s*(\w+)\((.*)\)/i);
-      if (actionMatch) {
-        const toolName = actionMatch[1];
-        const arg = actionMatch[2].replace(/['"]/g, "").trim();
-        let toolResult = "";
-
-        if (toolName === "getMarketSnapshot") {
-          const snap = toolRegistry.getMarketSnapshot(arg || symbol);
-          toolResult = JSON.stringify(snap);
-        } else if (toolName === "getPortfolioSnapshot") {
-          const snap = await toolRegistry.getPortfolioSnapshot(userId);
-          toolResult = JSON.stringify(snap);
-        } else {
-          toolResult = `Error: Unknown tool ${toolName}`;
-        }
-
-        console.log(`[Brain Orchestrator] Executed action: ${toolName}, result: ${toolResult}`);
-        lastResponse += `\nThought: Executing tool ${toolName}\nAction: ${toolName}(${arg})\nObservation: ${toolResult}\n`;
-      } else {
-        // No parseable action and no final answer, force exit with HOLD
-        finalAnswerText = 'PROPOSE_TRADE HOLD 0 0 0 "Parse failure"';
-        break;
-      }
-
-      steps++;
-    }
-
-    if (!finalAnswerText) {
-      finalAnswerText = 'PROPOSE_TRADE HOLD 0 0 0 "No decision reached"';
-    }
-
-    // 4. Parse the final answer into structured JSON schema
-    let parsedDecision: BrainDecision;
-    try {
-      const parts = finalAnswerText.split(/\s+/);
-      const side = parts[1]?.toLowerCase() as "long" | "short" | "hold";
-      const sizePct = parseFloat(parts[2]) || 0;
-      const stopLossPct = parseFloat(parts[3]) || 0;
-      const takeProfitPct = parseFloat(parts[4]) || 0;
-      const rationale = parts.slice(5).join(" ").replace(/['"]/g, "").trim();
-
-      parsedDecision = {
-        mode: side === "hold" ? "hold" : "enter",
-        symbol: symbol,
-        side: side === "hold" ? undefined : side,
-        confidence: side === "hold" ? 0 : 0.8,
-        rationale: rationale || "Autonomous proposal",
-        sizePct: sizePct || undefined,
-        stopLossPct: stopLossPct || undefined,
-        takeProfitPct: takeProfitPct || undefined,
-        timeInForce: "limit",
-        riskNotes: [],
-        evidence: {
-          market: [JSON.stringify(marketSnapshot)],
-          memory: [],
-          signals: signalDetails ? [JSON.stringify(signalDetails)] : [],
-        }
-      };
-
-      // Zod validation verification
-      brainDecisionSchema.parse(parsedDecision);
-    } catch (err: any) {
-      console.warn("[Brain Orchestrator] Parse failed, falling back to HOLD.", err.message);
-      parsedDecision = {
-        mode: "hold",
-        confidence: 0,
-        rationale: `Parse/validation error: ${err.message}`,
-        riskNotes: ["Invalid output structure"],
-        evidence: { market: [], memory: [], signals: [] }
-      };
-    }
-
-    // 5. Run Safety Governor Check if not in shadow mode
-    let approved = true;
+    // 4. Governor check (advisory unless gate is enabled)
     let governorResult: any = { approved: true };
-    if (!shadowMode) {
+    if (!config.shadowMode) {
       try {
-        governorResult = await brainGovernor.check(userId, parsedDecision, currentContext);
-        approved = governorResult.approved;
-        if (approved && governorResult.adjustedSizePct !== undefined) {
-          parsedDecision.sizePct = governorResult.adjustedSizePct;
-        }
-      } catch (govErr: any) {
-        console.error("[Brain Orchestrator] Governor check error:", govErr.message);
-        approved = false;
-        governorResult = { approved: false, reason: `Governor crash: ${govErr.message}` };
+        governorResult = await brainGovernor.check(userId, decision as any, context);
+      } catch (err: any) {
+        console.error("[Brain Orchestrator] Governor check error:", err.message);
+        governorResult = { approved: false, reason: `Governor crash: ${err.message}` };
       }
     }
 
-    // 6. Store the decision episode in the PostgreSQL database
+    // 5. Persist episode with full attribution
     let insertedId = 0;
     try {
       const [result] = await db.insert(brainEpisodes).values({
         userId,
-        triggerType: signalDetails?.source ?? (signalDetails ? "signal" : "manual"),
+        triggerType: signal ? "signal" : "manual",
         marketSymbol: symbol,
-        observation: currentContext,
-        reasoning: conversationLog,
-        proposedAction: parsedDecision,
-        governorJson: { shadowMode, ...governorResult },
-        actualAction: shadowMode
-          ? { status: "shadow_logged" }
-          : (approved ? { status: "governor_approved" } : { status: "governor_rejected", reason: governorResult.reason }),
+        observation: {
+          timestamp: new Date().toISOString(),
+          market: context.marketSnapshot,
+          portfolio: context.portfolioSnapshot,
+          regime: context.regime ? { regime: context.regime.regime, strategy: context.regime.strategy } : null,
+          signal: signal || null,
+          similarEpisodes: context.similarEpisodes.length,
+        },
+        reasoning: decision.rationale,
+        proposedAction: decision,
+        governorJson: { shadowMode: config.shadowMode, ...governorResult },
+        actualAction: {
+          status: config.shadowMode
+            ? "shadow_logged"
+            : governorResult.approved
+              ? "governor_approved"
+              : "governor_rejected",
+          reason: governorResult.reason,
+        },
+        signalSource: signal?.metadata?.source || "confluence",
+        brainVerdict: decision.verdict,
+        governorVerdict: governorResult.approved ? "approved" : "rejected",
+        governorGate: governorResult.approved ? null : governorResult.reason,
+        executionResult: config.shadowMode ? "shadow" : null,
       }).returning({ id: brainEpisodes.id });
 
       insertedId = result.id;
-      console.log(`[Brain Orchestrator] Saved episode ID: ${insertedId}`);
+      console.log(
+        `[Brain Orchestrator] Episode ${insertedId} | Verdict: ${decision.verdict} | Confidence: ${(decision.confidence * 100).toFixed(0)}% | Symbol: ${symbol}`
+      );
     } catch (dbErr: any) {
       console.error("[Brain Orchestrator] Database write error:", dbErr.message);
     }
 
-    // Broadcast for the live brain.decisionStream subscription.
-    brainEvents.emit("decision", {
-      episodeId: insertedId,
-      symbol,
-      decision: parsedDecision,
-      approved,
-      shadowMode,
-      reasoning: conversationLog,
-      rejectReason: governorResult.reason,
-      ts: Date.now(),
-    });
+    return { ...decision, episodeId: insertedId };
+  }
+
+  // ─── Context Building ───
+
+  private async buildContext(symbol: string, userId: number, signal: any) {
+    const db = getDb();
+
+    const configRows = await db
+      .select({
+        paperCurrency: autoExecutorConfig.paperCurrency,
+        paperStartingBalance: autoExecutorConfig.paperStartingBalance,
+      })
+      .from(autoExecutorConfig)
+      .where(eq(autoExecutorConfig.userId, userId))
+      .limit(1);
+    const paperCurrency = configRows[0]?.paperCurrency ?? "INR";
+    const paperStarting = configRows[0]?.paperStartingBalance
+      ? parseFloat(configRows[0].paperStartingBalance)
+      : 1000000;
+
+    const [marketSnapshot, portfolioSnapshot, wallet, session] = await Promise.all([
+      Promise.resolve(toolRegistry.getMarketSnapshot(symbol)),
+      toolRegistry.getPortfolioSnapshot(userId),
+      getPaperWallet(userId, paperStarting, paperCurrency),
+      getOrCreateSession(userId, 0),
+    ]);
+
+    const regime = latestRegimeCache.get(symbol);
+
+    // Fetch similar episodes from pgvector memory
+    const observationText = `${symbol} ${signal?.direction || ""} ${signal?.compositeScore || ""} ${regime?.regime || ""}`;
+    const similarEpisodes = await memoryStore.getSimilarEpisodes(observationText, 5);
+
+    // Fetch latest market regime from DB
+    const regimeRows = await db
+      .select()
+      .from(marketRegimes)
+      .where(eq(marketRegimes.symbol, symbol))
+      .orderBy(desc(marketRegimes.timestamp))
+      .limit(1);
 
     return {
-      episodeId: insertedId,
-      approved,
-      decision: parsedDecision,
-      shadowMode,
-      rejectReason: governorResult.reason
+      symbol,
+      marketSnapshot,
+      portfolioSnapshot,
+      regime,
+      dbRegime: regimeRows[0] || null,
+      session,
+      wallet,
+      similarEpisodes,
+      signal,
     };
+  }
+
+  // ─── LLM Reasoner ───
+
+  private async callLLMReasoner(ctx: any): Promise<any> {
+    const systemPrompt = `You are the Brain of Janus, an autonomous crypto futures trading system. You evaluate trading signals using ALL available information: market state, portfolio health, regime classification, historical episode memory, and signal metadata.
+
+You MUST respond in exactly this JSON format (no markdown, no other text):
+{
+  "verdict": "APPROVE" | "CAUTION" | "REDUCE_RISK" | "EXIT_NOW",
+  "confidence": 0.0-1.0,
+  "rationale": "Concise reasoning string",
+  "riskNotes": ["note1", "note2"],
+  "adjustedAllocationPct": 0.005-0.20,
+  "adjustedSlPct": 0.5-5.0,
+  "adjustedTpPct": 0.5-15.0
+}
+
+Decision rules:
+- APPROVE: Signal is high quality, aligned with regime, portfolio healthy
+- CAUTION: Uncertain — no trade, or trade at minimum size
+- REDUCE_RISK: Signal has merit but conditions are marginal — tighten stops, reduce size
+- EXIT_NOW: Strong rejection — counter-trend, high drawdown, or dangerous conditions
+
+Capital allocation rules:
+- Base allocation is 10% of free balance (configurable)
+- High conviction + aligned regime → can increase to 15-20%
+- Marginal signal + volatile regime → reduce to 3-5%
+- High drawdown or consecutive losses → reduce to 1-3%
+- Never exceed 20% of free balance per trade
+- Never go below 0.5% of free balance per trade
+
+Never approve if:
+- Daily drawdown > 3%
+- Cooldown is active
+- Regime conflicts with signal direction
+- Spread > 0.01%
+- CVD contradicts signal direction`;
+
+    const userPrompt = `Current Market Snapshot for ${ctx.symbol}:
+${JSON.stringify(ctx.marketSnapshot, null, 2)}
+
+Portfolio State:
+Equity: ${ctx.portfolioSnapshot.equity} | Drawdown: ${(ctx.portfolioSnapshot.drawdownPct * 100).toFixed(2)}% | Trades Today: ${ctx.session.tradeCount} | Consecutive Losses: ${ctx.session.consecutiveLosses}
+
+Market Regime: ${ctx.regime?.regime || "unknown"} | Direction: ${ctx.dbRegime?.direction || "unknown"} | Volatility: ${ctx.dbRegime?.volatility || "unknown"}
+
+Signal: ${JSON.stringify(ctx.signal, null, 2)}
+
+Historical Context (last 5 similar episodes):
+${ctx.similarEpisodes.map((e: any) => `- ${e.marketSymbol}: ${e.brainVerdict} → PnL ${e.outcomePnl}`).join("\n") || "No similar episodes found."}
+
+Render your verdict.`;
+
+    const response = await callLLM(systemPrompt + "\n\n" + userPrompt);
+    if (!response) throw new Error("LLM returned empty");
+
+    // Extract JSON from response
+    const jsonMatch = response.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error("No JSON found in LLM response");
+
+    return JSON.parse(jsonMatch[0]);
+  }
+
+  // ─── Rule-Based Fallback ───
+
+  private ruleBasedFallback(ctx: any): any {
+    const { signal, regime, session, marketSnapshot } = ctx;
+
+    const drawdownPct = session.startingBalance > 0
+      ? Math.abs(Math.min(0, session.realizedPnl)) / session.startingBalance
+      : 0;
+    if (drawdownPct >= 0.03) {
+      return { verdict: "EXIT_NOW", confidence: 0.95, rationale: `High drawdown ${(drawdownPct * 100).toFixed(1)}%`, riskNotes: ["Drawdown circuit"], adjustedAllocationPct: 0, adjustedSlPct: 1, adjustedTpPct: 3 };
+    }
+    if (session.inCooldown) {
+      return { verdict: "EXIT_NOW", confidence: 0.95, rationale: `Cooldown active`, riskNotes: ["Cooldown"], adjustedAllocationPct: 0, adjustedSlPct: 1, adjustedTpPct: 3 };
+    }
+
+    const compositeScore = parseFloat(signal?.compositeScore ?? "0");
+    if (compositeScore < 75) {
+      return { verdict: "CAUTION", confidence: 0.6, rationale: `Low confidence ${compositeScore}`, riskNotes: ["Low score"], adjustedAllocationPct: 0.03, adjustedSlPct: 0.5, adjustedTpPct: 3 };
+    }
+
+    if (regime?.regime?.includes("range") && signal?.direction) {
+      return { verdict: "REDUCE_RISK", confidence: 0.7, rationale: `Trend signal in ranging regime`, riskNotes: ["Regime mismatch"], adjustedAllocationPct: 0.05, adjustedSlPct: 0.5, adjustedTpPct: 2 };
+    }
+
+    if (marketSnapshot?.spreadPercent > 0.01) {
+      return { verdict: "CAUTION", confidence: 0.6, rationale: `Wide spread`, riskNotes: ["Liquidity"], adjustedAllocationPct: 0.03, adjustedSlPct: 0.5, adjustedTpPct: 3 };
+    }
+
+    return { verdict: "APPROVE", confidence: 0.8, rationale: `All checks pass`, riskNotes: [], adjustedAllocationPct: 0.10, adjustedSlPct: 1, adjustedTpPct: 3 };
+  }
+
+  private normalizeSymbol(input: string): string {
+    return input.startsWith("B-")
+      ? input.slice(2).replace("_USDT", "USDT").replace("_", "")
+      : input;
   }
 }

@@ -15,14 +15,15 @@ import type {
 } from "./types";
 import { PositionAction as PA } from "./types";
 import { getDb } from "../../queries/connection";
-import { positions, futuresWallets, signals } from "@db/schema";
+import { positions, futuresWallets, signals, autoExecutorConfig } from "@db/schema";
 import { aiAssessments } from "@db/position-manager-schema";
 import { eq, and, desc, gte as _gte } from "drizzle-orm";
 import { userPositionsCache, markPriceCache } from "../coindcx-ws";
 import { latestTickerCache } from "../streaming";
 import { env } from "../../lib/env";
 import { getPaperWallet } from "../paper-wallet";
-
+import { registerPositionForTrailing, syncTrailingStopLoss, isPositionTracked, unregisterPosition } from "../trailing-stop";
+import type { StrategyType } from "../strategy-config";
 // ─── Position Lifecycle Manager ──────────────────────────────────────────────
 // Central orchestrator: syncs positions, runs assessment loops,
 // coordinates protection → AI/code advice → policy → execution.
@@ -180,12 +181,18 @@ export class PositionLifecycleManager {
         source: dbPos.signalId ? "BOT" : "MANUAL",
         lifecycleState,
         isPaper: dbPos.isPaper,
+        marginCurrency: dbPos.marginCurrency ?? "USDT",
         openedAt: dbPos.createdAt,
         updatedAt: dbPos.updatedAt,
         riskRewardRatio,
         slDistancePct,
         liqDistancePct,
         holdingMinutes,
+        // Persisted state fields
+        breakevenApplied: dbPos.breakevenApplied ?? false,
+        extremePrice: dbPos.extremePrice ? parseFloat(dbPos.extremePrice) : null,
+        openedAlertSent: dbPos.openedAlertSent ?? false,
+        strategyType: dbPos.strategyType ?? "intraday",
       };
 
       managed.set(String(dbPos.id), mp);
@@ -216,9 +223,49 @@ export class PositionLifecycleManager {
       }
     }
 
+    // Track which positions are newly discovered before upserting
+    const newlyDiscoveredIds = new Set<number>();
+    for (const mp of managed.values()) {
+      if (!positionStore.get(mp.id)) {
+        newlyDiscoveredIds.add(mp.id);
+      }
+    }
+
     // Upsert into store
     for (const mp of managed.values()) {
       positionStore.upsert(mp);
+    }
+
+    // Re-register all open positions with the trailing-stop engine
+    // (critical after restart when trackedPositions is empty)
+    for (const mp of managed.values()) {
+      if (mp.stopLoss) {
+        if (!isPositionTracked(mp.id)) {
+          registerPositionForTrailing({
+            id: mp.id,
+            symbol: mp.binanceSymbol,
+            side: mp.side === "LONG" ? "long" : "short",
+            entryPrice: mp.entryPrice,
+            stopLoss: mp.stopLoss,
+            strategyType: mp.strategyType as StrategyType,
+            userId: mp.userId,
+            size: mp.quantity,
+          });
+        } else {
+          // Position already tracked — sync DB stop-loss if it has improved
+          syncTrailingStopLoss(mp.id, mp.stopLoss);
+        }
+      }
+    }
+
+    // Mark newly discovered positions as alerted in DB so restarts don't re-alert
+    for (const mp of managed.values()) {
+      if (newlyDiscoveredIds.has(mp.id) && !mp.openedAlertSent) {
+        db.update(positions)
+          .set({ openedAlertSent: true })
+          .where(eq(positions.id, mp.id))
+          .catch(() => {});
+      }
     }
 
     // Remove positions that are no longer in DB as open
@@ -226,6 +273,7 @@ export class PositionLifecycleManager {
     for (const stored of positionStore.getAll()) {
       if (!dbIds.has(stored.id)) {
         positionStore.remove(stored.id);
+        unregisterPosition(stored.id);
       }
     }
   }
@@ -410,7 +458,21 @@ export class PositionLifecycleManager {
     try {
       const isPaper = env.paperTrading || !env.placeOrders;
       if (isPaper) {
-        const pw = await getPaperWallet(this.config.userId);
+        const db = getDb();
+        const configRows = await db
+          .select({
+            paperCurrency: autoExecutorConfig.paperCurrency,
+            paperStartingBalance: autoExecutorConfig.paperStartingBalance,
+          })
+          .from(autoExecutorConfig)
+          .where(eq(autoExecutorConfig.userId, this.config.userId))
+          .limit(1);
+        const paperCurrency = configRows[0]?.paperCurrency ?? "INR";
+        const paperStarting = configRows[0]?.paperStartingBalance
+          ? parseFloat(configRows[0].paperStartingBalance)
+          : 1000000;
+
+        const pw = await getPaperWallet(this.config.userId, paperStarting, paperCurrency);
         return pw.balance;
       }
       const db = getDb();
@@ -435,7 +497,21 @@ export class PositionLifecycleManager {
     try {
       const isPaper = env.paperTrading || !env.placeOrders;
       if (isPaper) {
-        const pw = await getPaperWallet(this.config.userId);
+        const db = getDb();
+        const configRows = await db
+          .select({
+            paperCurrency: autoExecutorConfig.paperCurrency,
+            paperStartingBalance: autoExecutorConfig.paperStartingBalance,
+          })
+          .from(autoExecutorConfig)
+          .where(eq(autoExecutorConfig.userId, this.config.userId))
+          .limit(1);
+        const paperCurrency = configRows[0]?.paperCurrency ?? "INR";
+        const paperStarting = configRows[0]?.paperStartingBalance
+          ? parseFloat(configRows[0].paperStartingBalance)
+          : 1000000;
+
+        const pw = await getPaperWallet(this.config.userId, paperStarting, paperCurrency);
         return pw.equity;
       }
       const db = getDb();

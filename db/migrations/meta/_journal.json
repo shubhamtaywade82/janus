@@ -68,15 +68,71 @@
     {
       "idx": 9,
       "version": "7",
-      "when": 1780531200000,
-      "tag": "0008_market_positioning_data",
+      "when": 1780565558430,
+      "tag": "0009_bent_starhawk",
       "breakpoints": true
     },
     {
       "idx": 10,
       "version": "7",
-      "when": 1780565558430,
-      "tag": "0009_bent_starhawk",
+      "when": 1780565560000,
+      "tag": "0010_green_lily_hollister",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1780565561000,
+      "tag": "0011_risk_sessions",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1780565562000,
+      "tag": "0012_market_regimes",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "7",
+      "when": 1780565563000,
+      "tag": "0013_episode_attribution",
+      "breakpoints": true
+    },
+    {
+      "idx": 14,
+      "version": "7",
+      "when": 1780565564000,
+      "tag": "0014_pgvector_episodes",
+      "breakpoints": true
+    },
+    {
+      "idx": 15,
+      "version": "7",
+      "when": 1780565565000,
+      "tag": "0015_brain_metrics_views",
+      "breakpoints": true
+    },
+    {
+      "idx": 16,
+      "version": "7",
+      "when": 1780821012121,
+      "tag": "0016_gorgeous_jetstream",
+      "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1780824183864,
+      "tag": "0017_purple_gauntlet",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1780830326547,
+      "tag": "0018_outstanding_matthew_murdock",
       "breakpoints": true
     }
   ]

@@ -1,7 +1,9 @@
 import { getDb } from "../queries/connection";
 import { brainStrategies, brainEpisodes } from "@db/schema";
 import { callLLM } from "../services/ollama";
-import { eq } from "drizzle-orm";
+import { eq, count } from "drizzle-orm";
+
+const MIN_EPISODES_FOR_EVOLUTION = 500;
 
 /**
  * Simulates a historical backtest of the strategy
@@ -59,6 +61,15 @@ Produce a new mutated prompt. Respond with the modified prompt template text onl
  */
 export async function evolveStrategies() {
   const db = getDb();
+
+  // Gate: require minimum episode count before trusting evolution
+  const [episodeCountRow] = await db.select({ value: count() }).from(brainEpisodes);
+  const totalEpisodes = episodeCountRow?.value ?? 0;
+  if (totalEpisodes < MIN_EPISODES_FOR_EVOLUTION) {
+    console.log(`[Brain Evolution] Skipped — only ${totalEpisodes} episodes (need ${MIN_EPISODES_FOR_EVOLUTION}).`);
+    return;
+  }
+
   console.log("[Brain Evolution] Starting strategy evolution cycle...");
 
   // 1. Fetch all strategy profiles

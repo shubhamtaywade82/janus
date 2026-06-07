@@ -24,29 +24,6 @@ interface AlertsModalProps {
   onClose: () => void;
 }
 
-export function playAlertChime() {
-  try {
-    const audioCtx = new (window.AudioContext || (window as any).webkitAudioContext)();
-    const playTone = (freq: number, start: number, duration: number) => {
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.type = "sine";
-      osc.frequency.setValueAtTime(freq, start);
-      gain.gain.setValueAtTime(0.12, start);
-      gain.gain.exponentialRampToValueAtTime(0.001, start + duration);
-      osc.connect(gain);
-      gain.connect(audioCtx.destination);
-      osc.start(start);
-      osc.stop(start + duration);
-    };
-    const now = audioCtx.currentTime;
-    playTone(523.25, now, 0.15);
-    playTone(783.99, now + 0.1, 0.3);
-  } catch (err) {
-    console.error("Failed to synthesize audio chime:", err);
-  }
-}
-
 const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
   const [activeTab, setActiveTab] = useState<"create" | "rules" | "logs" | "telegram">("create");
 

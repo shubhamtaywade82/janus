@@ -2,6 +2,9 @@ import { globalRiskEngine, getOrCreateSession } from "../services/risk-engine";
 import { marketStateManager } from "../services/market-state";
 import { getPaperWallet } from "../services/paper-wallet";
 import type { BrainDecision } from "./schemas";
+import { getDb } from "../queries/connection";
+import { autoExecutorConfig } from "@db/schema";
+import { eq } from "drizzle-orm";
 
 export interface GovernorOutcome {
   approved: boolean;
@@ -39,8 +42,22 @@ export const brainGovernor = {
     }
 
     // 3. Run primary RiskEngine logic
-    const wallet = await getPaperWallet(userId);
-    const session = getOrCreateSession(userId, wallet.equity);
+    const db = getDb();
+    const configRows = await db
+      .select({
+        paperCurrency: autoExecutorConfig.paperCurrency,
+        paperStartingBalance: autoExecutorConfig.paperStartingBalance,
+      })
+      .from(autoExecutorConfig)
+      .where(eq(autoExecutorConfig.userId, userId))
+      .limit(1);
+    const paperCurrency = configRows[0]?.paperCurrency ?? "INR";
+    const paperStarting = configRows[0]?.paperStartingBalance
+      ? parseFloat(configRows[0].paperStartingBalance)
+      : 1000000;
+
+    const wallet = await getPaperWallet(userId, paperStarting, paperCurrency);
+    const session = await getOrCreateSession(userId, wallet.equity);
 
     const checkResult = globalRiskEngine.checkTradeAllowed(session, {
       walletBalance: wallet.balance,

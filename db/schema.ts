@@ -148,6 +148,9 @@ export const positions = pgTable(
     isPaper: boolean("is_paper").default(false).notNull(),
     entryReason: text("entry_reason"),
     exitReason: text("exit_reason"),
+    breakevenApplied: boolean("breakeven_applied").default(false).notNull(),
+    extremePrice: decimal("extreme_price", { precision: 18, scale: 8 }),
+    openedAlertSent: boolean("opened_alert_sent").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),
     closedAt: timestamp("closed_at"),
@@ -330,7 +333,8 @@ export const autoExecutorConfig = pgTable("auto_executor_config", {
   maxTotalPositions: integer("max_total_positions").default(3),
   capitalAllocationPct: decimal("capital_allocation_pct", { precision: 5, scale: 3 }).default("0.100"), // fraction of free balance per trade, e.g. 0.100 = 10%
   useStrategyLeverage: boolean("use_strategy_leverage").default(true).notNull(), // true = use STRATEGY_CONFIGS[strategy].maxLeverage, false = use defaultLeverage
-  paperStartingBalance: decimal("paper_starting_balance", { precision: 12, scale: 2 }).default("10000"),
+  paperStartingBalance: decimal("paper_starting_balance", { precision: 12, scale: 2 }).default("100000"),
+  paperCurrency: marginCurrencyEnum("paper_currency").default("INR").notNull(),
   // AI Brain participation in the autonomous loop
   brainDriverEnabled: boolean("brain_driver_enabled").default(false).notNull(), // brain autonomously proposes/opens trades
   brainGateEnabled: boolean("brain_gate_enabled").default(false).notNull(),     // brain acts as an extra confirmation gate on confluence signals
@@ -357,6 +361,53 @@ export const equitySnapshots = pgTable("equity_snapshots", {
 }));
 
 export type EquitySnapshot = typeof equitySnapshots.$inferSelect;
+
+// ─── Risk Sessions (persisted daily trading state — survives restarts) ───
+export const riskSessions = pgTable(
+  "risk_sessions",
+  {
+    id: serial("id").primaryKey(),
+    userId: integer("user_id").notNull(),
+    tradingDay: varchar("trading_day", { length: 10 }).notNull(), // YYYY-MM-DD
+    startingEquity: decimal("starting_equity", { precision: 18, scale: 4 }).notNull(),
+    currentEquity: decimal("current_equity", { precision: 18, scale: 4 }).notNull(),
+    realizedPnl: decimal("realized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
+    unrealizedPnl: decimal("unrealized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
+    tradeCount: integer("trade_count").default(0).notNull(),
+    consecutiveLosses: integer("consecutive_losses").default(0).notNull(),
+    cooldownUntil: timestamp("cooldown_until"),
+    maxDrawdownHit: boolean("max_drawdown_hit").default(false).notNull(),
+    updatedAt: timestamp("updated_at").defaultNow().notNull(),
+  },
+  (table) => ({
+    userDayIdx: unique("uq_risk_sessions_user_day").on(table.userId, table.tradingDay),
+    userTimeIdx: index("idx_risk_sessions_user_time").on(table.userId, table.updatedAt),
+  })
+);
+
+export type RiskSessionRow = typeof riskSessions.$inferSelect;
+
+// ─── Market Regimes (shared context for Signal Engine, Brain, Reflection, Backtester) ───
+export const marketRegimes = pgTable(
+  "market_regimes",
+  {
+    id: serial("id").primaryKey(),
+    symbol: varchar("symbol", { length: 20 }).notNull(),
+    regime: varchar("regime", { length: 20 }).notNull(),       // trending | range | volatile
+    direction: varchar("direction", { length: 20 }).notNull(), // bullish | bearish | neutral
+    volatility: varchar("volatility", { length: 20 }).notNull(), // low | normal | high
+    liquidity: varchar("liquidity", { length: 30 }),             // buy_side_targeted | sell_side_targeted | balanced
+    funding: varchar("funding", { length: 20 }),                 // neutral | overheated_long | overheated_short
+    marketStructure: varchar("market_structure", { length: 20 }), // continuation | reversal | accumulation
+    confidence: decimal("confidence", { precision: 5, scale: 4 }).default("0.0000").notNull(),
+    timestamp: timestamp("timestamp").defaultNow().notNull(),
+  },
+  (table) => ({
+    symbolTimeIdx: index("idx_market_regimes_symbol_time").on(table.symbol, table.timestamp),
+  })
+);
+
+export type MarketRegime = typeof marketRegimes.$inferSelect;
 
 // ─── Executor Decisions (structured, queryable, restart-surviving decision log) ───
 // Every auto-executor decision (execute or gate-level skip) is persisted here so the
@@ -626,6 +677,16 @@ export const brainEpisodes = pgTable("brain_episodes", {
   outcomePnl: decimal("outcome_pnl", { precision: 16, scale: 8 }),
   outcomeTime: timestamp("outcome_time"),
   reflection: text("reflection"),
+  // ─── Decision Attribution (added for measurable Brain evaluation) ───
+  signalSource: varchar("signal_source", { length: 50 }),     // "confluence" | "manual" | "brain"
+  brainVerdict: varchar("brain_verdict", { length: 20 }),     // APPROVE | CAUTION | REDUCE_RISK | EXIT_NOW
+  governorVerdict: varchar("governor_verdict", { length: 20 }), // approved | rejected
+  governorGate: varchar("governor_gate", { length: 50 }),     // which gate triggered (if rejected)
+  executionResult: varchar("execution_result", { length: 20 }), // executed | skipped | error
+  positionId: integer("position_id"),                         // FK to positions (if executed)
+  // NOTE: the pgvector `embedding` column is NOT modelled in Drizzle — it is managed
+  // by migration (0014, docker ankane/pgvector) and queried via raw SQL in brain-memory.
+  // Keeping it out of the ORM model means select() works on hosts without pgvector.
   createdAt: timestamp("created_at").defaultNow().notNull(),
 });
 
@@ -753,29 +814,6 @@ export const paperEquitySnapshots = pgTable("paper_equity_snapshots", {
 });
 
 export type PaperEquitySnapshot = typeof paperEquitySnapshots.$inferSelect;
-
-// ─── Risk Sessions (daily trading circuit-breaker state, persisted across restarts) ───
-export const riskSessions = pgTable(
-  "risk_sessions",
-  {
-    id: serial("id").primaryKey(),
-    userId: integer("user_id").notNull(),
-    date: varchar("date", { length: 10 }).notNull(), // YYYY-MM-DD UTC
-    startingBalance: decimal("starting_balance", { precision: 18, scale: 8 }).default("0").notNull(),
-    realizedPnl: decimal("realized_pnl", { precision: 18, scale: 8 }).default("0").notNull(),
-    tradeCount: integer("trade_count").default(0).notNull(),
-    consecutiveLosses: integer("consecutive_losses").default(0).notNull(),
-    inCooldown: boolean("in_cooldown").default(false).notNull(),
-    cooldownUntil: timestamp("cooldown_until"),
-    updatedAt: timestamp("updated_at").defaultNow().notNull(),
-  },
-  (table) => ({
-    uqRiskSessionUserDate: unique("uq_risk_session_user_date").on(table.userId, table.date),
-    userDateIdx: index("idx_risk_sessions_user_date").on(table.userId, table.date),
-  })
-);
-
-export type RiskSessionRow = typeof riskSessions.$inferSelect;
 
 // ─── Kill Switch State (single-row table for atomic halt persistence across restarts) ───
 export const killSwitchState = pgTable("kill_switch_state", {

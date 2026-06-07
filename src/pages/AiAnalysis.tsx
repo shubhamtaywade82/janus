@@ -265,7 +265,7 @@ export default function AiAnalysis() {
                   <div className="flex justify-between py-1 border-b border-zinc-800/30">
                     <span className="text-zinc-500">Take Profit Targets</span>
                     <div className="flex gap-1.5 font-semibold text-j-up-bright tabular-nums">
-                      {analysis.trade_setup.targets.map((t, idx) => (
+                      {analysis.trade_setup.targets.map((t: number, idx: number) => (
                         <span key={idx} className="bg-j-up-bright/10 px-1 py-0.2 rounded text-[10px]">
                           ${t.toFixed(2)}
                         </span>
@@ -320,7 +320,7 @@ export default function AiAnalysis() {
                     </tr>
                   </thead>
                   <tbody>
-                    {(Object.keys(analysis.multi_timeframe) as (keyof typeof analysis.multi_timeframe)[]).map((tf) => {
+                    {(Object.keys(analysis.multi_timeframe) as string[]).map((tf) => {
                       const item = analysis.multi_timeframe[tf];
                       if (!item) return null;
                       return (
@@ -398,7 +398,7 @@ export default function AiAnalysis() {
                   {analysis.order_blocks.bullish.length === 0 ? (
                     <div className="text-zinc-600 text-[10px]">No active bullish OB detected.</div>
                   ) : (
-                    analysis.order_blocks.bullish.map((ob, i) => (
+                    analysis.order_blocks.bullish.map((ob: any, i: number) => (
                       <div key={i} className="flex justify-between text-zinc-400 font-medium bg-[#09090b]/20 p-1 rounded">
                         <span className="uppercase font-bold text-zinc-500">{ob.type}</span>
                         <span className="tabular-nums">
@@ -413,7 +413,7 @@ export default function AiAnalysis() {
                   {analysis.order_blocks.bearish.length === 0 ? (
                     <div className="text-zinc-600 text-[10px]">No active bearish OB detected.</div>
                   ) : (
-                    analysis.order_blocks.bearish.map((ob, i) => (
+                    analysis.order_blocks.bearish.map((ob: any, i: number) => (
                       <div key={i} className="flex justify-between text-zinc-400 font-medium bg-[#09090b]/20 p-1 rounded">
                         <span className="uppercase font-bold text-zinc-500">{ob.type}</span>
                         <span className="tabular-nums">
@@ -441,7 +441,7 @@ export default function AiAnalysis() {
                   {analysis.fvg.bullish.length === 0 ? (
                     <div className="text-zinc-600 text-[10px]">No unfilled bullish FVGs.</div>
                   ) : (
-                    analysis.fvg.bullish.map((fvg, i) => (
+                    analysis.fvg.bullish.map((fvg: any, i: number) => (
                       <div key={i} className="flex justify-between text-zinc-400 font-medium bg-[#09090b]/20 p-1 rounded">
                         <span className="font-semibold text-zinc-500">Unfilled</span>
                         <span className="tabular-nums">
@@ -455,7 +455,7 @@ export default function AiAnalysis() {
                   {analysis.fvg.bearish.length === 0 ? (
                     <div className="text-zinc-600 text-[10px]">No unfilled bearish FVGs.</div>
                   ) : (
-                    analysis.fvg.bearish.map((fvg, i) => (
+                    analysis.fvg.bearish.map((fvg: any, i: number) => (
                       <div key={i} className="flex justify-between text-zinc-400 font-medium bg-[#09090b]/20 p-1 rounded">
                         <span className="font-semibold text-zinc-500">Unfilled</span>
                         <span className="tabular-nums">

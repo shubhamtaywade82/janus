@@ -24,11 +24,13 @@ const PositionRow = ({
   livePrice,
   onClose,
   isClosing,
+  usdtInrRate,
 }: {
   position: any;
   livePrice?: number;
   onClose: (pos: any, currentPrice: number, pnl: number) => void;
   isClosing: boolean;
+  usdtInrRate: number;
 }) => {
   const entryPrice = parseFloat(position.entryPrice || "0");
   const backendPrice = parseFloat(position.currentPrice || "0");
@@ -47,6 +49,17 @@ const PositionRow = ({
   const isProfit = pnl >= 0;
   const margin = parseFloat(position.margin || "0");
   const roe = margin > 0 ? (pnl / margin) * 100 : parseFloat(position.roe || "0");
+
+  const marginInr = marginCurrency === "INR" ? margin : margin * usdtInrRate;
+  const marginUsdt = marginCurrency === "INR" ? margin / usdtInrRate : margin;
+
+  const maintMarginVal = position.maintenanceMargin ? parseFloat(position.maintenanceMargin) : null;
+  const maintMarginInr = maintMarginVal !== null
+    ? (marginCurrency === "INR" ? maintMarginVal : maintMarginVal * usdtInrRate)
+    : null;
+  const maintMarginUsdt = maintMarginVal !== null
+    ? (marginCurrency === "INR" ? maintMarginVal / usdtInrRate : maintMarginVal)
+    : null;
 
   const priceFlash = useFlash(currentPrice);
   const pnlFlashRow = useFlash(pnl);
@@ -101,6 +114,16 @@ const PositionRow = ({
       <td className={cn("px-3 py-2 text-xs text-[#f4f4f5] tabular-nums rounded", priceFlash)}>
         <AnimatedNumber value={currentPrice} decimals={position.basePrecision ?? 2} duration={200} />
       </td>
+      <td className="px-3 py-2 text-[10px] tabular-nums">
+        <div className="flex flex-col gap-0.5">
+          <span className={position.stopLoss ? "text-j-down/80" : "text-[#71717a] opacity-40"}>
+            SL: {position.stopLoss ? formatPrice(position.stopLoss, position.symbol, position.basePrecision) : "--"}
+          </span>
+          <span className={position.takeProfit ? "text-j-up/80" : "text-[#71717a] opacity-40"}>
+            TP: {position.takeProfit ? formatPrice(position.takeProfit, position.symbol, position.basePrecision) : "--"}
+          </span>
+        </div>
+      </td>
       <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
         {formatQty(position.size, position.symbol, position.targetPrecision)}
       </td>
@@ -127,20 +150,31 @@ const PositionRow = ({
           </span>
         </div>
       </td>
-      <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
-        {marginCurrency === "INR" ? "₹" : "$"}{parseFloat(position.margin || "0").toFixed(2)}
+      <td className="px-3 py-2 text-xs tabular-nums">
+        <div className="flex flex-col gap-0.5">
+          <span className="font-semibold text-[#f4f4f5]">₹{marginInr.toFixed(2)}</span>
+          <span className="text-[9px] text-[#71717a]">{marginUsdt.toFixed(2)} USDT</span>
+        </div>
       </td>
-      <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
-        {position.maintenanceMargin 
-          ? `${marginCurrency === "INR" ? "₹" : "$"}${parseFloat(position.maintenanceMargin).toFixed(2)}` 
-          : "--"}
+      <td className="px-3 py-2 text-xs tabular-nums">
+        {maintMarginInr !== null && maintMarginUsdt !== null ? (
+          <div className="flex flex-col gap-0.5">
+            <span className="font-semibold text-[#f4f4f5]">₹{maintMarginInr.toFixed(2)}</span>
+            <span className="text-[9px] text-[#71717a]">{maintMarginUsdt.toFixed(2)} USDT</span>
+          </div>
+        ) : (
+          <span className="text-[#71717a]">--</span>
+        )}
       </td>
       <td className="px-3 py-2">
         <div className={cn("flex flex-col gap-0.5", isProfit ? "text-j-up" : "text-j-down", pnlFlashRow)}>
-          <div className="flex items-center gap-1 text-xs tabular-nums rounded px-1 -mx-1">
+          <div className="flex items-center gap-1 text-xs font-semibold tabular-nums rounded px-1 -mx-1">
             {isProfit ? <ArrowUpRight size={12} /> : <ArrowDownRight size={12} />}
-            <AnimatedNumber value={pnl} decimals={4} duration={300} signed />
+            ₹<AnimatedNumber value={pnl * usdtInrRate} decimals={2} duration={300} signed />
           </div>
+          <span className="text-[9px] tabular-nums opacity-60 px-1 -mx-1">
+            <AnimatedNumber value={pnl} decimals={4} duration={300} signed suffix=" USDT" />
+          </span>
           {roe !== 0 && (
             <span className="text-[9px] tabular-nums opacity-70 px-1 -mx-1">
               ROE <AnimatedNumber value={roe} decimals={2} duration={300} signed suffix="%" />
@@ -424,11 +458,30 @@ export default function Portfolio() {
     const size = parseFloat(p.size || "0");
     return sum + (p.side === "long" ? (lp - entry) * size : (entry - lp) * size);
   }, 0);
-  const paperFreeBalance = parseFloat(String(paperWalletData?.balance ?? 10000));
-  const paperLockedMargin = parseFloat(String(paperWalletData?.lockedMargin ?? 0));
-  const paperRealizedPnl = parseFloat(String(paperWalletData?.realizedPnl ?? 0));
-  const paperStartingBalance = parseFloat(String(paperWalletData?.startingBalance ?? 10000));
-  const paperEquity = paperFreeBalance + paperLockedMargin + paperUnrealizedPnl;
+
+  const isPaperCcyInr = paperWalletData?.currency === "INR";
+  const rawPaperFree = parseFloat(String(paperWalletData?.balance ?? 1000000));
+  const rawPaperLocked = parseFloat(String(paperWalletData?.lockedMargin ?? 0));
+  const rawPaperRealized = parseFloat(String(paperWalletData?.realizedPnl ?? 0));
+  const rawPaperStarting = parseFloat(String(paperWalletData?.startingBalance ?? 1000000));
+
+  const paperFreeBalanceInr = isPaperCcyInr ? rawPaperFree : rawPaperFree * usdtInrRate;
+  const paperFreeBalanceUsdt = isPaperCcyInr ? rawPaperFree / usdtInrRate : rawPaperFree;
+
+  const paperLockedMarginInr = isPaperCcyInr ? rawPaperLocked : rawPaperLocked * usdtInrRate;
+  const paperLockedMarginUsdt = isPaperCcyInr ? rawPaperLocked / usdtInrRate : rawPaperLocked;
+
+  const paperRealizedPnlInr = isPaperCcyInr ? rawPaperRealized : rawPaperRealized * usdtInrRate;
+  const paperRealizedPnlUsdt = isPaperCcyInr ? rawPaperRealized / usdtInrRate : rawPaperRealized;
+
+  const paperStartingBalanceInr = isPaperCcyInr ? rawPaperStarting : rawPaperStarting * usdtInrRate;
+  const paperStartingBalanceUsdt = isPaperCcyInr ? rawPaperStarting / usdtInrRate : rawPaperStarting;
+
+  const paperUnrealizedPnlUsdt = paperUnrealizedPnl;
+  const paperUnrealizedPnlInr = paperUnrealizedPnlUsdt * usdtInrRate;
+
+  const paperEquityUsdt = paperFreeBalanceUsdt + paperLockedMarginUsdt + paperUnrealizedPnlUsdt;
+  const paperEquityInr = paperFreeBalanceInr + paperLockedMarginInr + paperUnrealizedPnlInr;
 
   const liveTotalUnrealizedPnl = openPositions.reduce((sum: number, p: any) => {
     if (p.isPaper) return sum;
@@ -605,15 +658,15 @@ export default function Portfolio() {
                   <span className="text-[10px] text-[#71717a]">Wallet Balance</span>
                 </div>
                 <div className={cn("text-xl font-bold text-[#f4f4f5] tabular-nums rounded px-1 -mx-1", marginFlash)}>
-                  {walletBalanceUsdt.toFixed(4)} USDT
+                  ₹{walletBalanceInr.toFixed(2)}
                 </div>
                 <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
-                  ₹{walletBalanceInr.toFixed(2)} · Rate ₹{usdtInrRate.toFixed(2)}
+                  {walletBalanceUsdt.toFixed(4)} USDT · Rate ₹{usdtInrRate.toFixed(2)}
                   {rateMode === "static" && <span className="ml-1 text-[#f59e0b]">(static)</span>}
                 </div>
                 <div className="mt-2 flex items-center justify-between text-[9px]">
-                  <span className="text-j-up">Available {walletCcy === "INR" ? `₹${availFree.toFixed(2)}` : `$${availFree.toFixed(2)}`}</span>
-                  <span className="text-[#f59e0b]">Locked {walletCcy === "INR" ? `₹${lockedMgn.toFixed(2)}` : `$${lockedMgn.toFixed(2)}`}</span>
+                  <span className="text-j-up">Available: ₹{(walletCcy === "INR" ? availFree : availFree * usdtInrRate).toFixed(2)} ({walletCcy === "INR" ? (availFree / usdtInrRate).toFixed(2) : availFree.toFixed(2)} USDT)</span>
+                  <span className="text-[#f59e0b]">Locked: ₹{(walletCcy === "INR" ? lockedMgn : lockedMgn * usdtInrRate).toFixed(2)} ({walletCcy === "INR" ? (lockedMgn / usdtInrRate).toFixed(2) : lockedMgn.toFixed(2)} USDT)</span>
                 </div>
               </div>
               <div className="bg-[#18181b] border border-[#27272a] rounded-lg p-4">
@@ -622,10 +675,10 @@ export default function Portfolio() {
                   <span className="text-[10px] text-[#71717a]">Current Value</span>
                 </div>
                 <div className={cn("text-xl font-bold text-[#f4f4f5] tabular-nums rounded px-1 -mx-1", equityFlash)}>
-                  <AnimatedNumber value={currentValueUsdt} decimals={4} duration={400} suffix=" USDT" />
+                  ₹<AnimatedNumber value={currentValueInr} decimals={2} duration={400} />
                 </div>
                 <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
-                  ₹<AnimatedNumber value={currentValueInr} decimals={2} duration={400} />
+                  <AnimatedNumber value={currentValueUsdt} decimals={4} duration={400} suffix=" USDT" />
                 </div>
                 <div className="mt-2 text-[9px] text-[#71717a]">{portfolio?.livePositionsCount || 0} live positions open</div>
               </div>
@@ -635,10 +688,10 @@ export default function Portfolio() {
                   <span className="text-[10px] text-[#71717a]">Unrealized PnL</span>
                 </div>
                 <div className={cn("text-xl font-bold tabular-nums rounded px-1 -mx-1", isProfit ? "text-j-up" : "text-j-down", pnlFlash)}>
-                  <AnimatedNumber value={pnlUsdt} decimals={4} duration={400} signed suffix=" USDT" />
+                  ₹<AnimatedNumber value={pnlInr} decimals={2} duration={400} signed />
                 </div>
                 <div className={cn("text-[10px] mt-1 tabular-nums", isProfit ? "text-j-up/70" : "text-j-down/70")}>
-                  ₹<AnimatedNumber value={pnlInr} decimals={2} duration={400} signed />
+                  <AnimatedNumber value={pnlUsdt} decimals={4} duration={400} signed suffix=" USDT" />
                 </div>
                 <div className={cn("mt-1.5 text-sm font-bold tabular-nums", isProfit ? "text-j-up" : "text-j-down")}>
                   <AnimatedNumber value={pnlPct} decimals={2} duration={400} signed suffix="%" />
@@ -656,11 +709,16 @@ export default function Portfolio() {
               <span className="text-[10px] text-[#71717a]">Paper Wallet</span>
               <span className="text-[8px] font-bold px-1 rounded bg-[#f59e0b]/10 text-[#f59e0b] border border-[#f59e0b]/20">VIRTUAL</span>
             </div>
-            <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">$<AnimatedNumber value={paperFreeBalance} decimals={2} duration={400} /></div>
-            <div className="text-[10px] text-[#52525b] mt-1">Started with ${paperStartingBalance.toFixed(2)}</div>
-            <div className="mt-2 flex items-center justify-between text-[9px]">
-              <span className="text-j-up">Free $<AnimatedNumber value={paperFreeBalance} decimals={2} duration={400} /></span>
-              <span className="text-[#f59e0b]">Locked $<AnimatedNumber value={paperLockedMargin} decimals={2} duration={400} /></span>
+            <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">
+              ₹<AnimatedNumber value={paperFreeBalanceInr} decimals={2} duration={400} />
+            </div>
+            <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
+              <AnimatedNumber value={paperFreeBalanceUsdt} decimals={4} duration={400} suffix=" USDT" /> · Rate ₹{usdtInrRate.toFixed(2)}
+              {rateMode === "static" && <span className="ml-1 text-[#f59e0b]">(static)</span>}
+            </div>
+            <div className="mt-2 flex items-center justify-between text-[9px] tabular-nums">
+              <span className="text-j-up">Free: ₹{paperFreeBalanceInr.toFixed(2)} (<AnimatedNumber value={paperFreeBalanceUsdt} decimals={2} duration={400} suffix=" USDT" />)</span>
+              <span className="text-[#f59e0b]">Locked: ₹{paperLockedMarginInr.toFixed(2)} (<AnimatedNumber value={paperLockedMarginUsdt} decimals={2} duration={400} suffix=" USDT" />)</span>
             </div>
           </div>
           <div className="bg-[#18181b] border border-[#f59e0b]/30 rounded-lg p-4">
@@ -668,31 +726,40 @@ export default function Portfolio() {
               <PieChart size={14} className="text-[#f59e0b]" />
               <span className="text-[10px] text-[#71717a]">Paper Equity</span>
             </div>
-            <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">$<AnimatedNumber value={paperEquity} decimals={2} duration={400} /></div>
-            <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
-              {paperEquity >= paperStartingBalance
-                ? <span className="text-j-up">+${(paperEquity - paperStartingBalance).toFixed(2)} vs start</span>
-                : <span className="text-j-down">-${(paperStartingBalance - paperEquity).toFixed(2)} vs start</span>}
+            <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">
+              ₹<AnimatedNumber value={paperEquityInr} decimals={2} duration={400} />
             </div>
-            <div className="mt-2 text-[9px] text-[#71717a]">{paperPositions.length} paper positions open</div>
+            <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
+              <AnimatedNumber value={paperEquityUsdt} decimals={4} duration={400} suffix=" USDT" />
+            </div>
+            <div className="mt-2 text-[9px] text-[#71717a] tabular-nums">
+              {paperEquityUsdt >= paperStartingBalanceUsdt
+                ? <span className="text-j-up">+₹{ (paperEquityInr - paperStartingBalanceInr).toFixed(2) } ({ (paperEquityUsdt - paperStartingBalanceUsdt).toFixed(2) } USDT) vs start</span>
+                : <span className="text-j-down">-₹{ (paperStartingBalanceInr - paperEquityInr).toFixed(2) } ({ (paperStartingBalanceUsdt - paperEquityUsdt).toFixed(2) } USDT) vs start</span>}
+            </div>
           </div>
           <div className="bg-[#18181b] border border-[#f59e0b]/30 rounded-lg p-4">
             <div className="flex items-center gap-2 mb-2">
-              {paperUnrealizedPnl >= 0 ? <TrendingUp size={14} className="text-j-up" /> : <TrendingDown size={14} className="text-j-down" />}
+              {paperUnrealizedPnlUsdt >= 0 ? <TrendingUp size={14} className="text-j-up" /> : <TrendingDown size={14} className="text-j-down" />}
               <span className="text-[10px] text-[#71717a]">Paper PnL</span>
             </div>
-            <div className={cn("text-xl font-bold tabular-nums", paperUnrealizedPnl >= 0 ? "text-j-up" : "text-j-down")}>
-              <AnimatedNumber value={paperUnrealizedPnl} decimals={4} duration={400} signed suffix=" USDT" />
+            <div className={cn("text-xl font-bold tabular-nums", paperUnrealizedPnlUsdt >= 0 ? "text-j-up" : "text-j-down")}>
+              ₹<AnimatedNumber value={paperUnrealizedPnlInr} decimals={2} duration={400} signed />
             </div>
-            <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
-              Realized: <span className={paperRealizedPnl >= 0 ? "text-j-up" : "text-j-down"}>
-                {paperRealizedPnl >= 0 ? "+" : ""}{paperRealizedPnl.toFixed(4)}
-              </span>
+            <div className={cn("text-[10px] mt-1 tabular-nums", paperUnrealizedPnlUsdt >= 0 ? "text-j-up/70" : "text-j-down/70")}>
+              <AnimatedNumber value={paperUnrealizedPnlUsdt} decimals={4} duration={400} signed suffix=" USDT" />
             </div>
-            <div className="mt-1.5 text-[10px] text-[#52525b]">
-              Total: <span className={cn("font-medium", (paperUnrealizedPnl + paperRealizedPnl) >= 0 ? "text-j-up" : "text-j-down")}>
-                {(paperUnrealizedPnl + paperRealizedPnl) >= 0 ? "+" : ""}{(paperUnrealizedPnl + paperRealizedPnl).toFixed(4)}
-              </span>
+            <div className="mt-1.5 flex flex-col gap-0.5 text-[9px] text-[#71717a] tabular-nums">
+              <div>
+                Realized: <span className={paperRealizedPnlUsdt >= 0 ? "text-j-up" : "text-j-down"}>
+                  ₹{paperRealizedPnlInr.toFixed(2)} ({paperRealizedPnlUsdt >= 0 ? "+" : ""}{paperRealizedPnlUsdt.toFixed(4)} USDT)
+                </span>
+              </div>
+              <div>
+                Total PnL: <span className={cn("font-medium", (paperUnrealizedPnlUsdt + paperRealizedPnlUsdt) >= 0 ? "text-j-up" : "text-j-down")}>
+                  ₹{((paperUnrealizedPnlUsdt + paperRealizedPnlUsdt) * usdtInrRate).toFixed(2)} ({(paperUnrealizedPnlUsdt + paperRealizedPnlUsdt) >= 0 ? "+" : ""}{(paperUnrealizedPnlUsdt + paperRealizedPnlUsdt).toFixed(4)} USDT)
+                </span>
+              </div>
             </div>
           </div>
         </div>
@@ -806,6 +873,7 @@ export default function Portfolio() {
                     <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Side</th>
                     <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Entry</th>
                     <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Current</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">SL / TP</th>
                     <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Size</th>
                     <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Lev</th>
                     <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Mode</th>
@@ -824,11 +892,12 @@ export default function Portfolio() {
                       livePrice={livePrices[pos.symbol]}
                       onClose={handleClosePosition}
                       isClosing={closePosition.isPending && closePosition.variables?.id === pos.id}
+                      usdtInrRate={usdtInrRate}
                     />
                   ))}
                   {(!allPositions || allPositions.length === 0) && (
                     <tr>
-                      <td colSpan={12} className="px-3 py-8 text-center text-xs text-[#71717a]">
+                      <td colSpan={13} className="px-3 py-8 text-center text-xs text-[#71717a]">
                         <Target size={20} className="mx-auto mb-2 opacity-30" />
                         No {statusFilter} positions found
                       </td>
@@ -878,8 +947,11 @@ export default function Portfolio() {
                         <td className="px-3 py-1 text-[10px] text-[#71717a] tabular-nums">
                           {formatQty(trade.size, trade.symbol, trade.targetPrecision)}
                         </td>
-                        <td className="px-3 py-1 text-[10px] text-[#71717a] tabular-nums">
-                          {parseFloat(trade.total).toFixed(2)}
+                        <td className="px-3 py-1 text-[10px] tabular-nums">
+                          <div className="flex flex-col">
+                            <span className="text-[#f4f4f5]">₹{(parseFloat(trade.total) * usdtInrRate).toFixed(2)}</span>
+                            <span className="text-[9px] text-[#71717a]">{parseFloat(trade.total).toFixed(2)} USDT</span>
+                          </div>
                         </td>
                       </tr>
                     ))}

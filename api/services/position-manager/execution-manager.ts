@@ -10,6 +10,22 @@ import { positions, exchangeCredentials } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { decryptCreds } from "../../lib/crypto";
 import { releasePaperMargin } from "../paper-wallet";
+import { recordPositionTransaction, estimateFee } from "../position-manager/transaction-ledger";
+
+/**
+ * Returns true only if the proposed SL is strictly better than current.
+ * LONG: proposed must be > current
+ * SHORT: proposed must be < current
+ */
+export function isSlImprovement(
+  side: "LONG" | "SHORT",
+  currentSl: number | null,
+  proposedSl: number
+): boolean {
+  if (currentSl === null) return true;
+  if (side === "LONG") return proposedSl > currentSl;
+  return proposedSl < currentSl;
+}
 
 // ─── Execution Manager ───────────────────────────────────────────────────────
 // Maps approved PositionActions to actual exchange calls + DB updates.
@@ -48,15 +64,48 @@ export async function executeAction(
             ? position.entryPrice * 1.001
             : position.entryPrice * 0.999);
 
+        if (!isSlImprovement(position.side, position.stopLoss, newSl)) {
+          positionManagerBus.emit(
+            "position:action-executed",
+            position.id,
+            action,
+            "failed",
+            `MOVE_TO_BREAKEVEN rejected: ${newSl.toFixed(4)} is worse than current ${position.stopLoss?.toFixed(4)}`
+          );
+          return { success: false, detail: `Breakeven rejected: would lower SL` };
+        }
+
         await db
           .update(positions)
-          .set({ stopLoss: newSl.toFixed(8), updatedAt: new Date() })
+          .set({
+            stopLoss: newSl.toFixed(8),
+            updatedAt: new Date(),
+            breakevenApplied: true,
+          })
           .where(eq(positions.id, position.id));
 
         positionStore.updateProtection(position.id, newSl, position.takeProfit);
         syncTrailingStopLoss(position.id, newSl);
-        positionManagerBus.emit("position:action-executed", position.id, action, "ok",
-          `SL moved to breakeven: ${newSl.toFixed(4)}`);
+        await recordPositionTransaction({
+          positionId: position.id,
+          userId,
+          symbol: position.symbol,
+          type: "SL_UPDATE",
+          side: position.side === "LONG" ? "long" : "short",
+          price: newSl,
+          metadata: {
+            oldSl: position.stopLoss,
+            newSl,
+            reason: "breakeven",
+          },
+        });
+        positionManagerBus.emit(
+          "position:action-executed",
+          position.id,
+          action,
+          "ok",
+          `SL moved to breakeven: ${newSl.toFixed(4)}`
+        );
         return { success: true, detail: `Stop moved to breakeven @ ${newSl.toFixed(4)}` };
       }
 
@@ -66,6 +115,18 @@ export async function executeAction(
           return { success: false, detail: "TRAIL_SL: no new stop loss value provided" };
         }
         const newSl = recommendation.newStopLoss;
+
+        if (!isSlImprovement(position.side, position.stopLoss, newSl)) {
+          positionManagerBus.emit(
+            "position:action-executed",
+            position.id,
+            action,
+            "failed",
+            `TRAIL_SL rejected: ${newSl.toFixed(4)} is worse than current ${position.stopLoss?.toFixed(4)}`
+          );
+          return { success: false, detail: `Trail rejected: would reverse SL` };
+        }
+
         await db
           .update(positions)
           .set({ stopLoss: newSl.toFixed(8), updatedAt: new Date() })
@@ -73,8 +134,26 @@ export async function executeAction(
 
         positionStore.updateProtection(position.id, newSl, position.takeProfit);
         syncTrailingStopLoss(position.id, newSl);
-        positionManagerBus.emit("position:action-executed", position.id, action, "ok",
-          `SL trailed to ${newSl.toFixed(4)}`);
+        await recordPositionTransaction({
+          positionId: position.id,
+          userId,
+          symbol: position.symbol,
+          type: "SL_UPDATE",
+          side: position.side === "LONG" ? "long" : "short",
+          price: newSl,
+          metadata: {
+            oldSl: position.stopLoss,
+            newSl,
+            reason: "trail",
+          },
+        });
+        positionManagerBus.emit(
+          "position:action-executed",
+          position.id,
+          action,
+          "ok",
+          `SL trailed to ${newSl.toFixed(4)}`
+        );
         return { success: true, detail: `Stop trailed to ${newSl.toFixed(4)}` };
       }
 
@@ -91,6 +170,19 @@ export async function executeAction(
           .where(eq(positions.id, position.id));
 
         positionStore.updateProtection(position.id, position.stopLoss, newTp);
+        await recordPositionTransaction({
+          positionId: position.id,
+          userId,
+          symbol: position.symbol,
+          type: "TP_UPDATE",
+          side: position.side === "LONG" ? "long" : "short",
+          price: newTp,
+          metadata: {
+            oldTp: position.takeProfit,
+            newTp,
+            reason: action === PA.TIGHTEN_TP ? "tighten" : "extend",
+          },
+        });
         positionManagerBus.emit("position:action-executed", position.id, action, "ok",
           `TP ${action === PA.TIGHTEN_TP ? "tightened" : "extended"} to ${newTp.toFixed(4)}`);
         return { success: true, detail: `TP updated to ${newTp.toFixed(4)}` };
@@ -158,8 +250,34 @@ export async function executeAction(
           .where(eq(positions.id, position.id));
 
         if (position.isPaper) {
-          await releasePaperMargin(userId, marginReleased, partialPnl, position.id);
+          const pCcy = (position.marginCurrency as "USDT" | "INR") ?? "USDT";
+          await releasePaperMargin(userId, marginReleased, partialPnl, position.id, pCcy);
         }
+
+        await recordPositionTransaction({
+          positionId: position.id,
+          userId,
+          symbol: position.symbol,
+          type: "PARTIAL_EXIT",
+          side: position.side === "LONG" ? "long" : "short",
+          quantityBefore: position.quantity,
+          quantityAfter: newQty,
+          quantityDelta: -exitQty,
+          price: position.markPrice,
+          avgEntryPrice: position.entryPrice,
+          realizedPnl: partialPnl,
+          fee: estimateFee(position.markPrice * exitQty),
+          marginBefore: position.margin,
+          marginAfter: newMargin,
+          metadata: {
+            exitPct,
+            exitQty,
+            marginReleased,
+            prevRealized: position.realizedPnl,
+            nextRealized,
+            isPaper: position.isPaper,
+          },
+        });
 
         positionManagerBus.emit("position:action-executed", position.id, action, "ok",
           `Exited ${(exitPct * 100).toFixed(0)}% of position`);
@@ -206,8 +324,31 @@ export async function executeAction(
           .where(eq(positions.id, position.id));
 
         if (position.isPaper) {
-          await releasePaperMargin(userId, position.margin, realizedPnl, position.id);
+          const pCcy = (position.marginCurrency as "USDT" | "INR") ?? "USDT";
+          await releasePaperMargin(userId, position.margin, realizedPnl, position.id, pCcy);
         }
+
+        await recordPositionTransaction({
+          positionId: position.id,
+          userId,
+          symbol: position.symbol,
+          type: "FULL_EXIT",
+          side: position.side === "LONG" ? "long" : "short",
+          quantityBefore: position.quantity,
+          quantityAfter: 0,
+          quantityDelta: -position.quantity,
+          price: position.markPrice,
+          avgEntryPrice: position.entryPrice,
+          realizedPnl,
+          fee: estimateFee(position.markPrice * position.quantity),
+          marginBefore: position.margin,
+          marginAfter: 0,
+          metadata: {
+            reason: recommendation.reasoning,
+            exitReason: recommendation.reasoning,
+            isPaper: position.isPaper,
+          },
+        });
 
         positionStore.updateLifecycleState(position.id, "CLOSED");
         positionStore.remove(position.id);

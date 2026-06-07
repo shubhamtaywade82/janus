@@ -13,8 +13,10 @@ import {
   getPaperSnapshots,
   snapshotPaperWallet,
   getPaperWallet,
+  depositPaperFunds,
 } from "../services/paper-wallet";
 import { env } from "../lib/env";
+import { TRPCError } from "@trpc/server";
 
 export const autoExecutorRouter = createRouter({
   // ─── Get config ───
@@ -47,6 +49,7 @@ export const autoExecutorRouter = createRouter({
         capitalAllocationPct: z.string().optional(),   // "0.050" – "0.500"
         useStrategyLeverage: z.boolean().optional(),
         paperStartingBalance: z.string().optional(),
+        paperCurrency: z.enum(["USDT", "INR"]).optional(),
         brainDriverEnabled: z.boolean().optional(),
         brainGateEnabled: z.boolean().optional(),
         brainShadowMode: z.boolean().optional(),
@@ -90,35 +93,105 @@ export const autoExecutorRouter = createRouter({
   // ─── Paper wallet — computed fresh from DB on every call (no in-memory cache) ───
   paperWallet: authedQuery
     .query(async ({ ctx }) => {
-      return getPaperWallet(ctx.user.id);
+      const db = getDb();
+      const configRows = await db
+        .select({
+          paperCurrency: autoExecutorConfig.paperCurrency,
+          paperStartingBalance: autoExecutorConfig.paperStartingBalance,
+        })
+        .from(autoExecutorConfig)
+        .where(eq(autoExecutorConfig.userId, ctx.user.id))
+        .limit(1);
+      const currency = configRows[0]?.paperCurrency ?? "INR";
+      const starting = configRows[0]?.paperStartingBalance
+        ? parseFloat(configRows[0].paperStartingBalance)
+        : 100000;
+      return getPaperWallet(ctx.user.id, starting, currency);
     }),
 
   // ─── Reset paper wallet — updates starting balance and clears in-memory state ───
   resetPaperWallet: authedQuery
     .input(z.object({ newBalance: z.number().default(10_000) }))
     .mutation(async ({ input, ctx }) => {
-      await resetPaperWallet(ctx.user.id, input.newBalance);
+      const db = getDb();
+      const configRows = await db
+        .select({
+          paperCurrency: autoExecutorConfig.paperCurrency,
+        })
+        .from(autoExecutorConfig)
+        .where(eq(autoExecutorConfig.userId, ctx.user.id))
+        .limit(1);
+      const currency = configRows[0]?.paperCurrency ?? "INR";
+      await resetPaperWallet(ctx.user.id, input.newBalance, currency);
       return { success: true, balance: input.newBalance };
+    }),
+
+  // ─── Deposit virtual funds into paper wallet ───
+  depositPaperFunds: authedQuery
+    .input(z.object({ amount: z.number().positive().min(100).max(10_000_000), note: z.string().max(120).optional() }))
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      const configRows = await db
+        .select({
+          paperCurrency: autoExecutorConfig.paperCurrency,
+        })
+        .from(autoExecutorConfig)
+        .where(eq(autoExecutorConfig.userId, ctx.user.id))
+        .limit(1);
+      const currency = configRows[0]?.paperCurrency ?? "INR";
+      try {
+        await depositPaperFunds(ctx.user.id, input.amount, currency, input.note);
+      } catch (err: any) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err?.message ?? "Deposit failed" });
+      }
+      return { success: true };
     }),
 
   // ─── Paper wallet ledger entries (audit trail) ───
   paperWalletLedger: authedQuery
     .input(z.object({ limit: z.number().default(50) }))
     .query(async ({ input, ctx }) => {
-      return getPaperLedger(ctx.user.id, input.limit);
+      const db = getDb();
+      const configRows = await db
+        .select({
+          paperCurrency: autoExecutorConfig.paperCurrency,
+        })
+        .from(autoExecutorConfig)
+        .where(eq(autoExecutorConfig.userId, ctx.user.id))
+        .limit(1);
+      const currency = configRows[0]?.paperCurrency ?? "INR";
+      return getPaperLedger(ctx.user.id, input.limit, currency);
     }),
 
   // ─── Paper wallet snapshots (equity curve) ───
   paperWalletSnapshots: authedQuery
     .input(z.object({ limit: z.number().default(100) }))
     .query(async ({ input, ctx }) => {
-      return getPaperSnapshots(ctx.user.id, input.limit);
+      const db = getDb();
+      const configRows = await db
+        .select({
+          paperCurrency: autoExecutorConfig.paperCurrency,
+        })
+        .from(autoExecutorConfig)
+        .where(eq(autoExecutorConfig.userId, ctx.user.id))
+        .limit(1);
+      const currency = configRows[0]?.paperCurrency ?? "INR";
+      return getPaperSnapshots(ctx.user.id, input.limit, currency);
     }),
 
   // ─── Take a manual snapshot ───
   takePaperSnapshot: authedQuery
     .mutation(async ({ ctx }) => {
-      await snapshotPaperWallet(ctx.user.id);
+      const db = getDb();
+      const configRows = await db
+        .select({
+          paperCurrency: autoExecutorConfig.paperCurrency,
+        })
+        .from(autoExecutorConfig)
+        .where(eq(autoExecutorConfig.userId, ctx.user.id))
+        .limit(1);
+      const currency = configRows[0]?.paperCurrency ?? "INR";
+      await snapshotPaperWallet(ctx.user.id, currency);
       return { success: true };
     }),
 

@@ -77,7 +77,7 @@ describe("schema — open position uniqueness constraint", () => {
   it("has risk_sessions table for daily drawdown persistence", () => {
     expect(schemaSrc).toContain("risk_sessions");
     expect(schemaSrc).toContain("realized_pnl");
-    expect(schemaSrc).toContain("in_cooldown");
+    expect(schemaSrc).toContain("cooldown_until");
   });
 
   it("has kill_switch_state table for halt state persistence", () => {
