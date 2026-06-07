@@ -22,7 +22,8 @@ import { userPositionsCache, markPriceCache } from "../coindcx-ws";
 import { latestTickerCache } from "../streaming";
 import { env } from "../../lib/env";
 import { getPaperWallet } from "../paper-wallet";
-
+import { registerPositionForTrailing, syncTrailingStopLoss } from "../trailing-stop";
+import type { StrategyType } from "../strategy-config";
 // ─── Position Lifecycle Manager ──────────────────────────────────────────────
 // Central orchestrator: syncs positions, runs assessment loops,
 // coordinates protection → AI/code advice → policy → execution.
@@ -117,9 +118,11 @@ export class PositionLifecycleManager {
 
     // Build merged set keyed by exchangeOrderId / DB id
     const managed = new Map<string, ManagedPosition>();
+    const strategyTypes = new Map<number, string>();
 
     // First pass: DB positions as baseline
     for (const dbPos of dbPositions) {
+      strategyTypes.set(dbPos.id, dbPos.strategyType ?? "intraday");
       const binanceSym = dbPos.symbol.replace("B-", "").replace("_", "");
       let markPriceRaw = markPriceCache.get(dbPos.symbol) ?? 0;
       if (markPriceRaw <= 0) {
@@ -187,6 +190,10 @@ export class PositionLifecycleManager {
         slDistancePct,
         liqDistancePct,
         holdingMinutes,
+        // Persisted state fields
+        breakevenApplied: dbPos.breakevenApplied ?? false,
+        extremePrice: dbPos.extremePrice ? parseFloat(dbPos.extremePrice) : null,
+        openedAlertSent: dbPos.openedAlertSent ?? false,
       };
 
       managed.set(String(dbPos.id), mp);
@@ -217,9 +224,45 @@ export class PositionLifecycleManager {
       }
     }
 
+    // Track which positions are newly discovered before upserting
+    const newlyDiscoveredIds = new Set<number>();
+    for (const mp of managed.values()) {
+      if (!positionStore.get(mp.id)) {
+        newlyDiscoveredIds.add(mp.id);
+      }
+    }
+
     // Upsert into store
     for (const mp of managed.values()) {
       positionStore.upsert(mp);
+    }
+
+    // Re-register all open positions with the trailing-stop engine
+    // (critical after restart when trackedPositions is empty)
+    for (const mp of managed.values()) {
+      if (mp.stopLoss) {
+        registerPositionForTrailing({
+          id: mp.id,
+          symbol: mp.binanceSymbol,
+          side: mp.side === "LONG" ? "long" : "short",
+          entryPrice: mp.entryPrice,
+          stopLoss: mp.stopLoss,
+          strategyType: (strategyTypes.get(mp.id) ?? "intraday") as StrategyType,
+          userId: mp.userId,
+          size: mp.quantity,
+        });
+        syncTrailingStopLoss(mp.id, mp.stopLoss);
+      }
+    }
+
+    // Mark newly discovered positions as alerted in DB so restarts don't re-alert
+    for (const mp of managed.values()) {
+      if (newlyDiscoveredIds.has(mp.id) && !mp.openedAlertSent) {
+        db.update(positions)
+          .set({ openedAlertSent: true })
+          .where(eq(positions.id, mp.id))
+          .catch(() => {});
+      }
     }
 
     // Remove positions that are no longer in DB as open

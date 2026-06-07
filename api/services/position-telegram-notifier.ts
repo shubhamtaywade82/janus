@@ -174,6 +174,7 @@ async function notify(text: string): Promise<void> {
 let isRunning = false;
 
 function onDiscovered(position: ManagedPosition) {
+  if (position.openedAlertSent) return; // already alerted before restart
   if (!canNotifyPosition(position.id)) return;
   notify(buildOpenMessage(position, position.isPaper)).catch(() => {});
 }

@@ -62,8 +62,8 @@ function codeBasedDecision(
     }
   }
 
-  // Rule 3: Move to breakeven once 1R in profit
-  if (stopLoss && pnlSign) {
+  // Rule 3: Move to breakeven once 1R in profit (only once per position)
+  if (stopLoss && pnlSign && !position.breakevenApplied) {
     const slDistance = Math.abs(entryPrice - stopLoss);
     const priceMove = Math.abs(markPrice - entryPrice);
     if (priceMove >= slDistance && stopLoss !== entryPrice) {

@@ -11,13 +11,13 @@ class PositionStore {
   upsert(position: ManagedPosition): void {
     const existing = this.store.get(position.id);
     const isNew = !existing;
+    const pos = { ...position, updatedAt: new Date() };
+    this.store.set(position.id, pos);
 
-    this.store.set(position.id, position);
-
-    if (isNew) {
-      positionManagerBus.emit("position:discovered", position);
+    if (isNew && position.openedAlertSent !== true) {
+      positionManagerBus.emit("position:discovered", pos);
     } else {
-      positionManagerBus.emit("position:synced", position);
+      positionManagerBus.emit("position:synced", pos);
     }
   }
 
@@ -77,6 +77,12 @@ class PositionStore {
       riskRewardRatio,
       updatedAt: new Date(),
     });
+  }
+
+  updateExtremePrice(id: number, extremePrice: number | null): void {
+    const pos = this.store.get(id);
+    if (!pos) return;
+    this.store.set(id, { ...pos, extremePrice, updatedAt: new Date() });
   }
 
   remove(id: number): void {

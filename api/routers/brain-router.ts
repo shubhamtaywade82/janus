@@ -4,7 +4,7 @@ import * as fs from "fs";
 import * as path from "path";
 import { BrainOrchestrator } from "../brain/brain-orchestrator";
 import { getDb } from "../queries/connection";
-import { brainEpisodes, brainStrategies, brainReflections, signals } from "@db/schema";
+import { brainEpisodes, brainStrategies, brainReflections } from "@db/schema";
 import { desc } from "drizzle-orm";
 import { globalKillSwitch } from "../services/kill-switch";
 import { proposeTradeAsSignal } from "../brain/signal-bridge";

@@ -1,5 +1,5 @@
 import { getDb } from "../queries/connection";
-import { brainStrategies, brainEpisodes, brainCandidateRules } from "@db/schema";
+import { brainStrategies, brainEpisodes } from "@db/schema";
 import { callLLM } from "../services/ollama";
 import { eq, count } from "drizzle-orm";
 
