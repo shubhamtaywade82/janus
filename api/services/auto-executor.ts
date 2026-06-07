@@ -105,7 +105,7 @@ export class AutoExecutor {
     }
   }
 
-  private saveDedupCache() {
+  private async saveDedupCache() {
     try {
       const obj: Record<string, number> = {};
       const now = Date.now();
@@ -114,7 +114,7 @@ export class AutoExecutor {
           obj[key] = ts;
         }
       }
-      fs.writeFileSync(DEDUP_FILE, JSON.stringify(obj, null, 2), "utf-8");
+      await fs.promises.writeFile(DEDUP_FILE, JSON.stringify(obj, null, 2), "utf-8");
     } catch (err) {
       console.error("[auto-executor] Failed to save dedup cache:", err);
     }
@@ -160,7 +160,7 @@ export class AutoExecutor {
       }
     }
     if (cleaned) {
-      this.saveDedupCache();
+      await this.saveDedupCache();
     }
 
     const decisions: ExecutorDecision[] = [];
@@ -253,30 +253,7 @@ export class AutoExecutor {
       if (rows[0]) {
         this.configCache = rows[0];
       } else if (env.autoExecute) {
-        // AUTO_EXECUTE=true but no row yet — upsert defaults and use them
-        await db.insert(autoExecutorConfig).values({
-          userId: 1,
-          enabled: true,
-          targetSymbols: AutoExecutor.DEFAULT_CONFIG.targetSymbols as string[],
-          defaultSizeUsdt: AutoExecutor.DEFAULT_CONFIG.defaultSizeUsdt,
-          defaultLeverage: AutoExecutor.DEFAULT_CONFIG.defaultLeverage!,
-          stopLossPct: AutoExecutor.DEFAULT_CONFIG.stopLossPct,
-          tp1Pct: AutoExecutor.DEFAULT_CONFIG.tp1Pct,
-          tp2Pct: AutoExecutor.DEFAULT_CONFIG.tp2Pct,
-          llmConfidenceThreshold: AutoExecutor.DEFAULT_CONFIG.llmConfidenceThreshold!,
-          maxPositionsPerSymbol: AutoExecutor.DEFAULT_CONFIG.maxPositionsPerSymbol!,
-          maxTotalPositions: AutoExecutor.DEFAULT_CONFIG.maxTotalPositions!,
-          capitalAllocationPct: AutoExecutor.DEFAULT_CONFIG.capitalAllocationPct,
-          useStrategyLeverage: AutoExecutor.DEFAULT_CONFIG.useStrategyLeverage,
-          paperStartingBalance: AutoExecutor.DEFAULT_CONFIG.paperStartingBalance,
-          // Autonomous deployment defaults: LLM filter + Brain (gate + driver) active, not shadowed.
-          useLlmAdvisor: true,
-          brainGateEnabled: true,
-          brainDriverEnabled: true,
-          brainShadowMode: false,
-        }).catch(() => {}); // ignore if already exists
-        this.configCache = { ...AutoExecutor.DEFAULT_CONFIG, useLlmAdvisor: true, brainGateEnabled: true, brainDriverEnabled: true, brainShadowMode: false };
-        console.log("[auto-executor] No config row found — created default config (AUTO_EXECUTE=true)");
+        this.configCache = await this.initializeDefaultConfig();
       } else {
         this.configCache = null;
       }
@@ -288,6 +265,34 @@ export class AutoExecutor {
       }
     }
     return this.configCache;
+  }
+
+  private async initializeDefaultConfig(): Promise<AutoExecutorConfig> {
+    const db = getDb();
+    const defaults = {
+      userId: 1,
+      enabled: true,
+      targetSymbols: AutoExecutor.DEFAULT_CONFIG.targetSymbols as string[],
+      defaultSizeUsdt: AutoExecutor.DEFAULT_CONFIG.defaultSizeUsdt,
+      defaultLeverage: AutoExecutor.DEFAULT_CONFIG.defaultLeverage!,
+      stopLossPct: AutoExecutor.DEFAULT_CONFIG.stopLossPct,
+      tp1Pct: AutoExecutor.DEFAULT_CONFIG.tp1Pct,
+      tp2Pct: AutoExecutor.DEFAULT_CONFIG.tp2Pct,
+      llmConfidenceThreshold: AutoExecutor.DEFAULT_CONFIG.llmConfidenceThreshold!,
+      maxPositionsPerSymbol: AutoExecutor.DEFAULT_CONFIG.maxPositionsPerSymbol!,
+      maxTotalPositions: AutoExecutor.DEFAULT_CONFIG.maxTotalPositions!,
+      capitalAllocationPct: AutoExecutor.DEFAULT_CONFIG.capitalAllocationPct,
+      useStrategyLeverage: AutoExecutor.DEFAULT_CONFIG.useStrategyLeverage,
+      paperStartingBalance: AutoExecutor.DEFAULT_CONFIG.paperStartingBalance,
+      useLlmAdvisor: true,
+      brainGateEnabled: true,
+      brainDriverEnabled: true,
+      brainShadowMode: false,
+    };
+
+    await db.insert(autoExecutorConfig).values(defaults).catch(() => {});
+    console.log("[auto-executor] No config row found — created default config (AUTO_EXECUTE=true)");
+    return { ...AutoExecutor.DEFAULT_CONFIG, ...defaults, id: 0, createdAt: new Date(), updatedAt: new Date() };
   }
 
   private skip(signal: Signal, reason: string, gate: string, extra?: Partial<ExecutorDecision>): ExecutorDecision {
@@ -312,63 +317,16 @@ export class AutoExecutor {
 
   private async processSignal(signal: Signal, config: AutoExecutorConfig): Promise<ExecutorDecision> {
     this.state.signalsProcessed++;
-    // Convert CoinDCX symbol (B-ETH_USDT) → Binance format (ETHUSDT)
-    const symbol = signal.symbol.startsWith("B-")
-      ? signal.symbol.slice(2).replace("_USDT", "USDT").replace("_", "")
-      : signal.symbol;
+    const context = await this.prepareExecutionContext(signal, config);
+    if (!context) return this.skip(signal, "execution context unavailable", "context");
 
-    const side = signal.direction as "long" | "short";
-    const isPaperMode = !env.placeOrders || env.paperTrading;
-
-    // ─── Pre-fetch data for Governor ───
-    const db = getDb();
-    const openCount = await db
-      .select({ id: positions.id })
-      .from(positions)
-      .where(and(eq(positions.userId, 1), eq(positions.status, "open"), eq(positions.isPaper, isPaperMode)))
-      .then((r) => r.length);
-
-    let walletFree = 0;
-    let walletLocked = 0;
-    const creds = await db
-      .select()
-      .from(exchangeCredentials)
-      .where(and(eq(exchangeCredentials.userId, 1), eq(exchangeCredentials.exchange, "coindcx")))
-      .limit(1);
-
-    if (isPaperMode) {
-      const paperBalance = parseFloat(config.paperStartingBalance ?? "10000");
-      const pw = await getPaperWallet(1, paperBalance);
-      walletFree = pw.balance;
-      walletLocked = pw.lockedMargin;
-    } else if (creds[0]) {
-      try {
-        const liveWallets = await getFuturesWallet(decryptCreds(creds[0]));
-        for (const w of liveWallets) {
-          walletFree += parseFloat(w.balance ?? "0");
-          walletLocked += parseFloat(w.locked_balance ?? "0");
-        }
-      } catch {
-        return this.skip(signal, "wallet balance unavailable — skipping to prevent oversizing", "wallet");
-      }
-    }
-
-    const session = await getOrCreateSession(1, walletFree || 10_000);
-    const sigMetadata = signal.metadata as Record<string, unknown> | null;
-    const targetSymbols = (config.targetSymbols as string[]) ?? ["BTCUSDT", "ETHUSDT"];
-
-    // Sizing inputs (gates that use these now live in the Governor; sizing still needs them).
-    const isManualOverride = sigMetadata?.sizeUsdt !== undefined && sigMetadata.sizeUsdt !== null;
-    const sizeUsdt = isManualOverride
-      ? parseFloat(String(sigMetadata!.sizeUsdt))
-      : parseFloat(config.defaultSizeUsdt ?? "50");
-    const dedupKey = `${symbol}:${signal.direction}`;
+    const { symbol, side, isPaperMode, openCount, walletFree, walletLocked, session } = context;
 
     // ─── Governor: deterministic safety gates ───
     const govOutcome = await globalGovernor.evaluate({
       signal,
       config,
-      targetSymbols,
+      targetSymbols: (config.targetSymbols as string[]) ?? ["BTCUSDT", "ETHUSDT"],
       dedupWindowMs: this.DEDUP_WINDOW_MS,
       recentExecutions: this.recentExecutions,
       openCount,
@@ -382,300 +340,76 @@ export class AutoExecutor {
       return this.skip(signal, govOutcome.reason, govOutcome.gate);
     }
 
-    // ─── Brain Evaluation ───
-    // When brainGateEnabled=true, the Brain has real authority to veto/modify trades.
-    // When shadowMode=true, it logs only and runs in parallel.
-    const brainConfig = await brainOrchestrator.getConfig(1);
-    const brainHasAuthority = brainConfig.gateEnabled && !brainConfig.shadowMode;
-
-    let brainResult: Awaited<ReturnType<typeof brainOrchestrator.evaluate>> | null = null;
-
-    if (brainHasAuthority) {
-      // Blocking: Brain verdict affects execution
-      console.log(`[Auto-Executor] Brain authority active — awaiting verdict for ${symbol}...`);
-      brainResult = await brainOrchestrator.evaluate(signal, 1).catch((err) => {
-        console.warn('[Auto-Executor] Brain evaluation failed:', err.message);
-        return null;
-      });
-
-      if (brainResult) {
-        if (brainResult.verdict === "EXIT_NOW") {
-          return this.skip(signal, `Brain veto: ${brainResult.rationale}`, "brain_veto", { llmDecision: { decision: "skip", confidence: brainResult.confidence * 100, reasoning: brainResult.rationale, keyUsed: "brain" } });
-        }
-        if (brainResult.verdict === "CAUTION") {
-          return this.skip(signal, `Brain caution: ${brainResult.rationale}`, "brain_caution", { llmDecision: { decision: "skip", confidence: brainResult.confidence * 100, reasoning: brainResult.rationale, keyUsed: "brain" } });
-        }
-        if (brainResult.verdict === "REDUCE_RISK") {
-          console.log(`[Auto-Executor] Brain reduce_risk for ${symbol}: ${brainResult.rationale}`);
-          // Adjustments applied below after LLM advisor
-        }
-        // APPROVE → proceed normally
-      }
-    } else {
-      // Shadow mode: fire-and-forget logging only
-      const brainPromise = brainOrchestrator.evaluate(signal, 1).catch((err) => {
-        console.warn('[Auto-Executor] Brain shadow evaluation failed:', err.message);
-        return null;
-      });
-      // Store promise for later update (handled at execute/skip)
-      (signal as any)._brainPromise = brainPromise;
+    // ─── Brain & LLM Advisor Evaluation ───
+    const brainOutcome = await this.evaluateBrainAuthority(signal, config);
+    if (brainOutcome && brainOutcome.action === "skip") {
+      return this.skip(signal, brainOutcome.reason, brainOutcome.gate, { llmDecision: brainOutcome.llmDecision });
     }
 
-    // Gate 9: LLM Advisor (optional)
-    let sizeMult = 1.0;
-    let slPctOverride: number | undefined;
-    let tp1PctOverride: number | undefined;
-    let llmDecision: ExecutorDecision["llmDecision"] | undefined;
-    const regimeData = latestRegimeCache.get("BTCUSDT");
-
-    // Brain/LLM gate. Skipped for brain-driver signals — those already came FROM the
-    // brain (it would otherwise be asked to approve its own proposal and could self-veto).
-    const isBrainDriven = sigMetadata?.source === "brain-driver";
-    if (config.useLlmAdvisor && !isBrainDriven) {
-      const currentPrice = latestTickerCache.get(symbol)?.lastPrice ?? 0;
-      const metadata = signal.metadata as Record<string, unknown> | null;
-
-      const llmCtx: SignalContext = {
-        symbol,
-        direction: side,
-        compositeScore: parseFloat(signal.compositeScore),
-        threshold: parseFloat(signal.threshold),
-        regime: regimeData?.regime ?? "unknown",
-        strategy: regimeData?.strategy ?? "intraday",
-        currentPrice,
-        drawdownPct: session.startingBalance > 0
-          ? Math.abs(Math.min(0, session.realizedPnl)) / session.startingBalance * 100
-          : 0,
-        tradeCount: session.tradeCount,
-        openPositions: openCount,
-        rsi: metadata?.rsi as number | undefined,
-        ema20: metadata?.ema20 as number | undefined,
-        ema50: metadata?.ema50 as number | undefined,
-        spread: metadata?.spread as number | undefined,
-        imbalance: metadata?.imbalance as number | undefined,
-        brainGateEnabled: config.brainGateEnabled,
-        brainShadowMode: config.brainShadowMode,
-      };
-
-      const advice = await globalLlmAdvisor.analyzeSignal(llmCtx);
-      llmDecision = {
-        decision: advice.decision,
-        confidence: advice.confidence,
-        reasoning: advice.reasoning,
-        keyUsed: advice.keyUsed,
-      };
-
-      // Log to system_logs
-      await this.logLlmDecision(signal.id ?? 0, advice, symbol).catch(() => {});
-
-      const threshold = config.llmConfidenceThreshold ?? 70;
-      if (advice.decision === "skip" && advice.confidence >= threshold) {
-        return this.skip(signal, `LLM skip (${advice.confidence}%): ${advice.reasoning}`, "llm", { llmDecision });
-      }
-      sizeMult = advice.sizeMult ?? 1.0;
-      slPctOverride = advice.stopLossPct;
-      tp1PctOverride = advice.takeProfitPct;
+    const advisorAdvice = await this.evaluateLlmAdvisor(signal, config, context);
+    if (advisorAdvice && advisorAdvice.action === "skip") {
+      return this.skip(signal, advisorAdvice.reason, advisorAdvice.gate, { llmDecision: advisorAdvice.llmDecision });
     }
 
-    // Position sizing — 4-level price fallback chain
-    let currentPrice = markPriceCache.get(signal.symbol) ?? 0;
-    if (currentPrice <= 0) {
-      currentPrice = latestTickerCache.get(symbol)?.lastPrice ?? 0;
-    }
-    if (currentPrice <= 0) {
-      currentPrice = marketStateManager.get(symbol)?.ltp ?? 0;
-    }
-
-    if (!currentPrice || currentPrice <= 0) {
-      // Last resort: fetch via REST
-      try {
-        const klines = await fetchKlines(symbol, "1m", 1);
-        const restPrice = klines[0] ? parseFloat(klines[0].close) : 0;
-        if (restPrice > 0) {
-          currentPrice = restPrice;
-          // Seed the ticker cache so subsequent signals don't need REST
-          latestTickerCache.set(symbol, { lastPrice: restPrice, symbol });
-        }
-      } catch {
-        // REST also failed — skip
-      }
-    }
-
+    // ─── Sizing & Price Discovery ───
+    const currentPrice = await this.getCurrentPrice(symbol, signal);
     if (!currentPrice || currentPrice <= 0) {
       return this.skip(signal, "no price feed", "no_price");
     }
 
-    // Gate 7b: Price drift protection check (Binance signal price vs CoinDCX execution price)
+    // Gate 7b: Price drift protection
+    const sigMetadata = signal.metadata as Record<string, any> | null;
     const signalPrice = sigMetadata?.signalPrice as number | undefined;
     if (signalPrice && signalPrice > 0) {
       const drift = Math.abs(currentPrice - signalPrice) / signalPrice;
-      const MAX_DRIFT_PCT = 0.005; // 0.5% maximum allowable price drift
-      if (drift > MAX_DRIFT_PCT) {
-        return this.skip(
-          signal,
-          `price drift: CoinDCX price ${currentPrice} vs Binance signal price ${signalPrice} is ${(drift * 100).toFixed(2)}% > ${(MAX_DRIFT_PCT * 100).toFixed(2)}%`,
-          "price_drift"
-        );
+      if (drift > 0.005) {
+        return this.skip(signal, `price drift: ${(drift * 100).toFixed(2)}% > 0.5%`, "price_drift");
       }
     }
 
-    // ─── Dynamic capital allocation ───────────────────────────────────────────
-    // No fixed USDT size. Notional = % of equity, scaled by signal conviction and
-    // (when it has authority) the Brain. Floor is the exchange minimum (enforced by
-    // the min-qty gate below); hard cap is MAX_ALLOC_PCT of equity.
-    const availEquity = walletFree || session.startingBalance;
-    const baseAllocPct = parseFloat(config.capitalAllocationPct ?? "0.15"); // 15% base
-    const MAX_ALLOC_PCT = 0.15; // hard ceiling per single trade (% of equity)
+    const sizing = await this.calculateSizing({
+      signal,
+      config,
+      context,
+      currentPrice,
+      brainResult: brainOutcome?.brainResult,
+      advisorAdvice,
+    });
 
-    // Signal-strength multiplier: gated score 75 → 0.7, 100 → 1.0.
-    const score = parseFloat(signal.compositeScore) || 75;
-    const scoreMult = Math.max(0.7, Math.min(1.0, 0.7 + 0.3 * ((score - 75) / 25)));
-
-    // Conviction = signal strength × LLM advisor sizeMult × (Brain verdict, if authority).
-    let convictionMult = scoreMult * (sizeMult ?? 1.0);
-    if (brainHasAuthority && brainResult) {
-      // By here verdict is APPROVE or REDUCE_RISK (EXIT_NOW/CAUTION already skipped above).
-      convictionMult *= brainResult.verdict === "REDUCE_RISK" ? 0.4 : 1.0;
+    if (sizing.skipReason) {
+      return this.skip(signal, sizing.skipReason, sizing.skipGate || "sizing");
     }
 
-    let notional = isManualOverride
-      ? sizeUsdt // manual injection sets an explicit size and bypasses dynamic sizing
-      : availEquity * baseAllocPct * convictionMult;
-
-    // Brain explicit size override (only when it has execution authority).
-    if (brainHasAuthority && brainResult?.adjustedSizeUsdt) {
-      notional = brainResult.adjustedSizeUsdt;
-      console.log(`[Auto-Executor] Brain set size: ${notional.toFixed(2)} USDT`);
-    }
-
-    // Hard cap at MAX_ALLOC_PCT of equity (manual override is intentionally exempt).
-    if (!isManualOverride) {
-      notional = Math.min(notional, availEquity * MAX_ALLOC_PCT);
-    }
-
-    // Leverage: if useStrategyLeverage=true, use strategy's maxLeverage; else use defaultLeverage
-    // Hard cap at 10× regardless of strategy config to prevent over-leveraged positions (unless manual override specifies leverage)
-    const strategyMaxLev = STRATEGY_CONFIGS[regimeData?.strategy ?? "intraday"]?.maxLeverage ?? 5;
-    const manualLeverage = sigMetadata?.leverage ? parseFloat(String(sigMetadata.leverage)) : undefined;
-    const rawLeverage = manualLeverage !== undefined
-      ? manualLeverage
-      : (config.useStrategyLeverage
-        ? strategyMaxLev
-        : Math.min(config.defaultLeverage ?? 3, strategyMaxLev));
-    const leverage = manualLeverage !== undefined ? rawLeverage : Math.min(rawLeverage, 10);
-
-    // Validate size and precision against instrument specifications
-    let rawSize = notional / currentPrice;
-    let targetPrecision = 4;
-    let basePrecision = 2;
-    try {
-      const instrInfo = await getFuturesInstrumentInfo(symbol);
-      if (instrInfo) {
-        const minQty   = parseFloat(instrInfo.min_quantity ?? instrInfo.min_qty ?? "0");
-        const stepSize = parseFloat(instrInfo.step ?? instrInfo.quantity_step ?? "0");
-        targetPrecision = instrInfo.target_currency_precision ?? 4;
-        basePrecision = instrInfo.base_currency_precision ?? 2;
-
-        if (minQty > 0 && rawSize < minQty) {
-          return this.skip(signal,
-            `size ${rawSize.toFixed(6)} < min qty ${minQty} for ${symbol} — increase defaultSizeUsdt`,
-            "min_qty"
-          );
-        }
-        // Round down to nearest step
-        if (stepSize > 0) {
-          rawSize = Math.floor(rawSize / stepSize) * stepSize;
-        } else {
-          rawSize = parseFloat(rawSize.toFixed(targetPrecision));
-        }
-      }
-    } catch (err) {
-      console.warn(`[auto-executor] Failed to fetch instrument info for precision mapping:`, err);
-    }
-    const size = rawSize;
-    let slPct = slPctOverride ?? (sigMetadata?.stopLossPct ? parseFloat(String(sigMetadata.stopLossPct)) : parseFloat(config.stopLossPct ?? "0.015"));
-    let tp1Pct = tp1PctOverride ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
-
-    // Apply Brain adjustments to SL/TP
-    if (brainHasAuthority && brainResult) {
-      if (brainResult.adjustedSlPct !== undefined) {
-        slPct = brainResult.adjustedSlPct;
-        console.log(`[Auto-Executor] Brain adjusted SL: ${(slPct * 100).toFixed(2)}%`);
-      }
-      if (brainResult.adjustedTpPct !== undefined) {
-        tp1Pct = brainResult.adjustedTpPct;
-        console.log(`[Auto-Executor] Brain adjusted TP: ${(tp1Pct * 100).toFixed(2)}%`);
-      }
-    }
-
-    const stopLoss = side === "long"
-      ? currentPrice * (1 - slPct)
-      : currentPrice * (1 + slPct);
-    const takeProfit = side === "long"
-      ? currentPrice * (1 + tp1Pct)
-      : currentPrice * (1 - tp1Pct);
-
-    // Gate (depth): order size must be < 5% of available depth on the relevant side.
-    // Prevents the bot from becoming the market for illiquid symbols.
-    const book = marketStateManager.get(symbol)?.orderBook;
-    if (book) {
-      const levels = side === "long" ? book.asks : book.bids;
-      const totalDepth = levels.reduce((sum, [, qty]) => sum + qty, 0);
-      if (totalDepth > 0 && size > totalDepth * 0.05) {
-        return this.skip(
-          signal,
-          `order size ${size.toFixed(4)} > 5% of book depth ${totalDepth.toFixed(4)} — too large for liquidity`,
-          "depth"
-        );
-      }
-    }
-
-    // Execute
-    let entryReason = `Signal composite score ${signal.compositeScore} ≥ threshold ${signal.threshold}`;
-    if (llmDecision?.reasoning) {
-      entryReason = `AI: ${llmDecision.reasoning}`;
-    } else if (sigMetadata?.source === "brain-driver" && sigMetadata?.entryReason) {
-      entryReason = `Brain: ${String(sigMetadata.entryReason)}`;
-    } else if (sigMetadata?.source === "manual-trigger") {
-      entryReason = sigMetadata?.entryReason
-        ? String(sigMetadata.entryReason)
-        : "Manual Injection from Dashboard";
-    }
-
-    // Execute
+    // ─── Execution ───
     await this.executePosition({
       userId: 1,
       symbol,
       side,
       currentPrice,
-      size,
-      leverage,
-      notional,
-      stopLoss: parseFloat(stopLoss.toFixed(basePrecision)),
-      takeProfit: parseFloat(takeProfit.toFixed(basePrecision)),
+      size: sizing.size,
+      leverage: sizing.leverage,
+      notional: sizing.notional,
+      stopLoss: sizing.stopLoss,
+      takeProfit: sizing.takeProfit,
       signalId: signal.id ?? undefined,
-      strategyType: (regimeData?.strategy ?? "intraday") as StrategyType,
-      creds: creds[0] ? decryptCreds(creds[0]) : undefined,
+      strategyType: sizing.strategyType,
+      creds: context.creds,
       isPaper: isPaperMode,
       disableTrailing: sigMetadata?.disableTrailing === true || sigMetadata?.disableTrailing === "true",
-      entryReason,
+      entryReason: sizing.entryReason,
     });
 
-    // Record execution for dedup gate (Gate 1c)
+    // Record execution
+    const dedupKey = `${symbol}:${signal.direction}`;
     this.recentExecutions.set(dedupKey, Date.now());
-    this.saveDedupCache();
+    await this.saveDedupCache();
 
-    // Lock margin in paper wallet
-    if (isPaperMode) {
-      await lockPaperMargin(1, notional / leverage);
-    }
+    if (isPaperMode) await lockPaperMargin(1, sizing.notional / sizing.leverage);
 
-    // Update risk session
     session.tradeCount++;
     await updateSession(session);
 
-    // Snapshot equity after execution
-    const equity = isPaperMode ? await getPaperEquity(1) : walletFree - notional / leverage;
+    const equity = isPaperMode ? await getPaperEquity(1) : walletFree - sizing.notional / sizing.leverage;
     await snapshotEquity(1, equity, 0, session.realizedPnl);
 
     this.state.executionsToday++;
@@ -688,35 +422,244 @@ export class AutoExecutor {
       signal: {
         direction: side,
         compositeScore: signal.compositeScore,
-        strategy: regimeData?.strategy ?? "intraday",
+        strategy: sizing.strategyType,
       },
-      llmDecision,
+      llmDecision: advisorAdvice?.llmDecision,
       ts: Date.now(),
     };
-    // Update brain episode with execution result
-    if (brainHasAuthority && brainResult?.episodeId) {
-      getDb().update(brainEpisodes)
-        .set({ executionResult: "executed" })
-        .where(eq(brainEpisodes.id, brainResult.episodeId))
-        .catch(() => {});
-    } else if ((signal as any)._brainPromise) {
-      const shadowBrainResult = await (signal as any)._brainPromise;
-      if (shadowBrainResult?.episodeId) {
-        getDb().update(brainEpisodes)
-          .set({ executionResult: "executed" })
-          .where(eq(brainEpisodes.id, shadowBrainResult.episodeId))
-          .catch(() => {});
-      }
-    }
+
+    // Update brain episode
+    await this.updateBrainEpisode(signal, brainOutcome?.brainResult);
 
     this.state.lastDecision = dec;
     autoExecutorEvents.emit("decision", dec);
     this.persistDecision(dec);
-    console.log(`[auto-executor] EXECUTE ${symbol} ${side} size=${size.toFixed(4)} @ ${currentPrice}`);
+    console.log(`[auto-executor] EXECUTE ${symbol} ${side} size=${sizing.size.toFixed(4)} @ ${currentPrice}`);
     return dec;
   }
 
-  private async executePosition(params: {
+  private async evaluateBrainAuthority(signal: Signal, config: AutoExecutorConfig): Promise<{ action: "skip" | "approve"; reason: string; gate: string; llmDecision?: ExecutorDecision["llmDecision"]; brainResult?: any } | null> {
+    const brainConfig = await brainOrchestrator.getConfig(1);
+    const brainHasAuthority = brainConfig.gateEnabled && !brainConfig.shadowMode;
+
+    if (brainHasAuthority) {
+      console.log(`[Auto-Executor] Brain authority active — awaiting verdict for ${signal.symbol}...`);
+      const brainResult = await brainOrchestrator.evaluate(signal, 1).catch((err) => {
+        console.warn("[Auto-Executor] Brain evaluation failed:", err.message);
+        return null;
+      });
+
+      if (brainResult) {
+        const confidence = brainResult.confidence * 100;
+        if (brainResult.verdict === "EXIT_NOW") {
+          return { action: "skip", reason: `Brain veto: ${brainResult.rationale}`, gate: "brain_veto", llmDecision: { decision: "skip", confidence, reasoning: brainResult.rationale, keyUsed: "brain" }, brainResult };
+        }
+        if (brainResult.verdict === "CAUTION") {
+          return { action: "skip", reason: `Brain caution: ${brainResult.rationale}`, gate: "brain_caution", llmDecision: { decision: "skip", confidence, reasoning: brainResult.rationale, keyUsed: "brain" }, brainResult };
+        }
+        return { action: "approve", reason: "Brain approved", gate: "brain", brainResult };
+      }
+    } else {
+      const brainPromise = brainOrchestrator.evaluate(signal, 1).catch((err) => {
+        console.warn("[Auto-Executor] Brain shadow evaluation failed:", err.message);
+        return null;
+      });
+      (signal as any)._brainPromise = brainPromise;
+    }
+    return null;
+  }
+
+  private async evaluateLlmAdvisor(signal: Signal, config: AutoExecutorConfig, context: any): Promise<{ action: "skip" | "approve"; reason: string; gate: string; llmDecision?: ExecutorDecision["llmDecision"]; sizeMult?: number; stopLossPct?: number; takeProfitPct?: number } | null> {
+    const sigMetadata = signal.metadata as Record<string, any> | null;
+    const isBrainDriven = sigMetadata?.source === "brain-driver";
+    if (!config.useLlmAdvisor || isBrainDriven) return null;
+
+    const { symbol, side, openCount, session } = context;
+    const regimeData = latestRegimeCache.get("BTCUSDT");
+    const currentPrice = latestTickerCache.get(symbol)?.lastPrice ?? 0;
+
+    const llmCtx: SignalContext = {
+      symbol,
+      direction: side,
+      compositeScore: parseFloat(signal.compositeScore),
+      threshold: parseFloat(signal.threshold),
+      regime: regimeData?.regime ?? "unknown",
+      strategy: regimeData?.strategy ?? "intraday",
+      currentPrice,
+      drawdownPct: session.startingBalance > 0
+        ? Math.abs(Math.min(0, session.realizedPnl)) / session.startingBalance * 100
+        : 0,
+      tradeCount: session.tradeCount,
+      openPositions: openCount,
+      rsi: sigMetadata?.rsi,
+      ema20: sigMetadata?.ema20,
+      ema50: sigMetadata?.ema50,
+      spread: sigMetadata?.spread,
+      imbalance: sigMetadata?.imbalance,
+      brainGateEnabled: config.brainGateEnabled,
+      brainShadowMode: config.brainShadowMode,
+    };
+
+    const advice = await globalLlmAdvisor.analyzeSignal(llmCtx);
+    const llmDecision = {
+      decision: advice.decision,
+      confidence: advice.confidence,
+      reasoning: advice.reasoning,
+      keyUsed: advice.keyUsed,
+    };
+
+    await this.logLlmDecision(signal.id ?? 0, advice, symbol).catch(() => {});
+
+    const threshold = config.llmConfidenceThreshold ?? 70;
+    if (advice.decision === "skip" && advice.confidence >= threshold) {
+      return { action: "skip", reason: `LLM skip (${advice.confidence}%): ${advice.reasoning}`, gate: "llm", llmDecision };
+    }
+
+    return {
+      action: "approve",
+      reason: "LLM advisor approved",
+      gate: "llm",
+      llmDecision,
+      sizeMult: advice.sizeMult,
+      stopLossPct: advice.stopLossPct,
+      takeProfitPct: advice.takeProfitPct,
+    };
+  }
+private async getCurrentPrice(symbol: string, signal: Signal): Promise<number> {
+  let currentPrice = markPriceCache.get(signal.symbol) ?? 0;
+  if (currentPrice <= 0) currentPrice = latestTickerCache.get(symbol)?.lastPrice ?? 0;
+  if (currentPrice <= 0) currentPrice = marketStateManager.get(symbol)?.ltp ?? 0;
+
+  if (currentPrice <= 0) {
+    try {
+      const klines = await fetchKlines(symbol, "1m", 1);
+      const restPrice = klines[0] ? parseFloat(klines[0].close) : 0;
+      if (restPrice > 0) {
+        currentPrice = restPrice;
+        latestTickerCache.set(symbol, { lastPrice: restPrice, symbol });
+      }
+    } catch { /* ignored */ }
+  }
+  return currentPrice;
+}
+
+private async calculateSizing(params: {
+  signal: Signal;
+  config: AutoExecutorConfig;
+  context: any;
+  currentPrice: number;
+  brainResult?: any;
+  advisorAdvice?: any;
+}) {
+  const { signal, config, context, currentPrice, brainResult, advisorAdvice } = params;
+  const { side, walletFree, session } = context;
+  const sigMetadata = signal.metadata as Record<string, any> | null;
+  const regimeData = latestRegimeCache.get("BTCUSDT");
+  const strategyType = (regimeData?.strategy ?? "intraday") as StrategyType;
+
+  const isManualOverride = sigMetadata?.sizeUsdt !== undefined && sigMetadata.sizeUsdt !== null;
+  const availEquity = walletFree || session.startingBalance;
+  const baseAllocPct = parseFloat(config.capitalAllocationPct ?? "0.15");
+  const MAX_ALLOC_PCT = 0.15;
+
+  const score = parseFloat(signal.compositeScore) || 75;
+  const scoreMult = Math.max(0.7, Math.min(1.0, 0.7 + 0.3 * ((score - 75) / 25)));
+
+  let convictionMult = scoreMult * (advisorAdvice?.sizeMult ?? 1.0);
+  const brainHasAuthority = config.brainGateEnabled && !config.brainShadowMode;
+  if (brainHasAuthority && brainResult) {
+    convictionMult *= brainResult.verdict === "REDUCE_RISK" ? 0.4 : 1.0;
+  }
+
+  let notional = isManualOverride
+    ? parseFloat(String(sigMetadata!.sizeUsdt))
+    : availEquity * baseAllocPct * convictionMult;
+
+  if (brainHasAuthority && brainResult?.adjustedSizeUsdt) {
+    notional = brainResult.adjustedSizeUsdt;
+  }
+
+  if (!isManualOverride) {
+    notional = Math.min(notional, availEquity * MAX_ALLOC_PCT);
+  }
+
+  const strategyMaxLev = STRATEGY_CONFIGS[strategyType]?.maxLeverage ?? 5;
+  const manualLeverage = sigMetadata?.leverage ? parseFloat(String(sigMetadata.leverage)) : undefined;
+  const rawLeverage = manualLeverage !== undefined
+    ? manualLeverage
+    : (config.useStrategyLeverage ? strategyMaxLev : Math.min(config.defaultLeverage ?? 3, strategyMaxLev));
+  const leverage = manualLeverage !== undefined ? rawLeverage : Math.min(rawLeverage, 10);
+
+  let size = notional / currentPrice;
+  let basePrecision = 2;
+
+  try {
+    const instrInfo = await getFuturesInstrumentInfo(params.signal.symbol);
+    if (instrInfo) {
+      const minQty = parseFloat(instrInfo.min_quantity ?? instrInfo.min_qty ?? "0");
+      const stepSize = parseFloat(instrInfo.step ?? instrInfo.quantity_step ?? "0");
+      basePrecision = instrInfo.base_currency_precision ?? 2;
+
+      if (minQty > 0 && size < minQty) {
+        return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: `size ${size.toFixed(6)} < min qty ${minQty}`, skipGate: "min_qty" };
+      }
+      if (stepSize > 0) {
+        size = Math.floor(size / stepSize) * stepSize;
+      } else {
+        size = parseFloat(size.toFixed(instrInfo.target_currency_precision ?? 4));
+      }
+    }
+  } catch (err) {
+    console.warn(`[auto-executor] Failed to fetch instrument info:`, err);
+  }
+
+  let slPct = advisorAdvice?.stopLossPct ?? (sigMetadata?.stopLossPct ? parseFloat(String(sigMetadata.stopLossPct)) : parseFloat(config.stopLossPct ?? "0.015"));
+  let tp1Pct = advisorAdvice?.takeProfitPct ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
+
+  if (brainHasAuthority && brainResult) {
+    if (brainResult.adjustedSlPct !== undefined) slPct = brainResult.adjustedSlPct;
+    if (brainResult.adjustedTpPct !== undefined) tp1Pct = brainResult.adjustedTpPct;
+  }
+
+  const stopLoss = parseFloat((side === "long" ? currentPrice * (1 - slPct) : currentPrice * (1 + slPct)).toFixed(basePrecision));
+  const takeProfit = parseFloat((side === "long" ? currentPrice * (1 + tp1Pct) : currentPrice * (1 - tp1Pct)).toFixed(basePrecision));
+
+  const book = marketStateManager.get(params.signal.symbol)?.orderBook;
+  if (book) {
+    const levels = side === "long" ? book.asks : book.bids;
+    const totalDepth = levels.reduce((sum, [, qty]) => sum + qty, 0);
+    if (totalDepth > 0 && size > totalDepth * 0.05) {
+      return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: `size ${size.toFixed(4)} > 5% of depth`, skipGate: "depth" };
+    }
+  }
+
+  let entryReason = `Signal composite score ${signal.compositeScore} ≥ threshold ${signal.threshold}`;
+  if (advisorAdvice?.llmDecision?.reasoning) entryReason = `AI: ${advisorAdvice.llmDecision.reasoning}`;
+  else if (sigMetadata?.source === "brain-driver" && sigMetadata?.entryReason) entryReason = `Brain: ${String(sigMetadata.entryReason)}`;
+  else if (sigMetadata?.source === "manual-trigger") entryReason = sigMetadata?.entryReason ? String(sigMetadata.entryReason) : "Manual Injection";
+
+  return { size, leverage, notional, stopLoss, takeProfit, strategyType, entryReason };
+}
+
+private async updateBrainEpisode(signal: Signal, brainResult?: any) {
+  const db = getDb();
+  if (brainResult?.episodeId) {
+    await db.update(brainEpisodes)
+      .set({ executionResult: "executed" })
+      .where(eq(brainEpisodes.id, brainResult.episodeId))
+      .catch(() => {});
+  } else if ((signal as any)._brainPromise) {
+    const shadowBrainResult = await (signal as any)._brainPromise;
+    if (shadowBrainResult?.episodeId) {
+      await db.update(brainEpisodes)
+        .set({ executionResult: "executed" })
+        .where(eq(brainEpisodes.id, shadowBrainResult.episodeId))
+        .catch(() => {});
+    }
+  }
+}
+
+private async executePosition(params: {
     userId: number;
     symbol: string;
     side: "long" | "short";

@@ -25,11 +25,11 @@ export async function snapshotEquity(
 ): Promise<void> {
   try {
     const db = getDb();
-    const openCount = await db
+    const openCountRows = await db
       .select({ id: positions.id })
       .from(positions)
-      .where(and(eq(positions.userId, userId), eq(positions.status, "open")))
-      .then((r) => r.length);
+      .where(and(eq(positions.userId, userId), eq(positions.status, "open")));
+    const openCount = openCountRows.length;
 
     await db.insert(equitySnapshots).values({
       userId,

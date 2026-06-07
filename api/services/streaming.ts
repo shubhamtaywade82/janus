@@ -149,237 +149,36 @@ export function subscribeToSymbol(symbol: string) {
     funding: 0,
   };
 
+  const throttle = (key: keyof typeof lastDbSave, ms: number, fn: () => Promise<void>) => {
+    const now = Date.now();
+    if (now - lastDbSave[key] > ms) {
+      lastDbSave[key] = now;
+      fn().catch(err => console.error(`[streaming] ${key} DB write failed:`, err));
+    }
+  };
+
   ws.on("message", async (dataStr) => {
     try {
-      lastMessageAt.set(symbol, Date.now()); // watchdog timestamp
+      lastMessageAt.set(symbol, Date.now());
       getOrCreateFeedHealth(symbol).recordMessage();
-      const payload = JSON.parse(dataStr.toString());
-      const { stream, data } = payload;
+      const { stream, data } = JSON.parse(dataStr.toString());
       if (!data) return;
 
       if (stream.endsWith("@depth20@100ms")) {
-        // Spot uses bids/asks, futures uses b/a
-        const bids = data.bids ?? data.b ?? [];
-        const asks = data.asks ?? data.a ?? [];
-        if (!Array.isArray(bids) || !Array.isArray(asks)) return;
-        const formattedDepth = { bids, asks };
-
-        marketEvents.emit(`${symbol}:depth`, formattedDepth);
-
-        // Update in-memory state manager
-        marketStateManager.updateOrderBook(symbol, {
-          bids: bids.map(([p, q]: [unknown, unknown]) => [parseFloat(String(p)), parseFloat(String(q))]),
-          asks: asks.map(([p, q]: [unknown, unknown]) => [parseFloat(String(p)), parseFloat(String(q))]),
-          timestamp: data.E || Date.now(),
-        });
-
-        // Throttle DB writes to once every 2 seconds
-        const now = Date.now();
-        if (now - lastDbSave.depth > 2000) {
-          lastDbSave.depth = now;
-          const db = getDb();
-          const bestBid = parseFloat(bids[0]?.[0] || "0");
-          const bestAsk = parseFloat(asks[0]?.[0] || "0");
-          await db.insert(orderBookSnapshots).values({
-            symbol,
-            bids: bids.slice(0, 20),
-            asks: asks.slice(0, 20),
-            midPrice: String((bestBid + bestAsk) / 2),
-            spread: String(bestAsk - bestBid),
-          }).catch(() => {});
-        }
-      } 
-      else if (stream.endsWith("@trade")) {
-        const formattedTrade = {
-          id: data.t,
-          price: data.p,
-          qty: data.q,
-          time: data.T,
-          isBuyerMaker: data.m,
-        };
-
-        marketEvents.emit(`${symbol}:trade`, formattedTrade);
-
-        // Update in-memory state manager
-        marketStateManager.updateTrade(symbol, {
-          id: Number(data.t),
-          price: parseFloat(String(data.p)),
-          quantity: parseFloat(String(data.q)),
-          side: data.m ? "SELL" : "BUY",
-          timestamp: data.T,
-        });
-        marketStateManager.updateLtp(symbol, parseFloat(String(data.p)), data.T);
-
-        // Emit live ticker update on every trade so the UI price stays current.
-        // @ticker stream fires infrequently on Binance Futures; @trade is the real-time source.
-        const prevTicker = tickerStateCache.get(symbol) ?? {};
-        const liveTickerFromTrade = { ...prevTicker, symbol: data.s ?? symbol, lastPrice: String(data.p) };
-        tickerStateCache.set(symbol, liveTickerFromTrade);
-        const priceVal = parseFloat(String(data.p));
-        if (priceVal > 0 && !isNaN(priceVal)) {
-          latestTickerCache.set(symbol, { lastPrice: priceVal, symbol: data.s ?? symbol });
-        }
-        marketEvents.emit(`${symbol}:ticker`, liveTickerFromTrade);
-
-        // Save trade to DB
-        const now = Date.now();
-        if (now - lastDbSave.trade > 1000) {
-          lastDbSave.trade = now;
-          const db = getDb();
-          await db.insert(recentTicks).values({
-            symbol,
-            price: data.p,
-            size: data.q,
-            side: data.m ? "sell" : "buy",
-            isMaker: data.m,
-            tradeTime: new Date(data.T),
-          }).catch(() => {});
-        }
-      }
-      else if (stream.endsWith("@ticker")) {
-        const formattedTicker = {
-          symbol: data.s,
-          priceChange: data.p,
-          priceChangePercent: data.P,
-          weightedAvgPrice: data.w,
-          lastPrice: data.c,
-          lastQty: data.Q,
-          openPrice: data.o,
-          highPrice: data.h,
-          lowPrice: data.l,
-          volume: data.v,
-          quoteVolume: data.q,
-          openTime: data.O,
-          closeTime: data.C,
-          firstId: data.F,
-          lastId: data.L,
-          count: data.n,
-        };
-
-        // Merge 24h stats into the shared ticker state so live trade emissions keep them
-        tickerStateCache.set(symbol, { ...formattedTicker });
-        const priceVal = parseFloat(data.c);
-        if (priceVal > 0 && !isNaN(priceVal)) {
-          latestTickerCache.set(symbol, { lastPrice: priceVal, symbol: data.s });
-        }
-        marketEvents.emit(`${symbol}:ticker`, formattedTicker);
-
-        // Update in-memory state manager LTP
-        marketStateManager.updateLtp(symbol, parseFloat(String(data.c)), data.E || Date.now());
-      }
-      else if (stream.endsWith("@kline_1m")) {
-        const k = data.k;
-        const formattedKline = {
-          openTime: k.t,
-          open: k.o,
-          high: k.h,
-          low: k.l,
-          close: k.c,
-          volume: k.v,
-          closeTime: k.T,
-          quoteVolume: k.q,
-          trades: k.n,
-          isClosed: k.x,
-        };
-        marketEvents.emit(`${symbol}:kline`, formattedKline);
-        marketEvents.emit(`kline-update`, symbol, formattedKline);
-
-        // Throttle kline updates in DB
-        const now = Date.now();
-        if (now - lastDbSave.kline > 5000) {
-          const db = getDb();
-          lastDbSave.kline = now;
-          await db.insert(marketData).values({
-            symbol,
-            timeframe: k.i,
-            timestamp: new Date(k.t),
-            open: k.o,
-            high: k.h,
-            low: k.l,
-            close: k.c,
-            volume: k.v,
-            quoteVolume: k.q,
-            tradeCount: k.n,
-          })
-          .onConflictDoUpdate({
-            target: [marketData.symbol, marketData.timeframe, marketData.timestamp],
-            set: {
-              open: k.o,
-              high: k.h,
-              low: k.l,
-              close: k.c,
-              volume: k.v,
-              quoteVolume: k.q,
-              tradeCount: k.n,
-            }
-          })
-          .catch((err) => {
-            console.error("[streaming] DB upsert failed:", err);
-          });
-        }
-      }
-      else if (stream.endsWith("@forceOrder")) {
-        const o = data.o;
-        const formattedLiquidation = {
-          symbol: o.s,
-          side: o.S, // "SELL" = Long liquidation, "BUY" = Short liquidation
-          orderType: o.o,
-          timeInForce: o.f,
-          originalQuantity: o.q,
-          price: parseFloat(String(o.p)),
-          averagePrice: o.ap,
-          orderStatus: o.X,
-          lastFilledQuantity: o.l,
-          orderFilledAccumulatedQuantity: o.z,
-          orderTradeTime: o.T
-        };
-        marketEvents.emit(`${symbol}:liquidation`, formattedLiquidation);
-        
-        // Pass to Market State
-        marketStateManager.updateLiquidation(symbol, formattedLiquidation);
-
-        const db = getDb();
-        await db.insert(liquidationEvents).values({
-          symbol,
-          side: formattedLiquidation.side,
-          price: String(formattedLiquidation.price),
-          quantity: formattedLiquidation.originalQuantity,
-          filledQty: formattedLiquidation.orderFilledAccumulatedQuantity,
-          status: formattedLiquidation.orderStatus,
-          tradeTime: new Date(formattedLiquidation.orderTradeTime),
-        }).catch(() => {});
-      }
-      else if (stream.endsWith("@markPrice")) {
-        const formattedFunding = {
-          symbol: data.s,
-          markPrice: data.p,
-          indexPrice: data.i,
-          estimatedSettlePrice: data.P,
-          fundingRate: data.r,
-          nextFundingTime: data.T
-        };
-        marketEvents.emit(`${symbol}:funding`, formattedFunding);
-
-        // Pass to Market State
-        marketStateManager.updateFunding(symbol, formattedFunding);
-
-        const now = Date.now();
-        if (now - lastDbSave.funding > 60_000) {
-          lastDbSave.funding = now;
-          const db = getDb();
-          await db.insert(fundingRateHistory).values({
-            symbol,
-            fundingRate: formattedFunding.fundingRate,
-            markPrice: formattedFunding.markPrice,
-            nextFundingTime: new Date(formattedFunding.nextFundingTime),
-            timestamp: new Date(data.E || now),
-          }).catch(() => {});
-        }
+        handleDepthStream(symbol, data, throttle);
+      } else if (stream.endsWith("@trade")) {
+        handleTradeStream(symbol, data, throttle);
+      } else if (stream.endsWith("@ticker")) {
+        handleTickerStream(symbol, data);
+      } else if (stream.endsWith("@kline_1m")) {
+        handleKlineStream(symbol, data, throttle);
+      } else if (stream.endsWith("@forceOrder")) {
+        handleLiquidationStream(symbol, data);
+      } else if (stream.endsWith("@markPrice")) {
+        handleFundingStream(symbol, data, throttle);
       }
 
-      // Run Liquidity Engine Analysis
       liquidityEngine.processTick(symbol);
-
     } catch (err) {
       console.error(`[streaming] Error parsing message for ${symbol}:`, err);
     }
@@ -409,6 +208,109 @@ export function subscribeToSymbol(symbol: string) {
 
   ensureHeartbeat();
   ensureWatchdog();
+}
+
+function handleDepthStream(symbol: string, data: any, throttle: Function) {
+  const bids = data.bids ?? data.b ?? [];
+  const asks = data.asks ?? data.a ?? [];
+  if (!Array.isArray(bids) || !Array.isArray(asks)) return;
+
+  marketEvents.emit(`${symbol}:depth`, { bids, asks });
+  marketStateManager.updateOrderBook(symbol, {
+    bids: bids.map(([p, q]: [any, any]) => [parseFloat(String(p)), parseFloat(String(q))]),
+    asks: asks.map(([p, q]: [any, any]) => [parseFloat(String(p)), parseFloat(String(q))]),
+    timestamp: data.E || Date.now(),
+  });
+
+  throttle("depth", 2000, async () => {
+    const db = getDb();
+    const bestBid = parseFloat(bids[0]?.[0] || "0");
+    const bestAsk = parseFloat(asks[0]?.[0] || "0");
+    await db.insert(orderBookSnapshots).values({
+      symbol,
+      bids: bids.slice(0, 20),
+      asks: asks.slice(0, 20),
+      midPrice: String((bestBid + bestAsk) / 2),
+      spread: String(bestAsk - bestBid),
+    });
+  });
+}
+
+function handleTradeStream(symbol: string, data: any, throttle: Function) {
+  const priceVal = parseFloat(String(data.p));
+  marketEvents.emit(`${symbol}:trade`, { id: data.t, price: data.p, qty: data.q, time: data.T, isBuyerMaker: data.m });
+  marketStateManager.updateTrade(symbol, { id: Number(data.t), price: priceVal, quantity: parseFloat(String(data.q)), side: data.m ? "SELL" : "BUY", timestamp: data.T });
+  marketStateManager.updateLtp(symbol, priceVal, data.T);
+
+  const prevTicker = tickerStateCache.get(symbol) ?? {};
+  const liveTicker = { ...prevTicker, symbol: data.s ?? symbol, lastPrice: String(data.p) };
+  tickerStateCache.set(symbol, liveTicker);
+  if (priceVal > 0) latestTickerCache.set(symbol, { lastPrice: priceVal, symbol: data.s ?? symbol });
+  marketEvents.emit(`${symbol}:ticker`, liveTicker);
+
+  throttle("trade", 1000, async () => {
+    await getDb().insert(recentTicks).values({
+      symbol, price: data.p, size: data.q, side: data.m ? "sell" : "buy", isMaker: data.m, tradeTime: new Date(data.T),
+    });
+  });
+}
+
+function handleTickerStream(symbol: string, data: any) {
+  const ticker = {
+    symbol: data.s, priceChange: data.p, priceChangePercent: data.P, weightedAvgPrice: data.w,
+    lastPrice: data.c, lastQty: data.Q, openPrice: data.o, highPrice: data.h, lowPrice: data.l,
+    volume: data.v, quoteVolume: data.q, openTime: data.O, closeTime: data.C, firstId: data.F, lastId: data.L, count: data.n,
+  };
+  tickerStateCache.set(symbol, { ...ticker });
+  const priceVal = parseFloat(data.c);
+  if (priceVal > 0) latestTickerCache.set(symbol, { lastPrice: priceVal, symbol: data.s });
+  marketEvents.emit(`${symbol}:ticker`, ticker);
+  marketStateManager.updateLtp(symbol, priceVal, data.E || Date.now());
+}
+
+function handleKlineStream(symbol: string, data: any, throttle: Function) {
+  const k = data.k;
+  const kline = { openTime: k.t, open: k.o, high: k.h, low: k.l, close: k.c, volume: k.v, closeTime: k.T, quoteVolume: k.q, trades: k.n, isClosed: k.x };
+  marketEvents.emit(`${symbol}:kline`, kline);
+  marketEvents.emit(`kline-update`, symbol, kline);
+
+  throttle("kline", 5000, async () => {
+    await getDb().insert(marketData).values({
+      symbol, timeframe: k.i, timestamp: new Date(k.t), open: k.o, high: k.h, low: k.l, close: k.c, volume: k.v, quoteVolume: k.q, tradeCount: k.n,
+    }).onConflictDoUpdate({
+      target: [marketData.symbol, marketData.timeframe, marketData.timestamp],
+      set: { open: k.o, high: k.h, low: k.l, close: k.c, volume: k.v, quoteVolume: k.q, tradeCount: k.n },
+    });
+  });
+}
+
+function handleLiquidationStream(symbol: string, data: any) {
+  const o = data.o;
+  const liq = {
+    symbol: o.s, side: o.S, orderType: o.o, timeInForce: o.f, originalQuantity: o.q,
+    price: parseFloat(String(o.p)), averagePrice: o.ap, orderStatus: o.X, lastFilledQuantity: o.l,
+    orderFilledAccumulatedQuantity: o.z, orderTradeTime: o.T
+  };
+  marketEvents.emit(`${symbol}:liquidation`, liq);
+  marketStateManager.updateLiquidation(symbol, liq);
+
+  getDb().insert(liquidationEvents).values({
+    symbol, side: liq.side, price: String(liq.price), quantity: liq.originalQuantity,
+    filledQty: liq.orderFilledAccumulatedQuantity, status: liq.orderStatus, tradeTime: new Date(liq.orderTradeTime),
+  }).catch(() => {});
+}
+
+function handleFundingStream(symbol: string, data: any, throttle: Function) {
+  const funding = { symbol: data.s, markPrice: data.p, indexPrice: data.i, estimatedSettlePrice: data.P, fundingRate: data.r, nextFundingTime: data.T };
+  marketEvents.emit(`${symbol}:funding`, funding);
+  marketStateManager.updateFunding(symbol, funding);
+
+  throttle("funding", 60000, async () => {
+    await getDb().insert(fundingRateHistory).values({
+      symbol, fundingRate: funding.fundingRate, markPrice: funding.markPrice,
+      nextFundingTime: new Date(funding.nextFundingTime), timestamp: new Date(data.E || Date.now()),
+    });
+  });
 }
 
 export function unsubscribeFromSymbol(symbol: string) {

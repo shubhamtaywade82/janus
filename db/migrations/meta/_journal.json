@@ -2,82 +2,21 @@
   "version": "7",
   "dialect": "postgresql",
   "entries": [
-    {
-      "idx": 0,
-      "version": "7",
-      "when": 1780291551938,
-      "tag": "0000_white_saracen",
-      "breakpoints": true
-    },
-    {
-      "idx": 1,
-      "version": "7",
-      "when": 1780299790770,
-      "tag": "0001_dizzy_wendigo",
-      "breakpoints": true
-    },
-    {
-      "idx": 2,
-      "version": "7",
-      "when": 1780320614695,
-      "tag": "0002_fantastic_praxagora",
-      "breakpoints": true
-    },
-    {
-      "idx": 3,
-      "version": "7",
-      "when": 1780327720473,
-      "tag": "0003_curly_brother_voodoo",
-      "breakpoints": true
-    },
-    {
-      "idx": 4,
-      "version": "7",
-      "when": 1780340912205,
-      "tag": "0004_useful_post",
-      "breakpoints": true
-    },
-    {
-      "idx": 5,
-      "version": "7",
-      "when": 1780365978760,
-      "tag": "0005_sleepy_mulholland_black",
-      "breakpoints": true
-    },
-    {
-      "idx": 6,
-      "version": "7",
-      "when": 1780368145445,
-      "tag": "0006_common_jigsaw",
-      "breakpoints": true
-    },
-    {
-      "idx": 7,
-      "version": "7",
-      "when": 1780392013880,
-      "tag": "0007_wealthy_skullbuster",
-      "breakpoints": true
-    },
-    {
-      "idx": 8,
-      "version": "7",
-      "when": 1780563065981,
-      "tag": "0008_loud_ben_parker",
-      "breakpoints": true
-    },
-    {
-      "idx": 9,
-      "version": "7",
-      "when": 1780531200000,
-      "tag": "0008_market_positioning_data",
-      "breakpoints": true
-    },
-    {
-      "idx": 10,
-      "version": "7",
-      "when": 1780565558430,
-      "tag": "0009_bent_starhawk",
-      "breakpoints": true
-    }
+    {"idx": 0, "version": "7", "when": 1780291551938, "tag": "0000_white_saracen", "breakpoints": true},
+    {"idx": 1, "version": "7", "when": 1780299790770, "tag": "0001_dizzy_wendigo", "breakpoints": true},
+    {"idx": 2, "version": "7", "when": 1780320614695, "tag": "0002_fantastic_praxagora", "breakpoints": true},
+    {"idx": 3, "version": "7", "when": 1780327720473, "tag": "0003_curly_brother_voodoo", "breakpoints": true},
+    {"idx": 4, "version": "7", "when": 1780340912205, "tag": "0004_useful_post", "breakpoints": true},
+    {"idx": 5, "version": "7", "when": 1780365978760, "tag": "0005_sleepy_mulholland_black", "breakpoints": true},
+    {"idx": 6, "version": "7", "when": 1780368145445, "tag": "0006_common_jigsaw", "breakpoints": true},
+    {"idx": 7, "version": "7", "when": 1780392013880, "tag": "0007_wealthy_skullbuster", "breakpoints": true},
+    {"idx": 8, "version": "7", "when": 1780563065981, "tag": "0008_loud_ben_parker", "breakpoints": true},
+    {"idx": 9, "version": "7", "when": 1780565558430, "tag": "0009_bent_starhawk", "breakpoints": true},
+    {"idx": 10, "version": "7", "when": 1780565560000, "tag": "0010_green_lily_hollister", "breakpoints": true},
+    {"idx": 11, "version": "7", "when": 1780565561000, "tag": "0011_risk_sessions", "breakpoints": true},
+    {"idx": 12, "version": "7", "when": 1780565562000, "tag": "0012_market_regimes", "breakpoints": true},
+    {"idx": 13, "version": "7", "when": 1780565563000, "tag": "0013_episode_attribution", "breakpoints": true},
+    {"idx": 14, "version": "7", "when": 1780565564000, "tag": "0014_pgvector_episodes", "breakpoints": true},
+    {"idx": 15, "version": "7", "when": 1780565565000, "tag": "0015_brain_metrics_views", "breakpoints": true}
   ]
 }
