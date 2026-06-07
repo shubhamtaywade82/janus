@@ -210,7 +210,7 @@ export function subscribeToSymbol(symbol: string) {
   ensureWatchdog();
 }
 
-function handleDepthStream(symbol: string, data: any, throttle: (key: string, ms: number, fn: () => Promise<void>) => void) {
+function handleDepthStream(symbol: string, data: any, throttle: (key: "depth" | "trade" | "kline" | "funding", ms: number, fn: () => Promise<void>) => void) {
   const bids = data.bids ?? data.b ?? [];
   const asks = data.asks ?? data.a ?? [];
   if (!Array.isArray(bids) || !Array.isArray(asks)) return;
@@ -236,7 +236,7 @@ function handleDepthStream(symbol: string, data: any, throttle: (key: string, ms
   });
 }
 
-function handleTradeStream(symbol: string, data: any, throttle: (key: string, ms: number, fn: () => Promise<void>) => void) {
+function handleTradeStream(symbol: string, data: any, throttle: (key: "depth" | "trade" | "kline" | "funding", ms: number, fn: () => Promise<void>) => void) {
   const priceVal = parseFloat(String(data.p));
   marketEvents.emit(`${symbol}:trade`, { id: data.t, price: data.p, qty: data.q, time: data.T, isBuyerMaker: data.m });
   marketStateManager.updateTrade(symbol, { id: Number(data.t), price: priceVal, quantity: parseFloat(String(data.q)), side: data.m ? "SELL" : "BUY", timestamp: data.T });
@@ -268,7 +268,7 @@ function handleTickerStream(symbol: string, data: any) {
   marketStateManager.updateLtp(symbol, priceVal, data.E || Date.now());
 }
 
-function handleKlineStream(symbol: string, data: any, throttle: (key: string, ms: number, fn: () => Promise<void>) => void) {
+function handleKlineStream(symbol: string, data: any, throttle: (key: "depth" | "trade" | "kline" | "funding", ms: number, fn: () => Promise<void>) => void) {
   const k = data.k;
   const kline = { openTime: k.t, open: k.o, high: k.h, low: k.l, close: k.c, volume: k.v, closeTime: k.T, quoteVolume: k.q, trades: k.n, isClosed: k.x };
   marketEvents.emit(`${symbol}:kline`, kline);
@@ -300,7 +300,7 @@ function handleLiquidationStream(symbol: string, data: any) {
   }).catch(() => {});
 }
 
-function handleFundingStream(symbol: string, data: any, throttle: (key: string, ms: number, fn: () => Promise<void>) => void) {
+function handleFundingStream(symbol: string, data: any, throttle: (key: "depth" | "trade" | "kline" | "funding", ms: number, fn: () => Promise<void>) => void) {
   const funding = { symbol: data.s, markPrice: data.p, indexPrice: data.i, estimatedSettlePrice: data.P, fundingRate: data.r, nextFundingTime: data.T };
   marketEvents.emit(`${symbol}:funding`, funding);
   marketStateManager.updateFunding(symbol, funding);

@@ -676,8 +676,38 @@ private async calculateSizing(params: {
     if (brainResult.adjustedTpPct !== undefined) tp1Pct = brainResult.adjustedTpPct / 100;
   }
 
+  // ── Sanity clamp: catch any remaining misscaled or out-of-range values ──
+  const MIN_SL_PCT = 0.003;  // 0.3%
+  const MAX_SL_PCT = 0.08;   // 8%
+  const MIN_TP_PCT = 0.005;  // 0.5%
+  const MAX_TP_PCT = 0.15;   // 15%
+
+  if (slPct > 1) {
+    console.warn(`[auto-executor] slPct ${slPct} appears to be a whole percentage — dividing by 100`);
+    slPct = slPct / 100;
+  }
+  if (tp1Pct > 1) {
+    console.warn(`[auto-executor] tp1Pct ${tp1Pct} appears to be a whole percentage — dividing by 100`);
+    tp1Pct = tp1Pct / 100;
+  }
+
+  slPct = Math.max(MIN_SL_PCT, Math.min(MAX_SL_PCT, slPct));
+  tp1Pct = Math.max(MIN_TP_PCT, Math.min(MAX_TP_PCT, tp1Pct));
+
   const stopLoss = parseFloat((side === "long" ? currentPrice * (1 - slPct) : currentPrice * (1 + slPct)).toFixed(basePrecision));
   const takeProfit = parseFloat((side === "long" ? currentPrice * (1 + tp1Pct) : currentPrice * (1 - tp1Pct)).toFixed(basePrecision));
+
+  // ── Final sanity: SL must be on correct side of entry ──
+  if (side === "long" && stopLoss >= currentPrice) {
+    console.warn(`[auto-executor] SL ${stopLoss} >= entry ${currentPrice} for LONG — resetting to -${(MIN_SL_PCT * 100).toFixed(1)}%`);
+    const correctedSl = parseFloat((currentPrice * (1 - MIN_SL_PCT)).toFixed(basePrecision));
+    return { size, leverage, notional, stopLoss: correctedSl, takeProfit, strategyType };
+  }
+  if (side === "short" && stopLoss <= currentPrice) {
+    console.warn(`[auto-executor] SL ${stopLoss} <= entry ${currentPrice} for SHORT — resetting to +${(MIN_SL_PCT * 100).toFixed(1)}%`);
+    const correctedSl = parseFloat((currentPrice * (1 + MIN_SL_PCT)).toFixed(basePrecision));
+    return { size, leverage, notional, stopLoss: correctedSl, takeProfit, strategyType };
+  }
 
   const book = marketStateManager.get(params.signal.symbol)?.orderBook;
   if (book) {

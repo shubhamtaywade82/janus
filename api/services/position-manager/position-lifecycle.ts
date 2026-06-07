@@ -23,6 +23,7 @@ import { latestTickerCache } from "../streaming";
 import { env } from "../../lib/env";
 import { getPaperWallet } from "../paper-wallet";
 import { registerPositionForTrailing, syncTrailingStopLoss } from "../trailing-stop";
+import type { StrategyType } from "../strategy-config";
 // ─── Position Lifecycle Manager ──────────────────────────────────────────────
 // Central orchestrator: syncs positions, runs assessment loops,
 // coordinates protection → AI/code advice → policy → execution.
