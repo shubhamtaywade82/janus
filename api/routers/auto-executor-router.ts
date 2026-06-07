@@ -13,8 +13,10 @@ import {
   getPaperSnapshots,
   snapshotPaperWallet,
   getPaperWallet,
+  depositPaperFunds,
 } from "../services/paper-wallet";
 import { env } from "../lib/env";
+import { TRPCError } from "@trpc/server";
 
 export const autoExecutorRouter = createRouter({
   // ─── Get config ───
@@ -103,7 +105,7 @@ export const autoExecutorRouter = createRouter({
       const currency = configRows[0]?.paperCurrency ?? "INR";
       const starting = configRows[0]?.paperStartingBalance
         ? parseFloat(configRows[0].paperStartingBalance)
-        : 1000000;
+        : 100000;
       return getPaperWallet(ctx.user.id, starting, currency);
     }),
 
@@ -122,6 +124,27 @@ export const autoExecutorRouter = createRouter({
       const currency = configRows[0]?.paperCurrency ?? "INR";
       await resetPaperWallet(ctx.user.id, input.newBalance, currency);
       return { success: true, balance: input.newBalance };
+    }),
+
+  // ─── Deposit virtual funds into paper wallet ───
+  depositPaperFunds: authedQuery
+    .input(z.object({ amount: z.number().positive().min(100).max(10_000_000), note: z.string().max(120).optional() }))
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      const configRows = await db
+        .select({
+          paperCurrency: autoExecutorConfig.paperCurrency,
+        })
+        .from(autoExecutorConfig)
+        .where(eq(autoExecutorConfig.userId, ctx.user.id))
+        .limit(1);
+      const currency = configRows[0]?.paperCurrency ?? "INR";
+      try {
+        await depositPaperFunds(ctx.user.id, input.amount, currency, input.note);
+      } catch (err: any) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: err?.message ?? "Deposit failed" });
+      }
+      return { success: true };
     }),
 
   // ─── Paper wallet ledger entries (audit trail) ───

@@ -34,6 +34,27 @@ export function AutoTraderPanel(_props: { userId?: number }) {
     onError: (err) => toast.error("Reset failed", { description: err.message }),
   });
 
+  const [depositOpen, setDepositOpen] = useState(false);
+  const [depositAmount, setDepositAmount] = useState("");
+  const depositPaper = trpc.autoExecutor.depositPaperFunds.useMutation({
+    onSuccess: () => {
+      toast.success("Deposit successful");
+      refetchPaperWallet();
+      setDepositOpen(false);
+      setDepositAmount("");
+    },
+    onError: (err) => toast.error("Deposit failed", { description: err.message }),
+  });
+
+  const handleDeposit = () => {
+    const amount = parseFloat(depositAmount);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      toast.error("Enter a valid amount");
+      return;
+    }
+    depositPaper.mutate({ amount });
+  };
+
   const saveConfig = trpc.autoExecutor.saveConfig.useMutation({
     onSuccess: () => { toast.success("AutoTrader config saved"); refetch(); },
     onError: (err) => toast.error("Save failed", { description: err.message }),
@@ -51,7 +72,7 @@ export function AutoTraderPanel(_props: { userId?: number }) {
     useLlmAdvisor: true,
     llmConfidenceThreshold: 70,
     maxTotalPositions: 3,
-    paperStartingBalance: "1000000",
+    paperStartingBalance: "100000",
     paperCurrency: "INR" as "USDT" | "INR",
   });
 
@@ -70,7 +91,7 @@ export function AutoTraderPanel(_props: { userId?: number }) {
         useLlmAdvisor: config.useLlmAdvisor ?? true,
         llmConfidenceThreshold: config.llmConfidenceThreshold ?? 70,
         maxTotalPositions: config.maxTotalPositions ?? 3,
-        paperStartingBalance: config.paperStartingBalance ?? "1000000",
+        paperStartingBalance: config.paperStartingBalance ?? "100000",
         paperCurrency: (config.paperCurrency as "USDT" | "INR") ?? "INR",
       });
       setSynced(true);
@@ -180,13 +201,40 @@ export function AutoTraderPanel(_props: { userId?: number }) {
           <div className="px-3 py-2 border-t border-[#27272a] bg-[#0a0a0a]">
             <div className="flex items-center justify-between text-[9px] mb-1">
               <span className="text-[#52525b]">Paper Balance</span>
-              <button
-                onClick={() => resetPaper.mutate({ newBalance: parseFloat(config?.paperStartingBalance ?? "1000000") })}
-                className="text-[#52525b] hover:text-[#f4f4f5] underline text-[8px]"
-              >
-                Reset
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => setDepositOpen((v) => !v)}
+                  className="text-[#52525b] hover:text-[#f4f4f5] underline text-[8px]"
+                >
+                  + Deposit
+                </button>
+                <button
+                  onClick={() => resetPaper.mutate({ newBalance: parseFloat(config?.paperStartingBalance ?? "100000") })}
+                  className="text-[#52525b] hover:text-[#f4f4f5] underline text-[8px]"
+                >
+                  Reset
+                </button>
+              </div>
             </div>
+            {depositOpen && (
+              <div className="flex items-center gap-1.5 mb-1.5">
+                <input
+                  type="number"
+                  min="0"
+                  placeholder="Amount in ₹"
+                  value={depositAmount}
+                  onChange={(e) => setDepositAmount(e.target.value)}
+                  className="flex-1 bg-[#18181b] border border-[#27272a] rounded px-1.5 py-0.5 text-[8px] text-[#f4f4f5] outline-none focus:border-[#52525b]"
+                />
+                <button
+                  onClick={handleDeposit}
+                  disabled={depositPaper.isPending}
+                  className="px-1.5 py-0.5 rounded text-[8px] border border-[#27272a] text-[#f4f4f5] hover:bg-[#18181b] disabled:opacity-50"
+                >
+                  Add
+                </button>
+              </div>
+            )}
             <div className="grid grid-cols-3 gap-2 text-[8px] leading-tight">
               <div>
                 <div className="text-[#52525b]">Free</div>
@@ -196,6 +244,11 @@ export function AutoTraderPanel(_props: { userId?: number }) {
                 <div className="text-[#52525b]/70 tabular-nums">
                   {balanceUsdt.toFixed(2)} USDT
                 </div>
+                {paperWallet.totalDeposited != null && (
+                  <div className="text-[#52525b]/70 tabular-nums mt-0.5">
+                    Deposited: ₹{Number(paperWallet.totalDeposited).toFixed(2)}
+                  </div>
+                )}
               </div>
               <div>
                 <div className="text-[#52525b]">Locked</div>

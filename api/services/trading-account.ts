@@ -337,6 +337,66 @@ export async function chargeFee(
   });
 }
 
+// ─── Deposit virtual funds into a paper/backtest account ───
+export async function depositToAccount(
+  accountId: number,
+  amount: number,
+  note?: string
+): Promise<void> {
+  if (amount <= 0) throw new Error("Deposit amount must be positive");
+
+  const db = getDb();
+  const [account] = await db
+    .select()
+    .from(tradingAccounts)
+    .where(eq(tradingAccounts.id, accountId))
+    .limit(1);
+  if (!account) throw new Error("Account not found");
+  if (account.mode === "live") throw new Error("Cannot deposit to a live account");
+
+  const balBefore = parseFloat(account.walletBalance);
+  const newWalletBalance = balBefore + amount;
+  const newAvailable = parseFloat(account.availableBalance) + amount;
+  const newEquity = newWalletBalance + parseFloat(account.unrealizedPnl);
+  const peakEquity = Math.max(newEquity, parseFloat(account.peakEquity));
+  const drawdown = Math.max(0, peakEquity - newEquity);
+
+  await db.update(tradingAccounts).set({
+    walletBalance: String(newWalletBalance),
+    availableBalance: String(newAvailable),
+    equity: String(newEquity),
+    freeMargin: String(newAvailable),
+    peakEquity: String(peakEquity),
+    drawdown: String(drawdown),
+    updatedAt: new Date(),
+  }).where(eq(tradingAccounts.id, accountId));
+
+  await writeLedgerEntry(accountId, {
+    eventType: "deposit",
+    credit: amount,
+    debit: 0,
+    balanceBefore: balBefore,
+    balanceAfter: newWalletBalance,
+    referenceType: "manual",
+    metadata: { note: note ?? null, source: "deposit_form" },
+  });
+}
+
+// ─── Sum deposit ledger entries for an account ───
+export async function getDepositTotals(
+  accountId: number
+): Promise<{ totalDeposited: number; depositCount: number }> {
+  const rows = await getDb()
+    .select({ credit: accountLedger.credit })
+    .from(accountLedger)
+    .where(and(eq(accountLedger.accountId, accountId), eq(accountLedger.eventType, "deposit")));
+
+  return {
+    totalDeposited: rows.reduce((sum, r) => sum + parseFloat(r.credit), 0),
+    depositCount: rows.length,
+  };
+}
+
 // ─── Take a snapshot ───
 export async function takeAccountSnapshot(accountId: number): Promise<void> {
   const db = getDb();

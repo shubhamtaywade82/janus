@@ -25,6 +25,8 @@ import {
   takeAccountSnapshot,
   getLedgerEntries,
   getAccountSnapshots,
+  depositToAccount,
+  getDepositTotals,
 } from "./trading-account";
 
 // In-memory account-id cache keyed by "userId:currency"
@@ -36,7 +38,7 @@ function cacheKey(userId: number, currency: string): string {
 
 async function getAccountId(
   userId: number,
-  startingBalance = 1_000_000,
+  startingBalance = 100_000,
   currency: "USDT" | "INR" = "INR"
 ): Promise<number> {
   const key = cacheKey(userId, currency);
@@ -50,13 +52,14 @@ async function getAccountId(
 
 export async function getPaperWallet(
   userId: number,
-  startingBalance = 1_000_000,
+  startingBalance = 100_000,
   currency: "USDT" | "INR" = "INR"
 ) {
   const account = await getOrCreateAccount(userId, "paper", startingBalance, currency);
   accountIdCache.set(cacheKey(userId, currency), account.id);
 
   const metrics = computeDerivedMetrics(account);
+  const { totalDeposited, depositCount } = await getDepositTotals(account.id);
 
   return {
     userId,
@@ -83,8 +86,24 @@ export async function getPaperWallet(
     winCount: account.winCount,
     totalFeesPaid: parseFloat(account.totalFeesPaid),
     totalFundingPaid: parseFloat(account.totalFundingPaid),
+    totalDeposited,
+    depositCount,
     status: account.status,
   };
+}
+
+/**
+ * Deposit virtual INR funds into the paper wallet.
+ * @param amount  amount in the wallet's own currency (no USDT conversion — INR deposits go straight in)
+ */
+export async function depositPaperFunds(
+  userId: number,
+  amount: number,
+  currency: "USDT" | "INR" = "INR",
+  note?: string
+): Promise<void> {
+  const accountId = await getAccountId(userId, undefined, currency);
+  await depositToAccount(accountId, amount, note);
 }
 
 /**

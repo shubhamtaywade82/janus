@@ -127,6 +127,13 @@
       "when": 1780824183864,
       "tag": "0017_purple_gauntlet",
       "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1780830326547,
+      "tag": "0018_outstanding_matthew_murdock",
+      "breakpoints": true
     }
   ]
 }

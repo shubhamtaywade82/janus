@@ -200,7 +200,7 @@ export class AutoExecutor {
     llmConfidenceThreshold: 70,
     maxPositionsPerSymbol: 1,
     maxTotalPositions: 3,
-    paperStartingBalance: "1000000",
+    paperStartingBalance: "100000",
     paperCurrency: "INR",
     brainDriverEnabled: false,
     brainGateEnabled: false,
@@ -341,7 +341,7 @@ export class AutoExecutor {
       .limit(1);
 
     if (isPaperMode) {
-      const paperBalance = parseFloat(config.paperStartingBalance ?? "1000000");
+      const paperBalance = parseFloat(config.paperStartingBalance ?? "100000");
       const paperCurrency = (config.paperCurrency as "USDT" | "INR") ?? "INR";
       const pw = await getPaperWallet(1, paperBalance, paperCurrency);
       walletFree = pw.balance;
