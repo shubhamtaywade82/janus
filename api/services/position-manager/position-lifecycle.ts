@@ -22,7 +22,7 @@ import { userPositionsCache, markPriceCache } from "../coindcx-ws";
 import { latestTickerCache } from "../streaming";
 import { env } from "../../lib/env";
 import { getPaperWallet } from "../paper-wallet";
-
+import { registerPositionForTrailing, syncTrailingStopLoss } from "../trailing-stop";
 // ─── Position Lifecycle Manager ──────────────────────────────────────────────
 // Central orchestrator: syncs positions, runs assessment loops,
 // coordinates protection → AI/code advice → policy → execution.
@@ -117,9 +117,11 @@ export class PositionLifecycleManager {
 
     // Build merged set keyed by exchangeOrderId / DB id
     const managed = new Map<string, ManagedPosition>();
+    const strategyTypes = new Map<number, string>();
 
     // First pass: DB positions as baseline
     for (const dbPos of dbPositions) {
+      strategyTypes.set(dbPos.id, dbPos.strategyType ?? "intraday");
       const binanceSym = dbPos.symbol.replace("B-", "").replace("_", "");
       let markPriceRaw = markPriceCache.get(dbPos.symbol) ?? 0;
       if (markPriceRaw <= 0) {
@@ -232,6 +234,24 @@ export class PositionLifecycleManager {
     // Upsert into store
     for (const mp of managed.values()) {
       positionStore.upsert(mp);
+    }
+
+    // Re-register all open positions with the trailing-stop engine
+    // (critical after restart when trackedPositions is empty)
+    for (const mp of managed.values()) {
+      if (mp.stopLoss) {
+        registerPositionForTrailing({
+          id: mp.id,
+          symbol: mp.binanceSymbol,
+          side: mp.side === "LONG" ? "long" : "short",
+          entryPrice: mp.entryPrice,
+          stopLoss: mp.stopLoss,
+          strategyType: strategyTypes.get(mp.id) ?? "intraday",
+          userId: mp.userId,
+          size: mp.quantity,
+        });
+        syncTrailingStopLoss(mp.id, mp.stopLoss);
+      }
     }
 
     // Mark newly discovered positions as alerted in DB so restarts don't re-alert
