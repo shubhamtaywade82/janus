@@ -663,6 +663,18 @@ private async calculateSizing(params: {
       } else {
         size = parseFloat(size.toFixed(instrInfo.target_currency_precision ?? 4));
       }
+
+      // Re-check min quantity after rounding down to step size — rounding can push size below the exchange minimum
+      if (minQty > 0 && size < minQty) {
+        return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: `rounded size ${size.toFixed(6)} < min qty ${minQty}`, skipGate: "min_qty" };
+      }
+
+      // Min notional check — exchange rejects orders whose value (qty × price) is below this threshold
+      const minNotional = parseFloat(instrInfo.min_notional ?? "0");
+      const roundedNotional = size * currentPrice;
+      if (minNotional > 0 && roundedNotional < minNotional) {
+        return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: `notional $${roundedNotional.toFixed(2)} < min notional $${minNotional}`, skipGate: "min_notional" };
+      }
     }
   } catch (err) {
     console.warn(`[auto-executor] Failed to fetch instrument info:`, err);
