@@ -246,7 +246,7 @@ export class PositionLifecycleManager {
           side: mp.side === "LONG" ? "long" : "short",
           entryPrice: mp.entryPrice,
           stopLoss: mp.stopLoss,
-          strategyType: strategyTypes.get(mp.id) ?? "intraday",
+          strategyType: (strategyTypes.get(mp.id) ?? "intraday") as StrategyType,
           userId: mp.userId,
           size: mp.quantity,
         });
