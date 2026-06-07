@@ -221,6 +221,10 @@ startBrainScheduler();
 import { startLiquidationMonitor, stopLiquidationMonitor } from "./services/liquidation-monitor";
 startLiquidationMonitor(10_000);
 
+// Start key rotation monitor (daily Telegram reminder when exchange API credentials are stale)
+import { keyRotationMonitor } from "./services/key-rotation-monitor";
+keyRotationMonitor.start();
+
 // ─── Graceful shutdown ────────────────────────────────────────────────────────
 // Called on SIGTERM, SIGINT, uncaughtException, and unhandledRejection.
 // Stops all background services before exit so PM2/Docker can restart cleanly.
@@ -245,6 +249,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
   stopTelegramCommandBot();
   stopPositionTelegramNotifier();
   stopLiquidationMonitor();
+  keyRotationMonitor.stop();
   positionLifecycleManager.stop?.();
 
   // 3. Brief pause for in-flight DB writes to complete

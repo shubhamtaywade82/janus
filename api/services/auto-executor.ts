@@ -30,7 +30,7 @@ import { latestTickerCache } from "./streaming";
 import { marketStateManager } from "./market-state";
 import { markPriceCache, tradingEvents } from "./coindcx-ws";
 import { fetchKlines } from "./binance";
-import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo } from "./coindcx";
+import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo, getOrderStatus, cancelOrder } from "./coindcx";
 import { registerPositionForTrailing, unregisterPosition } from "./trailing-stop";
 import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
@@ -79,6 +79,74 @@ export interface AutoExecutorState {
 }
 
 const brainOrchestrator = new BrainOrchestrator(); // mode read per-call from config
+
+const LIMIT_ENTRY_TIMEOUT_MS = 5_000;
+const LIMIT_ENTRY_POLL_MS = 1_000;
+
+/**
+ * Places an entry order. When `preferLimitEntry` is true and the order book has live
+ * quotes, places a marketable limit order at the best ask (long) / best bid (short) —
+ * this caps slippage at the displayed top-of-book instead of sweeping deeper into the
+ * book like a market order would. If unfilled after a short timeout, cancels and falls
+ * back to a market order so the entry isn't missed entirely.
+ */
+async function placeEntryOrder(
+  creds: { apiKey: string; apiSecret: string },
+  order: { market: string; side: "buy" | "sell"; total_quantity: number; price: number; leverage: number; client_order_id: string },
+  preferLimitEntry: boolean,
+  symbol: string
+): Promise<any> {
+  const book = marketStateManager.get(symbol)?.orderBook;
+  const bestBid = book?.bids?.[0]?.[0] ?? 0;
+  const bestAsk = book?.asks?.[0]?.[0] ?? 0;
+
+  if (!preferLimitEntry || bestBid <= 0 || bestAsk <= 0) {
+    return createFuturesOrder(creds, { ...order, order_type: "market" });
+  }
+
+  const limitPrice = order.side === "buy" ? bestAsk : bestBid;
+  const placed = await createFuturesOrder(creds, { ...order, order_type: "limit", price: limitPrice });
+  const orderId = placed?.id;
+  if (!orderId) return placed;
+
+  const deadline = Date.now() + LIMIT_ENTRY_TIMEOUT_MS;
+  let lastStatus: any = null;
+  while (Date.now() < deadline) {
+    await new Promise((r) => setTimeout(r, LIMIT_ENTRY_POLL_MS));
+    const status = await getOrderStatus(creds, orderId).catch(() => null);
+    if (!status) continue;
+    lastStatus = status;
+    const remaining = parseFloat(status.remaining_quantity ?? status.total_quantity ?? "0");
+    if (remaining <= 0) {
+      console.log(`[auto-executor] Limit entry ${orderId} filled at ${limitPrice} (symbol=${symbol})`);
+      return status;
+    }
+  }
+
+  // Cancel the rest and top up with a market order sized to the unfilled remainder only —
+  // a partially-filled limit order followed by a full-size market order would overfill.
+  const remainingQty = parseFloat(lastStatus?.remaining_quantity ?? String(order.total_quantity));
+  await cancelOrder(creds, orderId, order.market).catch((err) =>
+    console.warn(`[auto-executor] Failed to cancel unfilled limit entry ${orderId}:`, err.message)
+  );
+
+  if (remainingQty <= 0) {
+    console.log(`[auto-executor] Limit entry ${orderId} fully filled by cancel-time (symbol=${symbol})`);
+    return lastStatus;
+  }
+
+  const filledQty = order.total_quantity - remainingQty;
+  console.warn(
+    `[auto-executor] Limit entry ${orderId} not filled within ${LIMIT_ENTRY_TIMEOUT_MS}ms ` +
+    `(filled=${filledQty}/${order.total_quantity}) — cancelling remainder and topping up with market order for ${remainingQty} (symbol=${symbol})`
+  );
+  const topUp = await createFuturesOrder(creds, { ...order, order_type: "market", total_quantity: remainingQty });
+  // Note: the position record below tracks `topUp.id` as exchangeOrderId — the partially-filled
+  // limit order (`orderId`) is logged above for traceability but not separately persisted.
+  // The position-reconciler corrects size against the exchange's actual aggregate fill regardless.
+  console.log(`[auto-executor] Top-up market order ${topUp?.id} filled remainder for entry ${orderId} (symbol=${symbol})`);
+  return topUp;
+}
 
 export class AutoExecutor {
   constructor() {
@@ -663,6 +731,18 @@ private async calculateSizing(params: {
       } else {
         size = parseFloat(size.toFixed(instrInfo.target_currency_precision ?? 4));
       }
+
+      // Re-check min quantity after rounding down to step size — rounding can push size below the exchange minimum
+      if (minQty > 0 && size < minQty) {
+        return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: `rounded size ${size.toFixed(6)} < min qty ${minQty}`, skipGate: "min_qty" };
+      }
+
+      // Min notional check — exchange rejects orders whose value (qty × price) is below this threshold
+      const minNotional = parseFloat(instrInfo.min_notional ?? "0");
+      const roundedNotional = size * currentPrice;
+      if (minNotional > 0 && roundedNotional < minNotional) {
+        return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: `notional $${roundedNotional.toFixed(2)} < min notional $${minNotional}`, skipGate: "min_notional" };
+      }
     }
   } catch (err) {
     console.warn(`[auto-executor] Failed to fetch instrument info:`, err);
@@ -799,17 +879,18 @@ private async executePosition(params: {
     if (params.creds && !params.isPaper) {
       try {
         const coindcxSym = `B-${params.symbol.replace("USDT", "_USDT")}`;
-        const order = await createFuturesOrder(
+        const order = await placeEntryOrder(
           { apiKey: params.creds.apiKey, apiSecret: params.creds.apiSecret },
           {
             market: coindcxSym,
             side: params.side === "long" ? "buy" : "sell",
-            order_type: "market",
             total_quantity: params.size,
             price: params.currentPrice,
             leverage: params.leverage,
             client_order_id: clientOrderId,
-          }
+          },
+          STRATEGY_CONFIGS[params.strategyType]?.preferLimitEntry ?? false,
+          params.symbol
         );
         exchangeOrderId = order?.id;
         console.log(`[auto-executor] Exchange order placed: ${exchangeOrderId} (client=${clientOrderId})`);
