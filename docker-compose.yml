@@ -11,15 +11,15 @@ services:
     environment:
       - NODE_ENV=production
       # Override these via a .env file or Docker secrets — never hardcode here
-      - DATABASE_URL=${DATABASE_URL}
-      - APP_ID=${APP_ID}
-      - APP_SECRET=${APP_SECRET}
-      - AUTH_URL=${AUTH_URL}
-      - AUTH_PLATFORM_URL=${AUTH_PLATFORM_URL}
-      - OWNER_UNION_ID=${OWNER_UNION_ID}
+      - DATABASE_URL=${DATABASE_URL_DOCKER:-postgres://janus:${POSTGRES_PASSWORD:-change_me_strong_password}@postgres:5432/${POSTGRES_DB:-janus_production}}
+      - APP_ID=${APP_ID:-janus-dev-app}
+      - APP_SECRET=${APP_SECRET:-some-jwt-signing-secret-key-32-chars-long}
+      - AUTH_URL=${AUTH_URL:-http://localhost:9999}
+      - AUTH_PLATFORM_URL=${AUTH_PLATFORM_URL:-http://localhost:9999}
+      - OWNER_UNION_ID=${OWNER_UNION_ID:-admin-union-id}
       - PLACE_ORDERS=${PLACE_ORDERS:-false}
       - AUTO_EXECUTE=${AUTO_EXECUTE:-false}
-      - ENCRYPTION_KEY=${ENCRYPTION_KEY}
+      - ENCRYPTION_KEY=${ENCRYPTION_KEY:-697b9bab1a69ab938175a642ca0a71d2913301dc05a18e14350fbd6616fdb963}
       - OLLAMA_ENDPOINT=${OLLAMA_ENDPOINT:-http://localhost:11434}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
@@ -40,7 +40,7 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-janus_production}
       POSTGRES_USER: ${POSTGRES_USER:-janus}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-change_me_strong_password}
     volumes:
       - pgdata:/var/lib/postgresql/data    # data survives container restarts
     healthcheck:
