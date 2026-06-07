@@ -12,6 +12,21 @@ import { decryptCreds } from "../../lib/crypto";
 import { releasePaperMargin } from "../paper-wallet";
 import { recordPositionTransaction, estimateFee } from "../position-manager/transaction-ledger";
 
+/**
+ * Returns true only if the proposed SL is strictly better than current.
+ * LONG: proposed must be > current
+ * SHORT: proposed must be < current
+ */
+export function isSlImprovement(
+  side: "LONG" | "SHORT",
+  currentSl: number | null,
+  proposedSl: number
+): boolean {
+  if (currentSl === null) return true;
+  if (side === "LONG") return proposedSl > currentSl;
+  return proposedSl < currentSl;
+}
+
 // ─── Execution Manager ───────────────────────────────────────────────────────
 // Maps approved PositionActions to actual exchange calls + DB updates.
 
@@ -49,9 +64,24 @@ export async function executeAction(
             ? position.entryPrice * 1.001
             : position.entryPrice * 0.999);
 
+        if (!isSlImprovement(position.side, position.stopLoss, newSl)) {
+          positionManagerBus.emit(
+            "position:action-executed",
+            position.id,
+            action,
+            "rejected",
+            `MOVE_TO_BREAKEVEN rejected: ${newSl.toFixed(4)} is worse than current ${position.stopLoss?.toFixed(4)}`
+          );
+          return { success: false, detail: `Breakeven rejected: would lower SL` };
+        }
+
         await db
           .update(positions)
-          .set({ stopLoss: newSl.toFixed(8), updatedAt: new Date() })
+          .set({
+            stopLoss: newSl.toFixed(8),
+            updatedAt: new Date(),
+            breakevenApplied: true,
+          })
           .where(eq(positions.id, position.id));
 
         positionStore.updateProtection(position.id, newSl, position.takeProfit);
@@ -69,8 +99,13 @@ export async function executeAction(
             reason: "breakeven",
           },
         });
-        positionManagerBus.emit("position:action-executed", position.id, action, "ok",
-          `SL moved to breakeven: ${newSl.toFixed(4)}`);
+        positionManagerBus.emit(
+          "position:action-executed",
+          position.id,
+          action,
+          "ok",
+          `SL moved to breakeven: ${newSl.toFixed(4)}`
+        );
         return { success: true, detail: `Stop moved to breakeven @ ${newSl.toFixed(4)}` };
       }
 
@@ -80,6 +115,18 @@ export async function executeAction(
           return { success: false, detail: "TRAIL_SL: no new stop loss value provided" };
         }
         const newSl = recommendation.newStopLoss;
+
+        if (!isSlImprovement(position.side, position.stopLoss, newSl)) {
+          positionManagerBus.emit(
+            "position:action-executed",
+            position.id,
+            action,
+            "rejected",
+            `TRAIL_SL rejected: ${newSl.toFixed(4)} is worse than current ${position.stopLoss?.toFixed(4)}`
+          );
+          return { success: false, detail: `Trail rejected: would reverse SL` };
+        }
+
         await db
           .update(positions)
           .set({ stopLoss: newSl.toFixed(8), updatedAt: new Date() })
@@ -100,8 +147,13 @@ export async function executeAction(
             reason: "trail",
           },
         });
-        positionManagerBus.emit("position:action-executed", position.id, action, "ok",
-          `SL trailed to ${newSl.toFixed(4)}`);
+        positionManagerBus.emit(
+          "position:action-executed",
+          position.id,
+          action,
+          "ok",
+          `SL trailed to ${newSl.toFixed(4)}`
+        );
         return { success: true, detail: `Stop trailed to ${newSl.toFixed(4)}` };
       }
 
