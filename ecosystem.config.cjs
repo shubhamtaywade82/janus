@@ -48,8 +48,10 @@ module.exports = {
       merge_logs: true,
 
       // ─── Miscellaneous ───────────────────────────────────────────────────
-      watch: ["dist", "api"],
-      ignore_watch: ["node_modules", "logs", "backups", "db", ".git"],
+      // Watch is DISABLED by default — a trading bot must never auto-restart
+      // mid-session because a source file changed. Use `pm2 reload janus-bot`
+      // after a deliberate build/deploy.
+      watch: false,
       source_map_support: false,
     },
   ],

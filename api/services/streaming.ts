@@ -5,7 +5,7 @@ import { fundingRateHistory, liquidationEvents, marketData, openInterestData, or
 import { marketStateManager } from "./market-state";
 import { getOrCreateFeedHealth, feedHealthRegistry } from "./feed-health";
 import { liquidityEngine } from "./liquidity-engine";
-import { fetchOpenInterest } from "./binance";
+import { fetchOpenInterest, fetchMarkPrice, fetchFundingRate, fetchKlines } from "./binance";
 
 // Survive Vite HMR: store singletons on globalThis so hot-reloads don't orphan listeners
 const _g = globalThis as Record<string, unknown>;
@@ -82,7 +82,6 @@ function ensureWatchdog() {
 
 function getBinanceWsUrl(symbol: string): string {
   const s = symbol.toLowerCase();
-  // USE_TESTNET routes to Binance testnet; streams are otherwise identical
   const host = process.env.USE_TESTNET === "true"
     ? "stream.binancefuture.com"
     : "fstream.binance.com";
@@ -117,6 +116,85 @@ async function pollOpenInterest(symbol: string): Promise<void> {
   }
 }
 
+async function pollMarkPriceAndFunding(symbol: string): Promise<void> {
+  try {
+    const [mp, fr] = await Promise.all([
+      fetchMarkPrice(symbol).catch(() => null),
+      fetchFundingRate(symbol).catch(() => null),
+    ]);
+    if (mp) {
+      marketStateManager.updateFunding(symbol, {
+        symbol,
+        markPrice: mp.markPrice,
+        indexPrice: mp.indexPrice,
+        estimatedSettlePrice: mp.estimatedSettlePrice,
+        fundingRate: fr?.fundingRate ?? "0",
+        nextFundingTime: fr?.fundingTime ?? Date.now() + 8 * 60 * 60 * 1000,
+      });
+    }
+  } catch (err: unknown) {
+    console.warn(`[streaming] Mark price/funding poll failed for ${symbol}:`, getErrorMessage(err));
+  }
+}
+
+// Track last processed kline closeTime per symbol to avoid duplicate events
+const lastKlineCloseTime = new Map<string, number>();
+
+async function pollKlines(symbol: string): Promise<void> {
+  try {
+    const klines = await fetchKlines(symbol, "1m", 5);
+    for (const k of klines) {
+      const prevClose = lastKlineCloseTime.get(symbol) ?? 0;
+      if (k.closeTime <= prevClose) continue; // already processed
+      lastKlineCloseTime.set(symbol, k.closeTime);
+
+      // Save to DB
+      const db = getDb();
+      await db.insert(marketData).values({
+        symbol,
+        timeframe: "1m",
+        timestamp: new Date(k.openTime),
+        open: String(k.open),
+        high: String(k.high),
+        low: String(k.low),
+        close: String(k.close),
+        volume: String(k.volume),
+        quoteVolume: String(k.quoteVolume || "0"),
+        tradeCount: k.trades || 0,
+      }).onConflictDoUpdate({
+        target: [marketData.symbol, marketData.timeframe, marketData.timestamp],
+        set: {
+          open: String(k.open),
+          high: String(k.high),
+          low: String(k.low),
+          close: String(k.close),
+          volume: String(k.volume),
+          quoteVolume: String(k.quoteVolume || "0"),
+          tradeCount: k.trades || 0,
+        },
+      });
+
+      // Emit kline event for charts
+      const kline = {
+        openTime: k.openTime,
+        open: k.open,
+        high: k.high,
+        low: k.low,
+        close: k.close,
+        volume: k.volume,
+        closeTime: k.closeTime,
+        quoteVolume: k.quoteVolume,
+        trades: k.trades,
+        isClosed: true,
+      };
+      marketEvents.emit(`${symbol}:kline`, kline);
+      marketEvents.emit("kline-update", symbol, kline);
+    }
+  } catch (err: unknown) {
+    console.warn(`[streaming] Kline poll failed for ${symbol}:`, getErrorMessage(err));
+  }
+}
+
 export function subscribeToSymbol(symbol: string) {
   const current = activeStreams.get(symbol);
   if (current) {
@@ -138,8 +216,12 @@ export function subscribeToSymbol(symbol: string) {
   const ws = new WebSocket(url);
   streamInfo.ws = ws;
   pollOpenInterest(symbol).catch(() => {});
+  pollMarkPriceAndFunding(symbol).catch(() => {});
+  pollKlines(symbol).catch(() => {});
   streamInfo.openInterestTimer = setInterval(() => {
     pollOpenInterest(symbol).catch(() => {});
+    pollMarkPriceAndFunding(symbol).catch(() => {});
+    pollKlines(symbol).catch(() => {});
   }, OPEN_INTEREST_POLL_MS);
 
   const lastDbSave = {
