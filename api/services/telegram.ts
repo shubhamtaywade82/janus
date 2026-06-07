@@ -101,7 +101,7 @@ export async function broadcastTelegramAlert(text: string): Promise<boolean> {
     if (!user || user.length === 0) return false;
     const settings = user[0];
     if (!settings.telegramLiquidityAlertsEnabled) {
-      console.log("[telegram] Broadcast of liquidity alert skipped (disabled in user settings)");
+      // Swallowed silently to avoid spamming the log files every few seconds
       return false;
     }
     if (!settings.telegramBotToken || !settings.telegramChatId) return false;
