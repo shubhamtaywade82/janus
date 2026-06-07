@@ -225,8 +225,8 @@ npm run db:push
 Core tables (22):
 `users`, `market_data`, `signals`, `positions`, `trades`, `order_book_snapshots`, `recent_ticks`, `futures_wallets`, `exchange_credentials`, `transactions`, `system_logs`, `llm_api_keys`, `auto_executor_config`, `equity_snapshots`, `trading_accounts`, `account_ledger`, `account_snapshots`, `open_interest_data`, `funding_rate_history`, `liquidation_events`
 
-Position manager tables (3, via `db:push`):
-`ai_assessments`, `position_snapshots`, `position_action_logs`
+Position manager tables (4, via `db:push`):
+`ai_assessments`, `position_snapshots`, `position_action_logs`, `position_transactions`
 
 ---
 

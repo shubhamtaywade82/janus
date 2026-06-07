@@ -39,6 +39,7 @@ import { snapshotEquity } from "./performance-tracker";
 import { getPaperWallet, lockPaperMargin, releasePaperMargin, getPaperEquity } from "./paper-wallet";
 import { env } from "../lib/env";
 import { decryptCreds } from "../lib/crypto";
+import { recordPositionTransaction, estimateFee } from "./position-manager/transaction-ledger";
 import type { Signal, AutoExecutorConfig } from "@db/schema";
 import type { StrategyType } from "./strategy-config";
 
@@ -806,6 +807,34 @@ export class AutoExecutor {
         throw err; // re-throw so processSignal catches it
       }
     }
+
+    // Record OPEN transaction in the immutable ledger
+    const margin = parseFloat((params.notional / params.leverage).toFixed(4));
+    await recordPositionTransaction({
+      positionId: posId,
+      userId: params.userId,
+      symbol: params.symbol,
+      type: "OPEN",
+      side: params.side,
+      quantityBefore: 0,
+      quantityAfter: params.size,
+      quantityDelta: params.size,
+      price: params.currentPrice,
+      avgEntryPrice: params.currentPrice,
+      realizedPnl: 0,
+      fee: estimateFee(params.notional),
+      marginBefore: 0,
+      marginAfter: margin,
+      metadata: {
+        signalId: params.signalId,
+        strategyType: params.strategyType,
+        isPaper: params.isPaper,
+        exchangeOrderId: exchangeOrderId ?? clientOrderId,
+        leverage: params.leverage,
+        stopLoss: params.stopLoss,
+        takeProfit: params.takeProfit,
+      },
+    });
 
     if (!params.disableTrailing) {
       registerPositionForTrailing({

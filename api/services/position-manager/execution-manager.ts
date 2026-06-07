@@ -10,6 +10,7 @@ import { positions, exchangeCredentials } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { decryptCreds } from "../../lib/crypto";
 import { releasePaperMargin } from "../paper-wallet";
+import { recordPositionTransaction, estimateFee } from "../position-manager/transaction-ledger";
 
 // ─── Execution Manager ───────────────────────────────────────────────────────
 // Maps approved PositionActions to actual exchange calls + DB updates.
@@ -55,6 +56,19 @@ export async function executeAction(
 
         positionStore.updateProtection(position.id, newSl, position.takeProfit);
         syncTrailingStopLoss(position.id, newSl);
+        await recordPositionTransaction({
+          positionId: position.id,
+          userId,
+          symbol: position.symbol,
+          type: "SL_UPDATE",
+          side: position.side === "LONG" ? "long" : "short",
+          price: newSl,
+          metadata: {
+            oldSl: position.stopLoss,
+            newSl,
+            reason: "breakeven",
+          },
+        });
         positionManagerBus.emit("position:action-executed", position.id, action, "ok",
           `SL moved to breakeven: ${newSl.toFixed(4)}`);
         return { success: true, detail: `Stop moved to breakeven @ ${newSl.toFixed(4)}` };
@@ -73,6 +87,19 @@ export async function executeAction(
 
         positionStore.updateProtection(position.id, newSl, position.takeProfit);
         syncTrailingStopLoss(position.id, newSl);
+        await recordPositionTransaction({
+          positionId: position.id,
+          userId,
+          symbol: position.symbol,
+          type: "SL_UPDATE",
+          side: position.side === "LONG" ? "long" : "short",
+          price: newSl,
+          metadata: {
+            oldSl: position.stopLoss,
+            newSl,
+            reason: "trail",
+          },
+        });
         positionManagerBus.emit("position:action-executed", position.id, action, "ok",
           `SL trailed to ${newSl.toFixed(4)}`);
         return { success: true, detail: `Stop trailed to ${newSl.toFixed(4)}` };
@@ -91,6 +118,19 @@ export async function executeAction(
           .where(eq(positions.id, position.id));
 
         positionStore.updateProtection(position.id, position.stopLoss, newTp);
+        await recordPositionTransaction({
+          positionId: position.id,
+          userId,
+          symbol: position.symbol,
+          type: "TP_UPDATE",
+          side: position.side === "LONG" ? "long" : "short",
+          price: newTp,
+          metadata: {
+            oldTp: position.takeProfit,
+            newTp,
+            reason: action === PA.TIGHTEN_TP ? "tighten" : "extend",
+          },
+        });
         positionManagerBus.emit("position:action-executed", position.id, action, "ok",
           `TP ${action === PA.TIGHTEN_TP ? "tightened" : "extended"} to ${newTp.toFixed(4)}`);
         return { success: true, detail: `TP updated to ${newTp.toFixed(4)}` };
@@ -161,6 +201,31 @@ export async function executeAction(
           await releasePaperMargin(userId, marginReleased, partialPnl, position.id);
         }
 
+        await recordPositionTransaction({
+          positionId: position.id,
+          userId,
+          symbol: position.symbol,
+          type: "PARTIAL_EXIT",
+          side: position.side === "LONG" ? "long" : "short",
+          quantityBefore: position.quantity,
+          quantityAfter: newQty,
+          quantityDelta: -exitQty,
+          price: position.markPrice,
+          avgEntryPrice: position.entryPrice,
+          realizedPnl: partialPnl,
+          fee: estimateFee(position.markPrice * exitQty),
+          marginBefore: position.margin,
+          marginAfter: newMargin,
+          metadata: {
+            exitPct,
+            exitQty,
+            marginReleased,
+            prevRealized: position.realizedPnl,
+            nextRealized,
+            isPaper: position.isPaper,
+          },
+        });
+
         positionManagerBus.emit("position:action-executed", position.id, action, "ok",
           `Exited ${(exitPct * 100).toFixed(0)}% of position`);
         return { success: true, detail: `Partial exit: ${(exitPct * 100).toFixed(0)}% exited` };
@@ -208,6 +273,28 @@ export async function executeAction(
         if (position.isPaper) {
           await releasePaperMargin(userId, position.margin, realizedPnl, position.id);
         }
+
+        await recordPositionTransaction({
+          positionId: position.id,
+          userId,
+          symbol: position.symbol,
+          type: "FULL_EXIT",
+          side: position.side === "LONG" ? "long" : "short",
+          quantityBefore: position.quantity,
+          quantityAfter: 0,
+          quantityDelta: -position.quantity,
+          price: position.markPrice,
+          avgEntryPrice: position.entryPrice,
+          realizedPnl,
+          fee: estimateFee(position.markPrice * position.quantity),
+          marginBefore: position.margin,
+          marginAfter: 0,
+          metadata: {
+            reason: recommendation.reasoning,
+            exitReason: recommendation.reasoning,
+            isPaper: position.isPaper,
+          },
+        });
 
         positionStore.updateLifecycleState(position.id, "CLOSED");
         positionStore.remove(position.id);
