@@ -21,6 +21,13 @@ export interface StrategyConfig {
   takerFeeRate: number;
   signalIntervalMs: number;
   maxLeverage: number;
+  /**
+   * When true, entries are placed as marketable limit orders (at best ask/bid) with a
+   * short timeout before falling back to a market order, instead of crossing the spread
+   * immediately. Disabled for strategies where fill speed matters more than a few bps
+   * of slippage (scalping / momentum).
+   */
+  preferLimitEntry: boolean;
 }
 
 export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
@@ -31,6 +38,7 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 5_000,
     maxLeverage: 10,
+    preferLimitEntry: false,
   },
   intraday: {
     type: "intraday",
@@ -39,6 +47,7 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 30_000,
     maxLeverage: 5,
+    preferLimitEntry: true,
   },
   swing: {
     type: "swing",
@@ -47,6 +56,7 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 300_000,
     maxLeverage: 3,
+    preferLimitEntry: true,
   },
   grid: {
     type: "grid",
@@ -55,6 +65,7 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 15_000,
     maxLeverage: 5,
+    preferLimitEntry: true,
   },
   momentum_reversal: {
     type: "momentum_reversal",
@@ -63,6 +74,7 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 30_000,
     maxLeverage: 5,
+    preferLimitEntry: false,
   },
   bb_reversion: {
     type: "bb_reversion",
@@ -71,6 +83,7 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 10_000,
     maxLeverage: 8,
+    preferLimitEntry: true,
   },
   ml_sizing: {
     type: "ml_sizing",
@@ -79,6 +92,7 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 60_000,
     maxLeverage: 5,
+    preferLimitEntry: true,
   },
   scalping_micro: {
     type: "scalping_micro",
@@ -87,6 +101,7 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 2_000,
     maxLeverage: 10,
+    preferLimitEntry: false,
   },
 };
 
