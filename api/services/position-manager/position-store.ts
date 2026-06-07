@@ -14,7 +14,7 @@ class PositionStore {
 
     this.store.set(position.id, position);
 
-    if (isNew) {
+    if (isNew && !position.openedAlertSent) {
       positionManagerBus.emit("position:discovered", position);
     } else {
       positionManagerBus.emit("position:synced", position);
@@ -77,6 +77,12 @@ class PositionStore {
       riskRewardRatio,
       updatedAt: new Date(),
     });
+  }
+
+  updateExtremePrice(id: number, extremePrice: number): void {
+    const pos = this.store.get(id);
+    if (!pos) return;
+    this.store.set(id, { ...pos, extremePrice, updatedAt: new Date() });
   }
 
   remove(id: number): void {

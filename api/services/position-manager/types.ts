@@ -71,6 +71,10 @@ export interface ManagedPosition {
   slDistancePct: number | null;  // |entry - sl| / entry
   liqDistancePct: number | null; // |entry - liq| / entry
   holdingMinutes: number;
+  // New fields for breakeven and alert deduplication
+  breakevenApplied: boolean;
+  extremePrice: number | null;
+  openedAlertSent: boolean;
 }
 
 /** Aggregated market context for a symbol at assessment time */
