@@ -672,8 +672,8 @@ private async calculateSizing(params: {
   let tp1Pct = advisorAdvice?.takeProfitPct ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
 
   if (brainHasAuthority && brainResult) {
-    if (brainResult.adjustedSlPct !== undefined) slPct = brainResult.adjustedSlPct;
-    if (brainResult.adjustedTpPct !== undefined) tp1Pct = brainResult.adjustedTpPct;
+    if (brainResult.adjustedSlPct !== undefined) slPct = brainResult.adjustedSlPct / 100;
+    if (brainResult.adjustedTpPct !== undefined) tp1Pct = brainResult.adjustedTpPct / 100;
   }
 
   const stopLoss = parseFloat((side === "long" ? currentPrice * (1 - slPct) : currentPrice * (1 + slPct)).toFixed(basePrecision));

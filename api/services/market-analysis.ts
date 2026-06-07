@@ -8,6 +8,9 @@ import {
 } from "@db/schema";
 import { desc, eq, and, gte } from "drizzle-orm";
 import { marketStateManager } from "./market-state";
+import { globalLlmAdvisor } from "./llm-advisor";
+
+export const ANALYSIS_TIMEFRAMES: AnalysisTimeframe[] = ["1d", "4h", "1h", "15m", "5m", "1m"];
 
 // ─── Types ───
 
@@ -397,41 +400,286 @@ export async function analyzeCvd(symbol: string, candles: AnalysisCandle[]): Pro
   return { trend: "NEUTRAL", signal_strength: "WEAK" };
 }
 
+function nearestOrderBlock(obs: OrderBlock[], currentPrice: number): any {
+  const active = obs.filter((ob) => ob.status !== "INVALIDATED");
+  if (!currentPrice || active.length === 0) return undefined;
+  const nearest = active.reduce((best, next) => {
+    const bestMid = (best.high + best.low) / 2;
+    const nextMid = (next.high + next.low) / 2;
+    return Math.abs(nextMid - currentPrice) < Math.abs(bestMid - currentPrice) ? next : best;
+  });
+  const mid = (nearest.high + nearest.low) / 2;
+  return { type: nearest.type, distance_percent: round(Math.abs(mid - currentPrice) / currentPrice * 100, 2) };
+}
+
+function nearestFvg(fvgs: FVG[], currentPrice: number): any {
+  const active = fvgs.filter((f) => !f.filled);
+  if (!currentPrice || active.length === 0) return undefined;
+  const nearest = active.reduce((best, next) => {
+    const bestMid = (best.high + best.low) / 2;
+    const nextMid = (next.high + next.low) / 2;
+    return Math.abs(nextMid - currentPrice) < Math.abs(bestMid - currentPrice) ? next : best;
+  });
+  return { type: nearest.type };
+}
+
+function findLastLiquiditySweep(candles: AnalysisCandle[], buySide: number[], sellSide: number[]): any {
+  if (candles.length < 5) return undefined;
+  for (const candle of candles.slice(-5).reverse()) {
+    const sweptBuy = buySide.find((level) => candle.high > level && candle.close < level);
+    if (sweptBuy) return { side: "BUY_SIDE", level: sweptBuy, confirmed: candle.volume > 0 };
+    const sweptSell = sellSide.find((level) => candle.low < level && candle.close > level);
+    if (sweptSell) return { side: "SELL_SIDE", level: sweptSell, confirmed: candle.volume > 0 };
+  }
+  return undefined;
+}
+
+function scoreSignalsForAnalysis(params: {
+  overallBias: "BULLISH" | "BEARISH" | "NEUTRAL";
+  mtf: Record<string, any>;
+  liquidity: any;
+  nearestOB: any;
+  nearestFVG: any;
+  volume: any;
+  openInterest: any;
+  funding: any;
+  cvd: any;
+  orderbook: any;
+  liquidations: Awaited<ReturnType<typeof getLiquidationStats>>;
+}): any {
+  let reversalConfidence = params.liquidity.probability_of_reversal * 0.35;
+  if (params.cvd.trend === "BULLISH_DIVERGENCE" || params.cvd.trend === "BEARISH_DIVERGENCE") reversalConfidence += 30;
+  if (params.nearestOB && params.nearestOB.distance_percent < 1) reversalConfidence += 15;
+  if (params.nearestFVG) reversalConfidence += 8;
+  if (params.volume.climax_volume) reversalConfidence += 8;
+  if (params.liquidations.longNotional > params.liquidations.shortNotional * 1.5 || params.liquidations.shortNotional > params.liquidations.longNotional * 1.5) reversalConfidence += 8;
+
+  const alignedTfs = params.overallBias !== "NEUTRAL"
+    ? Object.values(params.mtf).filter((tf: any) => tf.trend === params.overallBias).length
+    : 0;
+  let continuationConfidence = alignedTfs * 12;
+  if (params.cvd.trend === "CONTINUATION") continuationConfidence += 18;
+  if (params.volume.relative_volume > 1.5) continuationConfidence += 10;
+  if (
+    (params.overallBias === "BULLISH" && params.orderbook.dominant_side === "BUYERS") ||
+    (params.overallBias === "BEARISH" && params.orderbook.dominant_side === "SELLERS")
+  ) continuationConfidence += 10;
+  if (
+    (params.overallBias === "BULLISH" && ["NEW_LONGS", "SHORT_COVERING"].includes(params.openInterest.interpretation)) ||
+    (params.overallBias === "BEARISH" && ["NEW_SHORTS", "LONG_LIQUIDATION"].includes(params.openInterest.interpretation))
+  ) continuationConfidence += 10;
+
+  const squeezeType = params.funding.squeeze_risk;
+  const squeezeConfidence = squeezeType === "NONE" ? 0 :
+    50 + (params.openInterest.conviction === "HIGH" ? 25 : params.openInterest.conviction === "MEDIUM" ? 12 : 0);
+
+  const accumulationConfidence = params.volume.accumulation ? 65 :
+    params.cvd.trend === "BULLISH_DIVERGENCE" && params.liquidity.last_sweep?.side === "SELL_SIDE" ? 72 : 0;
+
+  return {
+    reversal: { detected: reversalConfidence >= 55, confidence: clamp(Math.round(reversalConfidence)) },
+    continuation: { detected: continuationConfidence >= 55, confidence: clamp(Math.round(continuationConfidence)) },
+    squeeze: squeezeType !== "NONE" ? { type: squeezeType, confidence: clamp(Math.round(squeezeConfidence)) } : undefined,
+    accumulation: { detected: accumulationConfidence >= 55, confidence: clamp(Math.round(accumulationConfidence)) },
+  };
+}
+
+function buildTradeSetup(params: {
+  currentPrice: number;
+  overallBias: "BULLISH" | "BEARISH" | "NEUTRAL";
+  signals: any;
+  swingHighs: number[];
+  swingLows: number[];
+}): any {
+  const { currentPrice, overallBias, signals, swingHighs, swingLows } = params;
+  if (currentPrice <= 0) return undefined;
+
+  const useReversal = signals.reversal.detected && signals.reversal.confidence >= signals.continuation.confidence;
+  const useContinuation = signals.continuation.detected;
+  if (!useReversal && !useContinuation) return undefined;
+
+  const longSetup = useReversal ? overallBias === "BEARISH" : overallBias === "BULLISH";
+  const setupType = useReversal
+    ? longSetup ? "COUNTER_TREND_LONG" : "COUNTER_TREND_SHORT"
+    : longSetup ? "CONTINUATION_LONG" : "CONTINUATION_SHORT";
+
+  const lowsBelow = swingLows.filter((level) => level < currentPrice).sort((a, b) => b - a);
+  const highsAbove = swingHighs.filter((level) => level > currentPrice).sort((a, b) => a - b);
+  const stopLoss = longSetup
+    ? (lowsBelow[0] ?? currentPrice * 0.985)
+    : (highsAbove[0] ?? currentPrice * 1.015);
+  const targets = longSetup
+    ? (highsAbove.length > 0 ? highsAbove.slice(0, 3) : [currentPrice * 1.015, currentPrice * 1.03])
+    : (lowsBelow.length > 0 ? lowsBelow.slice(0, 3) : [currentPrice * 0.985, currentPrice * 0.97]);
+
+  const risk = Math.abs(currentPrice - stopLoss);
+  const reward = Math.abs((targets[0] ?? currentPrice) - currentPrice);
+  const confidence = useReversal ? signals.reversal.confidence : signals.continuation.confidence;
+
+  return {
+    setup_type: setupType,
+    entry_zone: { low: round(currentPrice * 0.9975, 6), high: round(currentPrice * 1.0025, 6) },
+    stop_loss: round(stopLoss, 6),
+    targets: targets.map((target) => round(target, 6)),
+    risk_reward: risk > 0 ? round(reward / risk, 2) : 0,
+    confidence,
+    invalidation: longSetup ? `close_below_${round(stopLoss, 6)}` : `close_above_${round(stopLoss, 6)}`,
+  };
+}
+
 export async function comprehensiveAnalysis(symbol: string): Promise<any> {
   const binanceSymbol = symbol.toUpperCase();
   const state = marketStateManager.get(binanceSymbol);
-  
-  const timeframes: AnalysisTimeframe[] = ["1d", "4h", "1h", "15m", "5m", "1m"];
+  const nowStr = new Date().toISOString();
+
   const candleEntries = await Promise.all(
-    timeframes.map(async (tf) => [tf, await loadCandlesFromDb(binanceSymbol, tf, 500)] as const)
+    ANALYSIS_TIMEFRAMES.map(async (tf) => [tf, await loadCandlesFromDb(binanceSymbol, tf, 500)] as const)
   );
   const candlesByTf = new Map<AnalysisTimeframe, AnalysisCandle[]>(candleEntries);
   const oneMinCandles = candlesByTf.get("1m") ?? [];
-  const primaryCandles = oneMinCandles.length >= 20 ? oneMinCandles : (candlesByTf.get("5m") ?? []);
+  const h1Candles = candlesByTf.get("1h") ?? [];
+  const primaryCandles = oneMinCandles.length >= 20 ? oneMinCandles : (h1Candles.length >= 20 ? h1Candles : (candlesByTf.get("5m") ?? []));
   const currentPrice = state?.ltp || primaryCandles[primaryCandles.length - 1]?.close || 0;
+  const oneDayAgoMs = Date.now() - 24 * 60 * 60 * 1000;
+  const h1Candle24h = h1Candles.length > 0
+    ? h1Candles.reduce((best, c) => Math.abs(c.timestamp - oneDayAgoMs) < Math.abs(best.timestamp - oneDayAgoMs) ? c : best)
+    : null;
+  const previousPrice = h1Candle24h?.close || primaryCandles[0]?.close || currentPrice;
 
-  const mtf: any = {};
-  for (const tf of timeframes) {
-    const struct = analyzeTimeframeStructure(candlesByTf.get(tf) ?? [], tf);
-    mtf[tf] = { trend: struct.trend, structure: struct.structure, bos: struct.bos, choch: struct.choch, ema_trend: struct.ema_trend, momentum: struct.momentum };
+  const structureByTf = new Map<AnalysisTimeframe, TimeframeStructure>();
+  const mtf: Record<string, any> = {};
+  for (const tf of ANALYSIS_TIMEFRAMES) {
+    const tfStructure = analyzeTimeframeStructure(candlesByTf.get(tf) ?? [], tf);
+    structureByTf.set(tf, tfStructure);
+    mtf[tf] = { trend: tfStructure.trend, structure: tfStructure.structure, bos: tfStructure.bos, choch: tfStructure.choch, ema_trend: tfStructure.ema_trend, momentum: tfStructure.momentum };
   }
 
-  const volume = analyzeVolumeFromCandles(candlesByTf.get("15m") ?? primaryCandles);
-  const openInterest = await analyzeOpenInterest(binanceSymbol, currentPrice, primaryCandles[0]?.close || currentPrice);
-  const funding = await analyzeFunding(binanceSymbol);
+  const tfWeights: Record<AnalysisTimeframe, number> = { "1d": 5, "4h": 4, "1h": 3, "15m": 2, "5m": 1, "1m": 0.5 };
+  let bullishScore = 0;
+  let bearishScore = 0;
+  for (const [tf, tfStructure] of structureByTf) {
+    if (tfStructure.trend === "BULLISH") bullishScore += tfWeights[tf];
+    if (tfStructure.trend === "BEARISH") bearishScore += tfWeights[tf];
+    if (tfStructure.ema_trend === "BULLISH") bullishScore += tfWeights[tf] * 0.35;
+    if (tfStructure.ema_trend === "BEARISH") bearishScore += tfWeights[tf] * 0.35;
+  }
+
+  const overallBias: "BULLISH" | "BEARISH" | "NEUTRAL" =
+    bullishScore > bearishScore ? "BULLISH" : bearishScore > bullishScore ? "BEARISH" : "NEUTRAL";
+  const structureTotal = bullishScore + bearishScore;
+  const confidence = structureTotal > 0 ? Math.round(Math.max(bullishScore, bearishScore) / structureTotal * 100) : 50;
+  const structScore = { bullish: Math.round(bullishScore), bearish: Math.round(bearishScore) };
+
+  const allSwingHighs = Array.from(structureByTf.values()).flatMap((tf) => tf.swingHighs);
+  const allSwingLows = Array.from(structureByTf.values()).flatMap((tf) => tf.swingLows);
+  const swingHighPrices = Array.from(new Set(allSwingHighs.map((h) => round(h.price, 6)))).sort((a, b) => a - b);
+  const swingLowPrices = Array.from(new Set(allSwingLows.map((l) => round(l.price, 6)))).sort((a, b) => b - a);
+  const buySideL = swingHighPrices.filter((level) => level > currentPrice).slice(0, 8);
+  const sellSideL = swingLowPrices.filter((level) => level < currentPrice).slice(0, 8);
+  const lastSweep = findLastLiquiditySweep(primaryCandles, buySideL, sellSideL);
+  const latestBos = Array.from(structureByTf.values()).flatMap((tf) => tf.latestBos ? [tf.latestBos] : []).sort((a, b) => b.timestamp - a.timestamp)[0];
+  const latestChoch = Array.from(structureByTf.values()).flatMap((tf) => tf.latestChoch ? [tf.latestChoch] : []).sort((a, b) => b.timestamp - a.timestamp)[0];
+
+  const allBullishObs: OrderBlock[] = [];
+  const allBearishObs: OrderBlock[] = [];
+  for (const tf of ["4h", "1h", "15m", "5m"] as AnalysisTimeframe[]) {
+    const detected = detectOrderBlocks(candlesByTf.get(tf) ?? [], structureByTf.get(tf)!, currentPrice);
+    allBullishObs.push(...detected.bullish);
+    allBearishObs.push(...detected.bearish);
+  }
+  const activeObs = [...allBullishObs, ...allBearishObs].filter((ob) => ob.status !== "INVALIDATED");
+  const nearestOB = nearestOrderBlock(activeObs, currentPrice);
+
+  const h1Fvgs = detectFVGs(h1Candles.length >= 20 ? h1Candles : primaryCandles);
+  const fvgsBull = h1Fvgs.bullish.filter((f) => !f.filled).slice(-10);
+  const fvgsBear = h1Fvgs.bearish.filter((f) => !f.filled).slice(-10);
+  const nearestFVG = nearestFvg([...fvgsBull, ...fvgsBear], currentPrice);
+
+  const volume = analyzeVolumeFromCandles((candlesByTf.get("15m") ?? []).length >= 20 ? candlesByTf.get("15m")! : primaryCandles);
   const cvd = await analyzeCvd(binanceSymbol, primaryCandles);
+  const openInterest = await analyzeOpenInterest(binanceSymbol, currentPrice, previousPrice);
+  const funding = await analyzeFunding(binanceSymbol);
   const liquidations = await getLiquidationStats(binanceSymbol);
+
+  const obMetrics = state?.orderBook
+    ? {
+        bidDepth: state.orderBook.bids.slice(0, 50).reduce((sum, [, qty]) => sum + qty, 0),
+        askDepth: state.orderBook.asks.slice(0, 50).reduce((sum, [, qty]) => sum + qty, 0),
+      }
+    : { bidDepth: state?.metrics.bidDepth ?? 0, askDepth: state?.metrics.askDepth ?? 0 };
+  const bidVolVal = obMetrics.bidDepth;
+  const askVolVal = obMetrics.askDepth;
+  const obRatio = askVolVal > 0 ? bidVolVal / askVolVal : 1.0;
+  const obDominant = obRatio > 1.2 ? "BUYERS" : obRatio < 0.83 ? "SELLERS" : "NEUTRAL";
+  const orderbook = {
+    imbalance: { bid_volume: formatCompact(bidVolVal), ask_volume: formatCompact(askVolVal) },
+    ratio: round(obRatio, 2),
+    dominant_side: obDominant,
+    absorption: state ? state.metrics.absorptionScore > 75 : false,
+    spoofing: state ? state.metrics.liquidityRemoved > state.metrics.liquidityAdded * 2 && state.metrics.liquidityRemoved > 0 : false,
+  };
+
+  const reversalBase = lastSweep
+    ? 58 + (lastSweep.confirmed ? 12 : 0) + (cvd.trend.includes("DIVERGENCE") ? 15 : 0)
+    : state ? Math.round(state.metrics.absorptionScore * 0.8) : 0;
+  const liquidity = {
+    buy_side: buySideL,
+    sell_side: sellSideL,
+    last_sweep: lastSweep,
+    liquidity_event: lastSweep ? { type: "LIQUIDITY_GRAB", strength: reversalBase >= 75 ? "HIGH" : reversalBase >= 55 ? "MEDIUM" : "LOW" } : undefined,
+    probability_of_reversal: clamp(Math.round(reversalBase)),
+  };
+
+  const volumeProfile = buildVolumeProfile(h1Candles.length >= 20 ? h1Candles : primaryCandles, currentPrice);
+  const signalsActive = scoreSignalsForAnalysis({
+    overallBias, mtf, liquidity, nearestOB, nearestFVG, volume, openInterest, funding, cvd, orderbook, liquidations,
+  });
+
+  const setup = buildTradeSetup({ currentPrice, overallBias, signals: signalsActive, swingHighs: swingHighPrices, swingLows: swingLowPrices });
+
+  const recommendedAction =
+    setup && setup.confidence >= 65 ? "TAKE_POSITION" :
+    signalsActive.reversal.detected || signalsActive.continuation.detected ? "WAIT_FOR_CONFIRMATION" : "NO_TRADE";
+  const phase =
+    signalsActive.accumulation.detected ? "ACCUMULATION" :
+    volume.distribution ? "DISTRIBUTION" :
+    signalsActive.continuation.detected ? "TRENDING" : "RANGING";
+
+  const verdict = await globalLlmAdvisor.generateMarketSummary(binanceSymbol, {
+    overallBias, confidence, mtf, nearestOB, nearestFVG, openInterest, funding, cvd, orderbook, volumeProfile,
+  });
 
   return {
     symbol: binanceSymbol,
-    timestamp: new Date().toISOString(),
+    exchange: "BINANCE_FUTURES",
+    timestamp: nowStr,
+    market_state: { regime: overallBias, confidence },
     multi_timeframe: mtf,
+    market_structure: {
+      overall_bias: overallBias,
+      swing_highs: swingHighPrices.slice(-8),
+      swing_lows: swingLowPrices.slice(-8),
+      latest_bos: latestBos ? { direction: latestBos.direction, level: latestBos.level } : undefined,
+      latest_choch: latestChoch ? { direction: latestChoch.direction, level: latestChoch.level, timeframe: latestChoch.timeframe } : undefined,
+      structure_score: structScore,
+    },
+    liquidity,
+    order_blocks: { bullish: allBullishObs.slice(-10), bearish: allBearishObs.slice(-10), nearest_ob: nearestOB },
+    fvg: { bullish: fvgsBull, bearish: fvgsBear, nearest_fvg: nearestFVG },
     volume,
     open_interest: openInterest,
     funding,
     cvd,
-    liquidations,
-    currentPrice
+    orderbook,
+    volume_profile: volumeProfile,
+    signals: signalsActive,
+    trade_setup: setup,
+    summary: {
+      verdict,
+      market_phase: phase,
+      recommended_action: recommendedAction,
+      confidence: Math.round((signalsActive.reversal.confidence + signalsActive.continuation.confidence + confidence) / 3),
+    },
   };
 }
 

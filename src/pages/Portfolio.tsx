@@ -114,6 +114,16 @@ const PositionRow = ({
       <td className={cn("px-3 py-2 text-xs text-[#f4f4f5] tabular-nums rounded", priceFlash)}>
         <AnimatedNumber value={currentPrice} decimals={position.basePrecision ?? 2} duration={200} />
       </td>
+      <td className="px-3 py-2 text-[10px] tabular-nums">
+        <div className="flex flex-col gap-0.5">
+          <span className={position.stopLoss ? "text-j-down/80" : "text-[#71717a] opacity-40"}>
+            SL: {position.stopLoss ? formatPrice(position.stopLoss, position.symbol, position.basePrecision) : "--"}
+          </span>
+          <span className={position.takeProfit ? "text-j-up/80" : "text-[#71717a] opacity-40"}>
+            TP: {position.takeProfit ? formatPrice(position.takeProfit, position.symbol, position.basePrecision) : "--"}
+          </span>
+        </div>
+      </td>
       <td className="px-3 py-2 text-xs text-[#71717a] tabular-nums">
         {formatQty(position.size, position.symbol, position.targetPrecision)}
       </td>
@@ -863,6 +873,7 @@ export default function Portfolio() {
                     <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Side</th>
                     <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Entry</th>
                     <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Current</th>
+                    <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">SL / TP</th>
                     <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Size</th>
                     <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Lev</th>
                     <th className="px-3 py-2 text-left text-[10px] text-[#71717a] font-medium">Mode</th>
@@ -886,7 +897,7 @@ export default function Portfolio() {
                   ))}
                   {(!allPositions || allPositions.length === 0) && (
                     <tr>
-                      <td colSpan={12} className="px-3 py-8 text-center text-xs text-[#71717a]">
+                      <td colSpan={13} className="px-3 py-8 text-center text-xs text-[#71717a]">
                         <Target size={20} className="mx-auto mb-2 opacity-30" />
                         No {statusFilter} positions found
                       </td>
