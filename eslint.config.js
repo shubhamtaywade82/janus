@@ -29,6 +29,15 @@ export default defineConfig([
         },
       ],
       'no-empty': ['error', { allowEmptyCatch: true }],
+      // Experimental react-hooks RC rules (eslint-plugin-react-hooks v6) flag
+      // idiomatic patterns (query→state sync effects, ref assignment, useMemo
+      // accumulators) that are correct here. Keep them visible as warnings; the
+      // stable rules (rules-of-hooks, exhaustive-deps) remain enforced.
+      'react-hooks/set-state-in-effect': 'warn',
+      'react-hooks/refs': 'warn',
+      'react-hooks/purity': 'warn',
+      'react-hooks/static-components': 'warn',
+      'react-hooks/immutability': 'warn',
     },
   },
   // shadcn/ui primitives are vendored and must not be modified (see CLAUDE.md).
