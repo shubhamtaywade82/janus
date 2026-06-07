@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { trpc } from "@/providers/trpc";
 import { cn } from "@/lib/utils";
 import { AnimatedNumber } from "./AnimatedNumber";

@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useMemo } from "react";
 import { trpc } from "@/providers/trpc";
-import { Zap, Activity, RefreshCw } from "lucide-react";
+import { Activity, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnimatedNumber } from "./AnimatedNumber";
 import { formatPrice, getPriceDecimals } from "@/utils/precision";

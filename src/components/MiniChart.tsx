@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -59,7 +59,6 @@ import {
   detectCVDDivergence,
 } from "@/lib/chart/indicator-signals";
 import type { PriceActionData } from "@/lib/chart/pa-types";
-import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { formatPrice, getPriceDecimals } from "@/utils/precision";
 
 // ─── Types ───
@@ -2111,81 +2110,3 @@ export const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoad
     </div>
   );
 }
-
-function aggregateOrderBook(levels: [string, string][], step: number, isBid: boolean): [string, string][] {
-  const groups: Record<string, number> = {};
-  for (const [pStr, qStr] of levels) {
-    const p = parseFloat(pStr);
-    const q = parseFloat(qStr);
-    if (isNaN(p) || isNaN(q)) continue;
-
-    // Group price
-    let groupedPrice: number;
-    if (isBid) {
-      groupedPrice = Math.floor(p / step) * step;
-    } else {
-      groupedPrice = Math.ceil(p / step) * step;
-    }
-
-    // Formatting key to avoid precision floating point issues
-    const decimals = step < 1 ? Math.round(-Math.log10(step)) : 0;
-    const key = groupedPrice.toFixed(decimals);
-    groups[key] = (groups[key] || 0) + q;
-  }
-
-  return Object.entries(groups)
-    .map(([p, q]) => [p, String(q)] as [string, string])
-    .sort((a, b) => isBid ? parseFloat(b[0]) - parseFloat(a[0]) : parseFloat(a[0]) - parseFloat(b[0]));
-}
-
-// Helper to summarize events in the last 60 seconds
-const getTapeSummary = (events: any[]) => {
-  const cutoff = Date.now() - 60_000;
-  const recent = events.filter((ev) => ev.timestamp >= cutoff);
-  if (recent.length === 0) return null;
-
-  const counts: Record<string, number> = {};
-  let bullishScore = 0;
-  let bearishScore = 0;
-
-  recent.forEach((ev) => {
-    const type = (ev.type || "").replace(/_/g, " ").toUpperCase();
-    counts[type] = (counts[type] || 0) + 1;
-
-    const msg = (ev.message || "").toUpperCase();
-    if (
-      type.includes("BUY ABSORPTION") || 
-      type.includes("SELLER EXHAUSTION") || 
-      msg.includes("BIDS ADDED") || 
-      msg.includes("ASKS REMOVED") ||
-      msg.includes("BULLISH TRAP")
-    ) {
-      bullishScore++;
-    } else if (
-      type.includes("SELL ABSORPTION") || 
-      type.includes("BUYER EXHAUSTION") || 
-      msg.includes("ASKS ADDED") || 
-      msg.includes("BIDS REMOVED") ||
-      msg.includes("BEARISH TRAP")
-    ) {
-      bearishScore++;
-    }
-  });
-
-  const parts = Object.entries(counts).map(([type, count]) => `${count} ${type}`);
-  let sentiment = "Neutral Balance";
-  let sentimentColor = "text-[#a1a1aa]";
-  if (bullishScore > bearishScore) {
-    sentiment = "Bullish 📈";
-    sentimentColor = "text-[#0ecb81]";
-  } else if (bearishScore > bullishScore) {
-    sentiment = "Bearish 📉";
-    sentimentColor = "text-[#f6465d]";
-  }
-
-  return {
-    text: `Last 60s: ${parts.join(", ")}.`,
-    sentiment,
-    sentimentColor,
-  };
-};

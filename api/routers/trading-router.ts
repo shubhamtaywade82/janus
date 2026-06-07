@@ -247,13 +247,18 @@ export const tradingRouter = createRouter({
 
   // ─── Cross margin details (live from CoinDCX) ───
   crossMarginDetails: authedQuery.query(async ({ ctx }) => {
-    const db = getDb();
-    const creds = await db
-      .select()
-      .from(exchangeCredentials)
-      .where(and(eq(exchangeCredentials.userId, ctx.user.id), eq(exchangeCredentials.exchange, "coindcx")))
-      .limit(1);
-    if (!creds || !creds[0]) return null;
-    return getCrossMarginDetails(decryptCreds(creds[0]));
+    try {
+      const db = getDb();
+      const creds = await db
+        .select()
+        .from(exchangeCredentials)
+        .where(and(eq(exchangeCredentials.userId, ctx.user.id), eq(exchangeCredentials.exchange, "coindcx")))
+        .limit(1);
+      if (!creds || !creds[0]) return null;
+      return await getCrossMarginDetails(decryptCreds(creds[0]));
+    } catch (err) {
+      console.warn("[trading-router] Failed to fetch cross margin details from CoinDCX:", err);
+      return null;
+    }
   }),
 });

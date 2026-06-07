@@ -55,7 +55,7 @@ const Dashboard = () => {
   useEffect(() => { localStorage.setItem("janus_indicator_cfg", JSON.stringify(indicatorCfg)); }, [indicatorCfg]);
 
   const [interval] = useState("1m");
-  const { data: klines } = trpc.market.klines.useQuery({ symbol: selectedSymbol, interval, limit: 300 });
+  const { data: klines } = trpc.market.klines.useQuery({ symbol: selectedSymbol, interval, limit: 500 });
   const { data: positions } = trpc.trading.positions.useQuery({ status: "open" }, { refetchInterval: 5000 });
   const { data: ticker24h } = trpc.market.ticker24h.useQuery({});
 
