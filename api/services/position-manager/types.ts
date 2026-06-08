@@ -74,6 +74,7 @@ export interface ManagedPosition {
   // New fields for breakeven and alert deduplication
   breakevenApplied: boolean;
   extremePrice: number | null;
+  lastMarkPrice: number | null;
   openedAlertSent: boolean;
   strategyType: string;
 }

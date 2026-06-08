@@ -191,6 +191,7 @@ export class PositionLifecycleManager {
         // Persisted state fields
         breakevenApplied: dbPos.breakevenApplied ?? false,
         extremePrice: dbPos.extremePrice ? parseFloat(dbPos.extremePrice) : null,
+        lastMarkPrice: dbPos.lastMarkPrice ? parseFloat(dbPos.lastMarkPrice) : null,
         openedAlertSent: dbPos.openedAlertSent ?? false,
         strategyType: dbPos.strategyType ?? "intraday",
       };
@@ -315,8 +316,24 @@ export class PositionLifecycleManager {
     position: ManagedPosition,
     portfolio: { totalEquityUsdt: number; availableBalance: number; totalUnrealizedPnl: number; openPositionCount: number }
   ): Promise<void> {
-    // 1. Build market context
+    // 1. Build market context (refreshes lastPrice from latestTickerCache)
     const ctx = await buildMarketContext(position.binanceSymbol);
+
+    // ── Update mark price in store and DB before proceeding ────────────
+    if (ctx.lastPrice > 0) {
+      positionStore.updatePrice(position.id, ctx.lastPrice);
+      positionStore.updateLastMarkPrice(position.id, ctx.lastPrice);
+      // Persist latest price to DB so alert-notifier and UI see it
+      const db = getDb();
+      await db.update(positions)
+        .set({ 
+          currentPrice: ctx.lastPrice.toFixed(8), 
+          lastMarkPrice: ctx.lastPrice.toFixed(8),
+          updatedAt: new Date() 
+        })
+        .where(eq(positions.id, position.id))
+        .catch(() => {});
+    }
 
     // 2. Evaluate directional bias
     const bias = evaluateBias(ctx, position);

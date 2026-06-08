@@ -150,6 +150,7 @@ export const positions = pgTable(
     exitReason: text("exit_reason"),
     breakevenApplied: boolean("breakeven_applied").default(false).notNull(),
     extremePrice: decimal("extreme_price", { precision: 18, scale: 8 }),
+    lastMarkPrice: decimal("last_mark_price", { precision: 18, scale: 8 }),
     openedAlertSent: boolean("opened_alert_sent").default(false).notNull(),
     createdAt: timestamp("created_at").defaultNow().notNull(),
     updatedAt: timestamp("updated_at").defaultNow().notNull(),

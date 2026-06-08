@@ -85,6 +85,12 @@ class PositionStore {
     this.store.set(id, { ...pos, extremePrice, updatedAt: new Date() });
   }
 
+  updateLastMarkPrice(id: number, lastMarkPrice: number | null): void {
+    const pos = this.store.get(id);
+    if (!pos) return;
+    this.store.set(id, { ...pos, lastMarkPrice, updatedAt: new Date() });
+  }
+
   remove(id: number): void {
     this.store.delete(id);
   }

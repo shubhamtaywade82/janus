@@ -8,7 +8,8 @@ import { positionManagerBus } from "./position-manager/event-bus";
 import { sendTelegramMessage } from "./telegram";
 import { getDb } from "../queries/connection";
 import { users, positions } from "@db/schema";
-import { eq } from "drizzle-orm";
+import { positionTransactions } from "@db/position-manager-schema";
+import { eq, desc, and } from "drizzle-orm";
 import type { ManagedPosition, PositionAction } from "./position-manager/types";
 
 // ─── Config ──────────────────────────────────────────────────────────────────
@@ -59,22 +60,22 @@ function escapeHtml(text: string): string {
 function buildOpenMessage(p: ManagedPosition, isPaper: boolean): string {
   const mode = isPaper ? "🧪 PAPER" : "💰 LIVE";
   const sideEmoji = p.side === "LONG" ? "🟢" : "🔴";
-  const pnlEmoji = p.unrealizedPnl >= 0 ? "📈" : "📉";
   const currency = isPaper ? "₹" : "USDT";
+  
+  // Format: 🟢 Position Opened | {symbol} {side} ×{leverage} | Entry: {entry} | Size: {size} | Margin: {margin} | Mark: {mark_price} | SL: {sl} | TP: {tp}
   return (
-    `${sideEmoji} <b>Position Opened</b> ${mode}\n\n` +
-    `<b>${escapeHtml(p.symbol)}</b> ${p.side} ×${p.leverage}\n` +
-    `Entry: <code>${p.entryPrice.toFixed(4)}</code>\n` +
-    `Size: <code>${p.quantity.toFixed(4)}</code> | Margin: <code>${p.margin.toFixed(2)} ${currency}</code>\n` +
-    `${pnlEmoji} uPnL: <code>${p.unrealizedPnl.toFixed(2)} ${currency}</code> | ROE: <code>${p.roe.toFixed(2)}%</code>\n` +
-    (p.stopLoss ? `SL: <code>${p.stopLoss.toFixed(4)}</code>  ` : "") +
-    (p.takeProfit ? `TP: <code>${p.takeProfit.toFixed(4)}</code>` : "")
+    `${sideEmoji} <b>Position Opened</b> ${mode}\n` +
+    `<b>${escapeHtml(p.symbol)}</b> ${p.side} ×${p.leverage} | ` +
+    `Entry: <code>${p.entryPrice.toFixed(4)}</code> | ` +
+    `Size: <code>${p.quantity.toFixed(4)}</code> | ` +
+    `Margin: <code>${p.margin.toFixed(2)} ${currency}</code> | ` +
+    `Mark: <code>${p.markPrice.toFixed(4)}</code> | ` +
+    `SL: <code>${p.stopLoss?.toFixed(4) ?? "None"}</code> | ` +
+    `TP: <code>${p.takeProfit?.toFixed(4) ?? "None"}</code>`
   );
 }
 
-async function buildCloseMessage(positionId: number, reason: string, isPaper: boolean): Promise<string> {
-  const mode = isPaper ? "🧪 PAPER" : "💰 LIVE";
-  const currency = isPaper ? "₹" : "USDT";
+async function buildCloseMessage(positionId: number, reason: string): Promise<string> {
   try {
     const db = getDb();
     const [row] = await db
@@ -87,70 +88,208 @@ async function buildCloseMessage(positionId: number, reason: string, isPaper: bo
         leverage: positions.leverage,
         size: positions.size,
         isPaper: positions.isPaper,
+        createdAt: positions.createdAt,
+        closedAt: positions.closedAt,
       })
       .from(positions)
       .where(eq(positions.id, positionId))
       .limit(1);
 
     if (!row) {
-      return `🔒 <b>Position Closed</b> ${mode}\n\nID: ${positionId}\nReason: ${escapeHtml(reason)}`;
+      return `🔴 <b>Position Closed</b>\n\nID: ${positionId}\nReason: ${escapeHtml(reason)}`;
     }
 
+    const isPaper = row.isPaper ?? false;
+    const mode = isPaper ? "🧪 PAPER" : "💰 LIVE";
+    const currency = isPaper ? "₹" : "USDT";
     const pnl = parseFloat(row.realizedPnl ?? "0");
-    const isProfit = pnl >= 0;
-    const pnlEmoji = isProfit ? "💰" : "🔴";
-    const entry = parseFloat(row.entryPrice ?? "0");
     const exit = parseFloat(row.currentPrice ?? "0");
     const side = row.side?.toUpperCase() ?? "UNKNOWN";
+    
+    const durationMs = (row.closedAt ? row.closedAt.getTime() : Date.now()) - row.createdAt.getTime();
+    const durationMin = Math.floor(durationMs / 60_000);
+    const durationStr = durationMin > 60 
+      ? `${Math.floor(durationMin / 60)}h ${durationMin % 60}m` 
+      : `${durationMin}m`;
 
+    // Format: 🔴 Position Closed | {symbol} {side} | Exit: {price} | Mark: {mark_price} | Total Realized: {pnl} | Duration: {time}
     return (
-      `${pnlEmoji} <b>Position Closed</b> ${mode}\n\n` +
-      `<b>${escapeHtml(row.symbol)}</b> ${side} ×${row.leverage}\n` +
-      `Entry: <code>${entry.toFixed(4)}</code> → Exit: <code>${exit.toFixed(4)}</code>\n` +
-      `Size: <code>${row.size}</code>\n` +
-      `PnL: <b>${isProfit ? "+" : ""}${pnl.toFixed(2)} ${currency}</b>\n` +
+      `🔴 <b>Position Closed</b> ${mode}\n` +
+      `<b>${escapeHtml(row.symbol)}</b> ${side} | ` +
+      `Exit: <code>${exit.toFixed(4)}</code> | ` +
+      `Mark: <code>${exit.toFixed(4)}</code> | ` +
+      `Total Realized: <b>${pnl.toFixed(2)} ${currency}</b> | ` +
+      `Duration: <code>${durationStr}</code>\n` +
       `Reason: <i>${escapeHtml(reason)}</i>`
     );
-  } catch {
-    return `🔒 <b>Position Closed</b> ${mode}\n\nID: ${positionId}\nReason: ${escapeHtml(reason)}`;
+  } catch (err) {
+    console.error("[position-telegram] Error building close message:", err);
+    return `🔴 <b>Position Closed</b>\n\nID: ${positionId}\nReason: ${escapeHtml(reason)}`;
   }
 }
 
-function buildActionMessage(
+async function buildActionMessage(
   positionId: number,
   action: PositionAction,
   result: "ok" | "failed",
   detail?: string
-): string {
-  const actionLabels: Record<string, { emoji: string; label: string }> = {
-    PARTIAL_EXIT: { emoji: "📉", label: "Partial Exit" },
-    REDUCE_SIZE: { emoji: "📉", label: "Reduce Size" },
-    MOVE_TO_BREAKEVEN: { emoji: "🛡️", label: "Breakeven" },
-    TRAIL_SL: { emoji: "🎯", label: "Trail Stop" },
-    TIGHTEN_TP: { emoji: "📈", label: "Tighten TP" },
-    EXTEND_TP: { emoji: "📈", label: "Extend TP" },
-    SCALE_IN: { emoji: "📥", label: "Scale In" },
-    FULL_EXIT: { emoji: "🔒", label: "Full Exit" },
-  };
+): Promise<string> {
+  try {
+    const db = getDb();
+    const [row] = await db
+      .select({
+        symbol: positions.symbol,
+        side: positions.side,
+        leverage: positions.leverage,
+        currentPrice: positions.currentPrice,
+        entryPrice: positions.entryPrice,
+        extremePrice: positions.extremePrice,
+        size: positions.size,
+        realizedPnl: positions.realizedPnl,
+        isPaper: positions.isPaper,
+        stopLoss: positions.stopLoss,
+      })
+      .from(positions)
+      .where(eq(positions.id, positionId))
+      .limit(1);
 
-  const cfg = actionLabels[action] ?? { emoji: "⚡", label: action };
-  const statusEmoji = result === "ok" ? "" : "❌ ";
-  const statusText = result === "ok" ? "" : " (FAILED)";
+    if (!row) {
+      return `⚡ <b>${action}</b>\n\nPosition ID: <code>${positionId}</code>\nResult: ${result}\n${detail ?? ""}`;
+    }
 
-  return (
-    `${statusEmoji}${cfg.emoji} <b>${cfg.label}${statusText}</b>\n\n` +
-    `Position ID: <code>${positionId}</code>\n` +
-    (detail ? `Detail: <i>${escapeHtml(detail)}</i>` : "")
-  );
+    // Fetch latest transaction for precise details
+    const [tx] = await db
+      .select()
+      .from(positionTransactions)
+      .where(eq(positionTransactions.positionId, positionId))
+      .orderBy(desc(positionTransactions.createdAt))
+      .limit(1);
+
+    const isPaper = row.isPaper ?? false;
+    const mode = isPaper ? "🧪 PAPER" : "💰 LIVE";
+    const side = row.side?.toUpperCase() ?? "UNKNOWN";
+    const mark = parseFloat(row.currentPrice ?? "0");
+    const entry = tx?.avgEntryPrice ? parseFloat(tx.avgEntryPrice) : parseFloat(row.entryPrice ?? "0");
+    const sl = row.stopLoss ? parseFloat(row.stopLoss) : 0;
+    const extreme = row.extremePrice ? parseFloat(row.extremePrice) : 0;
+    const currency = isPaper ? "₹" : "USDT";
+
+    const statusEmoji = result === "ok" ? "" : "❌ ";
+    const statusText = result === "ok" ? "" : " (FAILED)";
+
+    // Standardized Formats based on Action
+    if (action === "MOVE_TO_BREAKEVEN") {
+      // 🛡️ Breakeven | {symbol} {side} | Avg Entry: {avg_entry} | Mark: {mark_price} | SL locked at {sl}
+      return (
+        `${statusEmoji}🛡️ <b>Breakeven${statusText}</b> ${mode}\n` +
+        `<b>${escapeHtml(row.symbol)}</b> ${side} | ` +
+        `Avg Entry: <code>${entry.toFixed(4)}</code> | ` +
+        `Mark: <code>${mark.toFixed(4)}</code> | ` +
+        `SL locked at <code>${sl.toFixed(4)}</code>` +
+        (detail ? `\nDetail: <i>${escapeHtml(detail)}</i>` : "")
+      );
+    }
+
+    if (action === "TRAIL_SL") {
+      // 🎯 Trail Stop | {symbol} {side} | Mark: {mark_price} | SL trailed to {sl} | Extreme: {extreme_price}
+      return (
+        `${statusEmoji}🎯 <b>Trail Stop${statusText}</b> ${mode}\n` +
+        `<b>${escapeHtml(row.symbol)}</b> ${side} | ` +
+        `Mark: <code>${mark.toFixed(4)}</code> | ` +
+        `SL trailed to <code>${sl.toFixed(4)}</code> | ` +
+        `Extreme: <code>${extreme.toFixed(4)}</code>` +
+        (detail ? `\nDetail: <i>${escapeHtml(detail)}</i>` : "")
+      );
+    }
+
+    if (action === "PARTIAL_EXIT" || action === "REDUCE_SIZE") {
+      // 📉 Partial Exit | {symbol} {side} | Closed {size} @ {price} | Mark: {mark_price} | Realized: {pnl} | Remaining: {size}
+      const pnl = tx?.realizedPnl ? parseFloat(tx.realizedPnl) : 0;
+      const closedSize = tx?.quantityDelta ? Math.abs(parseFloat(tx.quantityDelta)) : 0;
+      const closedPrice = tx?.price ? parseFloat(tx.price) : mark;
+
+      return (
+        `${statusEmoji}📉 <b>Partial Exit${statusText}</b> ${mode}\n` +
+        `<b>${escapeHtml(row.symbol)}</b> ${side} | ` +
+        `Closed <code>${closedSize.toFixed(4)}</code> @ <code>${closedPrice.toFixed(4)}</code> | ` +
+        `Mark: <code>${mark.toFixed(4)}</code> | ` +
+        `Realized: <b>${pnl.toFixed(2)} ${currency}</b> | ` +
+        `Remaining: <code>${row.size}</code>` +
+        (detail ? `\nDetail: <i>${escapeHtml(detail)}</i>` : "")
+      );
+    }
+
+    if (action === "SCALE_IN") {
+      // 📈 Scale In | {symbol} {side} | Added {size} @ {price} | Mark: {mark_price} | New Avg Entry: {avg_entry} | Total Size: {size}
+      const addedSize = tx?.quantityDelta ? parseFloat(tx.quantityDelta) : 0;
+      const addedPrice = tx?.price ? parseFloat(tx.price) : mark;
+
+      return (
+        `${statusEmoji}📈 <b>Scale In${statusText}</b> ${mode}\n` +
+        `<b>${escapeHtml(row.symbol)}</b> ${side} | ` +
+        `Added <code>${addedSize.toFixed(4)}</code> @ <code>${addedPrice.toFixed(4)}</code> | ` +
+        `Mark: <code>${mark.toFixed(4)}</code> | ` +
+        `New Avg Entry: <code>${entry.toFixed(4)}</code> | ` +
+        `Total Size: <code>${row.size}</code>` +
+        (detail ? `\nDetail: <i>${escapeHtml(detail)}</i>` : "")
+      );
+    }
+
+    // Fallback for other actions
+    const actionLabels: Record<string, { emoji: string; label: string }> = {
+      TIGHTEN_TP: { emoji: "📈", label: "Tighten TP" },
+      EXTEND_TP: { emoji: "📈", label: "Extend TP" },
+      FULL_EXIT: { emoji: "🔒", label: "Full Exit" },
+    };
+
+    const cfg = actionLabels[action] ?? { emoji: "⚡", label: action };
+    return (
+      `${statusEmoji}${cfg.emoji} <b>${cfg.label}${statusText}</b> ${mode}\n` +
+      `<b>${escapeHtml(row.symbol)}</b> ${side} ×${row.leverage} | ` +
+      `Mark: <code>${mark.toFixed(4)}</code>` +
+      (detail ? `\nDetail: <i>${escapeHtml(detail)}</i>` : "")
+    );
+
+  } catch (err) {
+    console.error("[position-telegram] Error building action message:", err);
+    return `⚡ <b>${action}</b>\n\nPosition ID: <code>${positionId}</code>\nResult: ${result}\n${detail ?? ""}`;
+  }
 }
 
-function buildProtectedMessage(positionId: number, sl: number, tp: number): string {
-  return (
-    `🛡️ <b>Protection Set</b>\n\n` +
-    `Position ID: <code>${positionId}</code>\n` +
-    `SL: <code>${sl.toFixed(4)}</code>\n` +
-    `TP: <code>${tp.toFixed(4)}</code>`
-  );
+async function buildProtectedMessage(positionId: number, sl: number, tp: number): Promise<string> {
+  try {
+    const db = getDb();
+    const [row] = await db
+      .select({
+        symbol: positions.symbol,
+        side: positions.side,
+        leverage: positions.leverage,
+        currentPrice: positions.currentPrice,
+        isPaper: positions.isPaper,
+      })
+      .from(positions)
+      .where(eq(positions.id, positionId))
+      .limit(1);
+
+    if (!row) {
+      return `🛡️ <b>Protection Set</b>\n\nPosition ID: <code>${positionId}</code>\nSL: ${sl}\nTP: ${tp}`;
+    }
+
+    const mode = row.isPaper ? "🧪 PAPER" : "💰 LIVE";
+    const side = row.side?.toUpperCase() ?? "UNKNOWN";
+    const mark = parseFloat(row.currentPrice ?? "0");
+
+    return (
+      `🛡️ <b>Protection Set</b> ${mode}\n` +
+      `<b>${escapeHtml(row.symbol)}</b> ${side} ×${row.leverage} | ` +
+      `Mark: <code>${mark.toFixed(4)}</code> | ` +
+      `SL: <code>${sl.toFixed(4)}</code> | ` +
+      `TP: <code>${tp.toFixed(4)}</code>`
+    );
+  } catch (err) {
+    console.error("[position-telegram] Error building protected message:", err);
+    return `🛡️ <b>Protection Set</b>\n\nPosition ID: <code>${positionId}</code>\nSL: ${sl}\nTP: ${tp}`;
+  }
 }
 
 function buildErrorMessage(context: string, error: Error): string {
@@ -181,8 +320,7 @@ function onDiscovered(position: ManagedPosition) {
 
 function onClosed(positionId: number, reason: string) {
   if (!canNotifyPosition(positionId)) return;
-  // Need to fetch isPaper from DB since the event doesn't carry it
-  buildCloseMessage(positionId, reason, false)
+  buildCloseMessage(positionId, reason)
     .then((text) => notify(text))
     .catch(() => {});
 }
@@ -194,12 +332,16 @@ function onActionExecuted(positionId: number, action: PositionAction, result: "o
   if (action === "FULL_EXIT" && result === "ok") return;
   if (!canNotifyPosition(positionId)) return;
 
-  notify(buildActionMessage(positionId, action, result, detail)).catch(() => {});
+  buildActionMessage(positionId, action, result, detail)
+    .then((text) => notify(text))
+    .catch((err) => console.error("[position-telegram] Error in onActionExecuted:", err));
 }
 
 function onProtected(positionId: number, sl: number, tp: number) {
   if (!canNotifyPosition(positionId)) return;
-  notify(buildProtectedMessage(positionId, sl, tp)).catch(() => {});
+  buildProtectedMessage(positionId, sl, tp)
+    .then((text) => notify(text))
+    .catch((err) => console.error("[position-telegram] Error in onProtected:", err));
 }
 
 function onError(context: string, error: Error) {
