@@ -86,9 +86,9 @@ export function calculateMicroScore(
   else if (orderBook.imbalance < -0.2) score -= 5; // ask-heavy = bearish
 
   // Trade tape delta (0-30 points)
-  if (tradeTape.delta > 0) {
+  if (tradeTape.delta > 0 && tradeTape.buyVolume > 0) {
     score += Math.min(tradeTape.delta / tradeTape.buyVolume * 20, 20);
-  } else {
+  } else if (tradeTape.sellVolume > 0) {
     score -= Math.min(Math.abs(tradeTape.delta) / tradeTape.sellVolume * 20, 20);
   }
 

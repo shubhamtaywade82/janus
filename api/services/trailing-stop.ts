@@ -153,7 +153,7 @@ export function calcNewTrailingStop(
     const breakeven = entryPrice * (1 + TAKER_FEE * 2);
     newStop = Math.max(newStop, breakeven);
   } else if (side === "short" && currentPrice <= entryPrice - initialRisk) {
-    const breakeven = entryPrice * (1 - TAKER_FEE * 2);
+    const breakeven = entryPrice * (1 + TAKER_FEE * 2);
     newStop = Math.min(newStop, breakeven);
   }
   return newStop;

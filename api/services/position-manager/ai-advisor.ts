@@ -69,7 +69,7 @@ function codeBasedDecision(
     if (priceMove >= slDistance && stopLoss !== entryPrice) {
       return {
         action: PA.MOVE_TO_BREAKEVEN,
-        newStopLoss: entryPrice * (isLong ? 1.001 : 0.999),
+        newStopLoss: entryPrice * 1.001,
         confidence: 0.80,
         reasoning: "Position has moved 1R in profit — moving stop to breakeven.",
         source: "CODE",

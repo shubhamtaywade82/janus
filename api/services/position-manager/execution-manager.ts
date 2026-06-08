@@ -60,9 +60,7 @@ export async function executeAction(
       case PA.MOVE_TO_BREAKEVEN: {
         const newSl =
           recommendation.newStopLoss ??
-          (position.side === "LONG"
-            ? position.entryPrice * 1.001
-            : position.entryPrice * 0.999);
+          position.entryPrice * 1.001;
 
         if (!isSlImprovement(position.side, position.stopLoss, newSl)) {
           positionManagerBus.emit(

@@ -113,13 +113,13 @@ export class Governor {
       return { approved: false, gate: "correlation", reason: corrCheck.reason };
     }
 
-    // Gate 6b: spread filter (spreadPercent is stored as a decimal fraction, e.g. 0.01 = 1%)
+    // Gate 6b: spread filter (spreadPercent is stored as a decimal fraction, e.g. 0.02 = 2%)
     const spreadPct = metadata?.spreadPercent as number | undefined;
-    if (spreadPct !== undefined && spreadPct > 0.01) {
+    if (spreadPct !== undefined && spreadPct > 0.02) {
       return {
         approved: false,
         gate: "spread",
-        reason: `spread ${(spreadPct * 100).toFixed(3)}% > 1% — low liquidity`,
+        reason: `spread ${(spreadPct * 100).toFixed(3)}% > 2% — low liquidity`,
       };
     }
 
@@ -142,27 +142,30 @@ export class Governor {
     // Gate 8: KNN SuperTrend filter
     const knnSnap = knnSnapshotCache.get(symbol);
     if (knnSnap) {
-      if (knnSnap.regime === "range") {
-        return { approved: false, gate: "knn_range", reason: `KNN: range regime — signals suppressed for ${symbol}` };
-      }
+      // KNN range regime check disabled to allow entries in chop (user preference)
+      // if (knnSnap.regime === "range") {
+      //   return { approved: false, gate: "knn_range", reason: `KNN: range regime — signals suppressed for ${symbol}` };
+      // }
       const knnMinConf = 60;
       const knnBias = knnSnap.knn.bias;
       const knnConf = knnSnap.knn.confidence;
       const biasSide = knnBias === "bullish" ? "long" : knnBias === "bearish" ? "short" : "neutral";
-      if (knnBias !== "neutral" && knnConf >= knnMinConf && biasSide !== side) {
-        return {
-          approved: false,
-          gate: "knn_conflict",
-          reason: `KNN: bias=${knnBias} (${knnConf}%) conflicts with signal ${side}`,
-        };
-      }
-      if (knnConf < 40) {
-        return {
-          approved: false,
-          gate: "knn_low_conf",
-          reason: `KNN: very low confidence (${knnConf}%) — skipping ${symbol}`,
-        };
-      }
+      // KNN bias conflict check disabled to allow entries against short-term bias (user preference)
+      // if (knnBias !== "neutral" && knnConf >= knnMinConf && biasSide !== side) {
+      //   return {
+      //     approved: false,
+      //     gate: "knn_conflict",
+      //     reason: `KNN: bias=${knnBias} (${knnConf}%) conflicts with signal ${side}`,
+      //   };
+      // }
+      // KNN low-confidence check disabled (user preference)
+      // if (knnConf < 40) {
+      //   return {
+      //     approved: false,
+      //     gate: "knn_low_conf",
+      //     reason: `KNN: very low confidence (${knnConf}%) — skipping ${symbol}`,
+      //   };
+      // }
     }
 
     // All gates passed
