@@ -255,6 +255,7 @@ export function analyzeConfluence(
     direction,
     indicators: {
       spread: orderBook.spread,
+      spreadPercent: orderBook.spreadPercent,
       imbalance: orderBook.imbalance,
       vwap: calculateVWAP(prices, volumes),
       rsi: calculateRSI(prices, 14),

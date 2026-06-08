@@ -113,8 +113,8 @@ export class Governor {
       return { approved: false, gate: "correlation", reason: corrCheck.reason };
     }
 
-    // Gate 6b: spread filter
-    const spreadPct = metadata?.spread as number | undefined;
+    // Gate 6b: spread filter (spreadPercent is stored as a decimal fraction, e.g. 0.01 = 1%)
+    const spreadPct = metadata?.spreadPercent as number | undefined;
     if (spreadPct !== undefined && spreadPct > 0.01) {
       return {
         approved: false,
