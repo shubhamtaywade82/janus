@@ -20,7 +20,6 @@ import { aiAssessments } from "@db/position-manager-schema";
 import { eq, and, desc, gte as _gte } from "drizzle-orm";
 import { userPositionsCache, markPriceCache } from "../coindcx-ws";
 import { latestTickerCache } from "../streaming";
-import { env } from "../../lib/env";
 import { getPaperWallet } from "../paper-wallet";
 import { registerPositionForTrailing, syncTrailingStopLoss, isPositionTracked, unregisterPosition } from "../trailing-stop";
 import type { StrategyType } from "../strategy-config";
@@ -102,19 +101,18 @@ export class PositionLifecycleManager {
     const userId = this.config.userId;
     const db = getDb();
 
-    const isPaperMode = env.paperTrading || !env.placeOrders;
-    // ── 1. Open positions from DB (paper + any not yet in WS cache) ──────
+    // ── 1. Open positions from DB (paper + live) ─────────────────────────
     const dbPositions = await db
       .select()
       .from(positions)
       .where(and(
         eq(positions.userId, userId),
-        eq(positions.status, "open"),
-        eq(positions.isPaper, isPaperMode)
+        eq(positions.status, "open")
       ));
 
     // ── 2. Live CoinDCX WS positions ──────────────────────────────────────
-    const wsPositions = isPaperMode ? [] : (userPositionsCache.get(userId) ?? []);
+    // Fetch if available, regardless of isPaperMode (we track live positions even in paper mode)
+    const wsPositions = userPositionsCache.get(userId) ?? [];
 
     // Build merged set keyed by exchangeOrderId / DB id
     const managed = new Map<string, ManagedPosition>();
@@ -293,18 +291,31 @@ export class PositionLifecycleManager {
     const openPositions = positionStore.getOpen();
     if (openPositions.length === 0) return;
 
-    const availableBalance = await this.fetchAvailableBalance();
-    const totalEquity = await this.fetchTotalEquity();
+    // Fetch both portfolios (we track live even in paper mode)
+    const [paperBal, paperEq, liveBal, liveEq] = await Promise.all([
+      this.fetchAvailableBalance(true),
+      this.fetchTotalEquity(true),
+      this.fetchAvailableBalance(false),
+      this.fetchTotalEquity(false),
+    ]);
 
-    const portfolio = {
-      totalEquityUsdt: totalEquity,
-      availableBalance,
-      totalUnrealizedPnl: positionStore.totalUnrealizedPnl(),
-      openPositionCount: openPositions.length,
+    const paperPortfolio = {
+      totalEquityUsdt: paperEq,
+      availableBalance: paperBal,
+      totalUnrealizedPnl: positionStore.totalUnrealizedPnl(true),
+      openPositionCount: openPositions.filter(p => p.isPaper).length,
+    };
+
+    const livePortfolio = {
+      totalEquityUsdt: liveEq,
+      availableBalance: liveBal,
+      totalUnrealizedPnl: positionStore.totalUnrealizedPnl(false),
+      openPositionCount: openPositions.filter(p => !p.isPaper).length,
     };
 
     for (const position of openPositions) {
       try {
+        const portfolio = position.isPaper ? paperPortfolio : livePortfolio;
         await this.assessPosition(position, portfolio);
       } catch (err) {
         console.error(`[position-lifecycle] Assessment failed for position ${position.id}:`, err);
@@ -471,9 +482,8 @@ export class PositionLifecycleManager {
     }
   }
 
-  private async fetchAvailableBalance(): Promise<number> {
+  private async fetchAvailableBalance(isPaper: boolean): Promise<number> {
     try {
-      const isPaper = env.paperTrading || !env.placeOrders;
       if (isPaper) {
         const db = getDb();
         const configRows = await db
@@ -510,9 +520,8 @@ export class PositionLifecycleManager {
     }
   }
 
-  private async fetchTotalEquity(): Promise<number> {
+  private async fetchTotalEquity(isPaper: boolean): Promise<number> {
     try {
-      const isPaper = env.paperTrading || !env.placeOrders;
       if (isPaper) {
         const db = getDb();
         const configRows = await db

@@ -99,14 +99,18 @@ class PositionStore {
     return this.store.size;
   }
 
-  // Total unrealized PnL across all open positions
-  totalUnrealizedPnl(): number {
-    return this.getOpen().reduce((sum, p) => sum + p.unrealizedPnl, 0);
+  // Total unrealized PnL across open positions in given mode
+  totalUnrealizedPnl(isPaper?: boolean): number {
+    return this.getOpen()
+      .filter((p) => (isPaper === undefined ? true : p.isPaper === isPaper))
+      .reduce((sum, p) => sum + p.unrealizedPnl, 0);
   }
 
-  // Total margin locked by open positions
-  totalMarginUsed(): number {
-    return this.getOpen().reduce((sum, p) => sum + p.margin, 0);
+  // Total margin locked by open positions in given mode
+  totalMarginUsed(isPaper?: boolean): number {
+    return this.getOpen()
+      .filter((p) => (isPaper === undefined ? true : p.isPaper === isPaper))
+      .reduce((sum, p) => sum + p.margin, 0);
   }
 
   // Correlation check: how many positions on the same side (broad market exposure)

@@ -12,6 +12,9 @@ export function calculateTakeProfit(
   const price = position.markPrice || position.entryPrice;
   const isLong = position.side === "LONG";
 
+  // Guard against invalid SL distance
+  const safeSlDistance = (slDistancePct && Number.isFinite(slDistancePct)) ? slDistancePct : 0.02;
+
   // Prefer R-multiples empirically derived from this symbol's own historical price
   // action (how far it actually tends to run before reversing by 1R), refreshed
   // periodically by the r-profile-engine. Falls back to a static volatility-based
@@ -37,9 +40,9 @@ export function calculateTakeProfit(
     r3 = r1 * 2.5;
   }
 
-  const tp1Distance = slDistancePct * r1;
-  const tp2Distance = slDistancePct * r2;
-  const tp3Distance = slDistancePct * r3;
+  const tp1Distance = safeSlDistance * r1;
+  const tp2Distance = safeSlDistance * r2;
+  const tp3Distance = safeSlDistance * r3;
 
   let tp1: number, tp2: number, tp3: number;
   if (isLong) {

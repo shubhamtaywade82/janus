@@ -104,13 +104,18 @@ function codeBasedDecision(
     };
   }
 
-  // Rule 6: Moderate bearish bias — tighten TP
+  // Rule 6: Moderate bearish bias — tighten TP (lock gains by bringing TP closer to current price)
   if ((bias.bias === "BEARISH" || bias.bias === "STRONG_BEARISH") && roe > 5) {
-    const newTp = ctx.atr14
-      ? isLong
-        ? markPrice + ctx.atr14 * 0.8
-        : markPrice - ctx.atr14 * 0.8
-      : undefined;
+    let newTp: number | undefined;
+    if (ctx.atr14) {
+      if (isLong) {
+        // LONG: TP closer to mark (lower), but still above entry to stay profitable
+        newTp = Math.max(markPrice + ctx.atr14 * 0.5, position.entryPrice * 1.001);
+      } else {
+        // SHORT: TP closer to mark (higher), but still below entry to stay profitable
+        newTp = Math.min(markPrice + ctx.atr14 * 0.5, position.entryPrice * 0.999);
+      }
+    }
     return {
       action: PA.TIGHTEN_TP,
       newTakeProfit: newTp,
@@ -151,6 +156,7 @@ function buildPositionPrompt(
   bias: BiasResult,
   portfolio: PortfolioSummary
 ): string {
+  const currency = position.marginCurrency || "USDT";
   return `You are a professional crypto futures risk manager. Assess this open position and recommend an action.
 
 POSITION:
@@ -159,7 +165,7 @@ POSITION:
 - Entry: ${position.entryPrice.toFixed(4)}
 - Mark Price: ${position.markPrice.toFixed(4)}
 - ROE: ${position.roe.toFixed(2)}%
-- Unrealized PnL: ${position.unrealizedPnl.toFixed(4)} USDT
+- Unrealized PnL: ${position.unrealizedPnl.toFixed(4)} ${currency}
 - Holding Time: ${position.holdingMinutes} minutes
 - Leverage: ${position.leverage}x
 - Stop Loss: ${position.stopLoss?.toFixed(4) ?? "NONE"}
@@ -182,8 +188,8 @@ BIAS ANALYSIS:
 - Factors: ${bias.factors.slice(0, 4).join(", ")}
 
 PORTFOLIO:
-- Available Balance: ${portfolio.availableBalance.toFixed(2)} USDT
-- Total Unrealized PnL: ${portfolio.totalUnrealizedPnl.toFixed(2)} USDT
+- Available Balance: ${portfolio.availableBalance.toFixed(2)} ${currency}
+- Total Unrealized PnL: ${portfolio.totalUnrealizedPnl.toFixed(2)} ${currency}
 - Open Positions: ${portfolio.openPositionCount}
 
 DECISION GUIDANCE (read carefully):

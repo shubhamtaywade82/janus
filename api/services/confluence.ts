@@ -23,6 +23,7 @@ export interface ConfluenceScore {
   direction: "long" | "short" | "neutral";
   indicators: {
     spread: number;
+    spreadPercent?: number;
     imbalance: number;
     vwap: number;
     rsi: number;

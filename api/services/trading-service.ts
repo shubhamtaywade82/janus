@@ -317,17 +317,54 @@ export async function fetchPortfolioData(userId: number) {
         }
       }
 
-      const paperPositions = await db
+      // ── 4. DB Positions (Paper + Live tracked) ─────────────────────────
+      const dbPositions = await db
         .select()
         .from(positions)
-        .where(and(eq(positions.userId, userId), eq(positions.status, "open"), eq(positions.isPaper, true)));
+        .where(and(eq(positions.userId, userId), eq(positions.status, "open")));
 
-      const paperMapped = paperPositions.map((p) => mapPaperPosition(p, markets));
+      // ── 5. Merge Live (Exchange) + DB ───────────────────────────────────
+      // We prioritize exchange truth for size/price, but use DB for ID/SL/TP metadata
+      const mergedLive: any[] = [];
+      const dbMatchedIds = new Set<number>();
 
-      const allPositions = [
-        ...openPositions.map((p) => ({ ...p, isPaper: false as const })),
-        ...paperMapped,
-      ];
+      for (let i = 0; i < openPositions.length; i++) {
+        const lp = openPositions[i];
+        const lpSymbol = lp.symbol;
+        const lpSide = lp.side;
+
+        // Try to find a matching live position in the DB
+        const match = dbPositions.find(
+          (dbp) => !dbp.isPaper && dbp.symbol === lpSymbol && dbp.side === lpSide
+        );
+
+        if (match) {
+          dbMatchedIds.add(match.id);
+          mergedLive.push({
+            ...lp,
+            id: match.id, // Use real DB ID
+            stopLoss: match.stopLoss ? parseFloat(match.stopLoss) : lp.stopLoss,
+            takeProfit: match.takeProfit ? parseFloat(match.takeProfit) : lp.takeProfit,
+            entryReason: match.entryReason,
+            strategyType: match.strategyType,
+            isPaper: false,
+          });
+        } else {
+          // Orphan exchange position
+          mergedLive.push({
+            ...lp,
+            id: i + 10000,
+            isPaper: false,
+          });
+        }
+      }
+
+      // ── 6. Add Paper positions from DB ──────────────────────────────────
+      const paperMapped = dbPositions
+        .filter((p) => p.isPaper)
+        .map((p) => mapPaperPosition(p, markets));
+
+      const allPositions = [...mergedLive, ...paperMapped];
 
       return {
         openPositionsCount: allPositions.length,

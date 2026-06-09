@@ -42,13 +42,19 @@ export async function ensureProtection(
     }
 
     // Calculate missing TP using SL distance
-    if (!status.hasTp && sl !== null) {
+    if (!status.hasTp && sl !== null && position.entryPrice > 0) {
       const slDistancePct = Math.abs((position.entryPrice - sl) / position.entryPrice);
       const tpResult = calculateTakeProfit(position, ctx, slDistancePct);
       tp = tpResult.tp1;
     }
 
     if (sl === null || tp === null) return status;
+
+    // Final safety check: ensure finite values for DB
+    if (!Number.isFinite(sl) || !Number.isFinite(tp)) {
+      console.warn(`[protection-manager] Non-finite SL/TP for ${position.id}: sl=${sl}, tp=${tp}`);
+      return status;
+    }
 
     // Place orders on exchange for live positions
     if (!position.isPaper) {

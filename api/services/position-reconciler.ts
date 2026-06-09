@@ -147,14 +147,49 @@ class PositionReconciler {
     for (const [pair, lp] of liveByPair) {
       const qty = parseFloat(lp.active_pos ?? lp.quantity ?? "0");
       if (qty !== 0 && !dbSymbols.has(pair)) {
-        console.error(
-          `[reconciler] ORPHAN POSITION: ${pair} qty=${qty} exists on exchange but not in DB`
+        const symbol = pair.replace("B-", "").replace("_", "");
+        console.log(
+          `[reconciler] AUTO-IMPORTING ORPHAN POSITION: ${pair} qty=${qty}`
         );
-        await broadcastTelegramAlert(
-          `🆘 <b>ORPHAN POSITION DETECTED</b>\n` +
-          `${pair} qty=${qty} exists on exchange but <b>NOT in DB</b>\n` +
-          `Manual intervention required — check exchange dashboard`
-        ).catch(() => {});
+        
+        // Use exchange data to create DB entry
+        const side = parseFloat(lp.active_pos) > 0 ? "long" : "short";
+        const markPrice = parseFloat(lp.mark_price || "0");
+        const entryPrice = parseFloat(lp.entry_price || lp.avg_entry_price || "0") || markPrice;
+        const leverage = parseInt(lp.leverage || "1");
+        const margin = parseFloat(lp.position_margin || "0");
+
+        if (entryPrice <= 0) {
+          console.warn(`[reconciler] Skipping orphan import for ${pair}: zero entry price`);
+          continue;
+        }
+
+        try {
+          await db.insert(positions).values({
+            userId: 1,
+            symbol,
+            side,
+            entryPrice: String(entryPrice),
+            currentPrice: String(markPrice || entryPrice),
+            size: String(Math.abs(qty)),
+            leverage,
+            margin: String(margin),
+            status: "open",
+            isPaper: false,
+            exchangeOrderId: String(lp.id || lp.order_id || ""),
+            entryReason: "Auto-imported: Orphan live position detected during reconciliation",
+            createdAt: new Date(),
+            updatedAt: new Date(),
+          });
+
+          await broadcastTelegramAlert(
+            `✅ <b>Live Position Imported:</b> ${symbol} ${side.toUpperCase()}\n` +
+            `Size: ${Math.abs(qty)}, Entry: ${entryPrice}\n` +
+            ` Janus is now tracking and managing this position.`
+          ).catch(() => {});
+        } catch (err) {
+          console.error(`[reconciler] Failed to import orphan position ${pair}:`, err);
+        }
       }
     }
 

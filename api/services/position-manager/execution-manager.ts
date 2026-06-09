@@ -1,5 +1,7 @@
 import type { ManagedPosition, AiRecommendation, PolicyResult } from "./types";
 import { PositionAction as PA } from "./types";
+
+const TAKER_FEE = 0.0005;
 import { positionStore } from "./position-store";
 import { positionManagerBus } from "./event-bus";
 import { createFuturesOrder, getFuturesInstrumentInfo } from "../coindcx";
@@ -58,9 +60,15 @@ export async function executeAction(
 
       // ── Move stop to breakeven ──────────────────────────────────────────
       case PA.MOVE_TO_BREAKEVEN: {
+        if (position.breakevenApplied) {
+          return { success: false, detail: "Breakeven already applied" };
+        }
+
         const newSl =
           recommendation.newStopLoss ??
-          position.entryPrice * 1.001;
+          (position.side === "LONG"
+            ? position.entryPrice * (1 + TAKER_FEE * 2)
+            : position.entryPrice * (1 - TAKER_FEE * 2));
 
         if (!isSlImprovement(position.side, position.stopLoss, newSl)) {
           positionManagerBus.emit(
@@ -162,6 +170,21 @@ export async function executeAction(
           return { success: false, detail: `${action}: no new take profit value provided` };
         }
         const newTp = recommendation.newTakeProfit;
+
+        if (action === PA.TIGHTEN_TP && position.takeProfit !== null) {
+          const isLong = position.side === "LONG";
+          const actuallyTightens = isLong
+            ? newTp < position.takeProfit   // LONG: tighten = lower TP (closer to mark)
+            : newTp > position.takeProfit;  // SHORT: tighten = higher TP (closer to mark)
+          if (!actuallyTightens) {
+            positionManagerBus.emit(
+              "position:action-executed", position.id, action, "failed",
+              `TIGHTEN_TP rejected: ${newTp.toFixed(4)} does not tighten vs current ${position.takeProfit.toFixed(4)}`
+            );
+            return { success: false, detail: `TIGHTEN_TP rejected: wrong direction for ${position.side}` };
+          }
+        }
+
         await db
           .update(positions)
           .set({ takeProfit: newTp.toFixed(8), updatedAt: new Date() })

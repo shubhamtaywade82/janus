@@ -35,6 +35,36 @@ describe("calcNewTrailingStop — SHORT", () => {
   });
 });
 
+describe("calcNewTrailingStop — SHORT breakeven at 1:1 RR", () => {
+  const TAKER_FEE = 0.0005;
+
+  it("places breakeven BELOW entry (not above) with tight trail at 1:1 RR", () => {
+    // entry=1000, trail=0.5%: initialRisk = 1000*0.005=5, 1:1 RR at price<=995
+    // At price=995: pctStop = 995*1.005 = 999.975 (above entry — loss zone!)
+    // breakeven = 1000 * (1 - 0.001) = 999 < 999.975 → newStop capped at 999
+    const stop = calcNewTrailingStop("short", 1005, 995, 0.005, [], 1000);
+    expect(stop).toBeLessThan(1000); // must be below entry
+    expect(stop).toBeCloseTo(1000 * (1 - TAKER_FEE * 2), 2);
+  });
+
+  it("is a no-op when SL is already below breakeven", () => {
+    // entry=1000, trail=0.5%, SL already at 985 (well below entry)
+    // At price=990 (1:1 RR hit): pctStop=990*1.005=994.95 < 985 → no change
+    const stop = calcNewTrailingStop("short", 985, 990, 0.005, [], 1000);
+    expect(stop).toBeLessThanOrEqual(985);
+    expect(stop).toBeLessThan(1000);
+  });
+
+  it("LONG breakeven stays above entry at 1:1 RR", () => {
+    // entry=1000, trail=0.5%: initialRisk=5, 1:1 RR at price>=1005
+    // At price=1005: pctStop=1005*0.995=999.975 (below entry)
+    // breakeven=1001 > 999.975 → newStop raised to 1001
+    const stop = calcNewTrailingStop("long", 995, 1005, 0.005, [], 1000);
+    expect(stop).toBeGreaterThan(1000);
+    expect(stop).toBeCloseTo(1000 * (1 + TAKER_FEE * 2), 2);
+  });
+});
+
 describe("shouldStopOut", () => {
   it("stops out long when price <= stop", () => {
     expect(shouldStopOut("long", 98.5, 99)).toBe(true);

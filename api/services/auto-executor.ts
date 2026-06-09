@@ -904,9 +904,16 @@ private async executePosition(params: {
           );
         }
 
-        // 2. Update the DB record with the actual exchangeOrderId returned by the exchange
+        // 2. Update DB with actual exchangeOrderId and fill price (avg_price from exchange)
+        const fillPrice = parseFloat(order?.avg_price || order?.price_per_unit || "0");
+        const updateFields: { exchangeOrderId: string; entryPrice?: string; currentPrice?: string } = { exchangeOrderId: exchangeOrderId! };
+        if (fillPrice > 0 && Math.abs(fillPrice - params.currentPrice) / params.currentPrice > 0.0001) {
+          updateFields.entryPrice = String(fillPrice);
+          updateFields.currentPrice = String(fillPrice);
+          console.log(`[auto-executor] Fill price: ${params.currentPrice} → ${fillPrice} (slippage ${((fillPrice - params.currentPrice) / params.currentPrice * 100).toFixed(4)}%)`);
+        }
         await db.update(positions)
-          .set({ exchangeOrderId })
+          .set(updateFields)
           .where(eq(positions.id, posId));
 
       } catch (err: any) {
