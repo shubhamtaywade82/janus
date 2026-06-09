@@ -1,6 +1,7 @@
 import { tradingEvents, markPriceCache } from "./coindcx-ws";
 import { STRATEGY_CONFIGS, type StrategyType } from "./strategy-config";
 import { SUPPORTED_PAIRS } from "./binance";
+import { latestTickerCache } from "./streaming";
 import { getDb } from "../queries/connection";
 import { positions } from "@db/schema";
 import { eq, and } from "drizzle-orm";
@@ -105,8 +106,10 @@ export function startExitMonitor(userId: number, positions: MonitoredPosition[])
 
 function getMarkPrice(symbol: string): number | null {
   const markKey = `B-${symbol.toUpperCase().replace("USDT", "_USDT")}`;
-  const price = markPriceCache?.get(markKey);
-  return (price && price > 0 && !Number.isNaN(price)) ? price : null;
+  const mark = markPriceCache?.get(markKey);
+  if (mark && mark > 0 && !Number.isNaN(mark)) return mark;
+  const binance = latestTickerCache.get(symbol.toUpperCase())?.lastPrice;
+  return (binance && binance > 0 && !Number.isNaN(binance)) ? binance : null;
 }
 
 export function stopExitMonitor(userId: number) {
@@ -186,14 +189,15 @@ export interface FeeBreakevenEntry {
 
 export function getFeeBreakevenMap(takerFeeRate = 0.0005): FeeBreakevenEntry[] {
   return SUPPORTED_PAIRS.map((pair) => {
-    const markKey = pair.coindcx;
-    const currentPrice = markPriceCache.get(markKey);
+    const markPrice = markPriceCache.get(pair.coindcx);
+    const binancePrice = latestTickerCache.get(pair.binance)?.lastPrice;
+    const currentPrice = (markPrice && markPrice > 0 && !Number.isNaN(markPrice))
+      ? markPrice
+      : (binancePrice && binancePrice > 0 && !Number.isNaN(binancePrice))
+        ? binancePrice
+        : undefined;
 
-    if (!currentPrice || currentPrice <= 0 || Number.isNaN(currentPrice)) {
-      console.warn(`[exit-manager] Stale/missing CoinDCX mark price for ${markKey} in fee breakeven map.`);
-    }
-
-    const safePrice = currentPrice && currentPrice > 0 && !Number.isNaN(currentPrice) ? currentPrice : 0;
+    const safePrice = currentPrice ?? 0;
     const minMovePct = 2 * takerFeeRate * 100;          // e.g. 0.10
     const minMoveAbs = safePrice * 2 * takerFeeRate;  // e.g. $100 for BTC
 
