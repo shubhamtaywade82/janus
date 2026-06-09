@@ -7,7 +7,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "3010:3010"
+      - "3015:3010"
     environment:
       - NODE_ENV=production
       # Override these via a .env file or Docker secrets — never hardcode here
@@ -20,7 +20,7 @@ services:
       - PLACE_ORDERS=${PLACE_ORDERS:-false}
       - AUTO_EXECUTE=${AUTO_EXECUTE:-false}
       - ENCRYPTION_KEY=${ENCRYPTION_KEY:-697b9bab1a69ab938175a642ca0a71d2913301dc05a18e14350fbd6616fdb963}
-      - OLLAMA_ENDPOINT=${OLLAMA_ENDPOINT:-http://localhost:11434}
+      - OLLAMA_ENDPOINT=${OLLAMA_ENDPOINT:-http://172.22.0.1:11434}
       - LOG_LEVEL=${LOG_LEVEL:-info}
     volumes:
       - ./logs:/app/logs          # persist logs across restarts
@@ -37,6 +37,8 @@ services:
   postgres:
     image: ankane/pgvector:latest
     restart: unless-stopped
+    ports:
+      - "5436:5432"
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-janus_production}
       POSTGRES_USER: ${POSTGRES_USER:-janus}

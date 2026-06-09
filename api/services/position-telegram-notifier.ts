@@ -279,16 +279,55 @@ async function buildProtectedMessage(positionId: number, sl: number, tp: number)
     const side = row.side?.toUpperCase() ?? "UNKNOWN";
     const mark = parseFloat(row.currentPrice ?? "0");
 
+    const modeLabel = row.isPaper ? "Bot-Managed (Paper)" : "Bot-Managed (Live)";
     return (
-      `🛡️ <b>Protection Set</b> ${mode}\n` +
+      `🛡️ <b>Protection Set</b> ${mode} <i>${modeLabel}</i>\n` +
       `<b>${escapeHtml(row.symbol)}</b> ${side} ×${row.leverage} | ` +
       `Mark: <code>${mark.toFixed(4)}</code> | ` +
       `SL: <code>${sl.toFixed(4)}</code> | ` +
-      `TP: <code>${tp.toFixed(4)}</code>`
+      `TP: <code>${tp.toFixed(4)}</code>\n` +
+      `<i>Note: Protection is enforced by Janus trailing engine — not exchange-native conditional orders</i>`
     );
   } catch (err) {
     console.error("[position-telegram] Error building protected message:", err);
-    return `🛡️ <b>Protection Set</b>\n\nPosition ID: <code>${positionId}</code>\nSL: ${sl}\nTP: ${tp}`;
+    return `🛡️ <b>Protection Set (Bot-Managed)</b>\n\nPosition ID: <code>${positionId}</code>\nSL: ${sl}\nTP: ${tp}`;
+  }
+}
+
+async function buildProtectionMismatchMessage(
+  positionId: number,
+  botSl: number,
+  botTp: number,
+  exSl: number | null,
+  exTp: number | null
+): Promise<string> {
+  try {
+    const db = getDb();
+    const [row] = await db
+      .select({ symbol: positions.symbol, side: positions.side, leverage: positions.leverage, isPaper: positions.isPaper })
+      .from(positions)
+      .where(eq(positions.id, positionId))
+      .limit(1);
+
+    const symbol = row ? escapeHtml(row.symbol) : `#${positionId}`;
+    const side = row?.side?.toUpperCase() ?? "";
+    const mode = row?.isPaper ? "🧪 PAPER" : "💰 LIVE";
+
+    return (
+      `🚨 <b>Protection Mismatch</b> ${mode}\n` +
+      `<b>${symbol}</b> ${side}\n` +
+      `Bot SL: <code>${botSl.toFixed(4)}</code> | ` +
+      `Exchange SL: <code>${exSl !== null ? exSl.toFixed(4) : "—"}</code>\n` +
+      `Bot TP: <code>${botTp.toFixed(4)}</code> | ` +
+      `Exchange TP: <code>${exTp !== null ? exTp.toFixed(4) : "—"}</code>\n` +
+      `<i>Exchange may have been modified manually. Janus will continue enforcing bot-side SL/TP.</i>`
+    );
+  } catch (err) {
+    console.error("[position-telegram] Error building mismatch message:", err);
+    return (
+      `🚨 <b>Protection Mismatch</b>\n\nPosition ID: <code>${positionId}</code>\n` +
+      `Bot: SL=${botSl} TP=${botTp} | Exchange: SL=${exSl ?? "—"} TP=${exTp ?? "—"}`
+    );
   }
 }
 
@@ -344,6 +383,19 @@ function onProtected(positionId: number, sl: number, tp: number) {
     .catch((err) => console.error("[position-telegram] Error in onProtected:", err));
 }
 
+function onProtectionMismatch(
+  positionId: number,
+  botSl: number,
+  botTp: number,
+  exSl: number | null,
+  exTp: number | null
+) {
+  // Not debounced — mismatch is always worth alerting immediately
+  buildProtectionMismatchMessage(positionId, botSl, botTp, exSl, exTp)
+    .then((text) => notify(text))
+    .catch((err) => console.error("[position-telegram] Error in onProtectionMismatch:", err));
+}
+
 function onError(context: string, error: Error) {
   notify(buildErrorMessage(context, error)).catch(() => {});
 }
@@ -366,6 +418,7 @@ export function startPositionTelegramNotifier(): void {
   positionManagerBus.on("position:closed", onClosed);
   positionManagerBus.on("position:action-executed", onActionExecuted);
   positionManagerBus.on("position:protected", onProtected);
+  positionManagerBus.on("position:protection-mismatch", onProtectionMismatch);
   positionManagerBus.on("manager:error", onError);
   positionManagerBus.on("manager:started", onStarted);
   positionManagerBus.on("manager:stopped", onStopped);
@@ -381,6 +434,7 @@ export function stopPositionTelegramNotifier(): void {
   positionManagerBus.off("position:closed", onClosed);
   positionManagerBus.off("position:action-executed", onActionExecuted);
   positionManagerBus.off("position:protected", onProtected);
+  positionManagerBus.off("position:protection-mismatch", onProtectionMismatch);
   positionManagerBus.off("manager:error", onError);
   positionManagerBus.off("manager:started", onStarted);
   positionManagerBus.off("manager:stopped", onStopped);

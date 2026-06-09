@@ -7,6 +7,7 @@ export interface PositionManagerEvents {
   "position:discovered": (position: ManagedPosition) => void;
   "position:synced": (position: ManagedPosition) => void;
   "position:protected": (positionId: number, sl: number, tp: number) => void;
+  "position:protection-mismatch": (positionId: number, botSl: number, botTp: number, exSl: number | null, exTp: number | null) => void;
   "position:assessed": (record: AssessmentRecord) => void;
   "position:action-executed": (positionId: number, action: PositionAction, result: "ok" | "failed", detail?: string) => void;
   "position:closed": (positionId: number, reason: string) => void;
