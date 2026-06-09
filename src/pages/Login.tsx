@@ -7,6 +7,16 @@ const getOAuthUrl = () => {
   const redirectUri = `${window.location.origin}/api/oauth/callback`;
   const state = btoa(redirectUri);
 
+  // Dev mock: AUTH_URL points to localhost but no OAuth server runs there.
+  // Go straight to the callback — the backend will accept "mock-code" and bypass JWKS.
+  const isMockMode = authUrl.includes("localhost") || authUrl.includes("127.0.0.1");
+  if (isMockMode) {
+    const cbUrl = new URL(redirectUri);
+    cbUrl.searchParams.set("code", "mock-code");
+    cbUrl.searchParams.set("state", state);
+    return cbUrl.toString();
+  }
+
   const url = new URL(`${authUrl}/api/oauth/authorize`);
   url.searchParams.set("client_id", appID);
   url.searchParams.set("redirect_uri", redirectUri);
