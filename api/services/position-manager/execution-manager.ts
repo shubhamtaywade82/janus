@@ -52,6 +52,19 @@ export async function executeAction(
   const action = policy.action;
   const db = getDb();
 
+  // Monitor mode: observe and emit events but never mutate positions or place orders.
+  // KEEP_OPEN passes through so the assessment cycle still records assessments.
+  if (env.isMonitorMode && action !== PA.KEEP_OPEN) {
+    positionManagerBus.emit(
+      "position:action-executed",
+      position.id,
+      action,
+      "ok",
+      `[monitor] would execute ${action}: ${recommendation.reasoning ?? ""}`
+    );
+    return { success: true, detail: `[monitor] ${action} observed — no execution in live_monitor mode` };
+  }
+
   try {
     switch (action) {
       // ── Passive actions (no exchange call) ──────────────────────────────

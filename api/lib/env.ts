@@ -12,6 +12,21 @@ function required(name: string): string {
   return value ?? "";
 }
 
+// ─── Trading mode — single source of truth ───────────────────────────────────
+// TRADING_MODE=paper        → paper positions, paper wallet, no exchange orders
+// TRADING_MODE=live_monitor → real exchange data + alerts, NO new positions/orders
+// TRADING_MODE=live_trade   → full execution: real orders, position management
+//
+// Legacy fallback: if TRADING_MODE unset, derives from PAPER_TRADING + PLACE_ORDERS
+function resolveTradingMode(): "paper" | "live_monitor" | "live_trade" {
+  const raw = process.env.TRADING_MODE;
+  if (raw === "paper" || raw === "live_monitor" || raw === "live_trade") return raw;
+  if (process.env.PAPER_TRADING === "true") return "paper";
+  if (process.env.PLACE_ORDERS === "true") return "live_trade";
+  return "live_monitor";
+}
+const _tradingMode = resolveTradingMode();
+
 export const env = {
   appId: required("APP_ID"),
   appSecret: required("APP_SECRET"),
@@ -20,13 +35,12 @@ export const env = {
   authUrl: required("AUTH_URL"),
   authPlatformUrl: required("AUTH_PLATFORM_URL"),
   ownerUnionId: process.env.OWNER_UNION_ID ?? "",
-  // Safety flag — set PLACE_ORDERS=true to enable live order execution
-  // Default OFF to prevent accidental trades
-  placeOrders: process.env.PLACE_ORDERS === "true",
 
-  // Paper trading mode — signals fire and positions are DB-only (isPaper=true)
-  // No exchange orders placed regardless of PLACE_ORDERS
-  paperTrading: process.env.PAPER_TRADING === "true",
+  // ─── Trading mode ───
+  tradingMode: _tradingMode,
+  paperTrading: _tradingMode === "paper",
+  placeOrders: _tradingMode === "live_trade",
+  isMonitorMode: _tradingMode === "live_monitor",
 
   // Testnet mode — routes Binance market data to testnet endpoints
   useTestnet: process.env.USE_TESTNET === "true",

@@ -39,7 +39,7 @@ export async function checkCorrelation(
   userId: number
 ): Promise<CorrelationCheck> {
   const group = CORRELATION_GROUPS[symbol.toUpperCase()] ?? "other";
-  const isPaper = !env.placeOrders || env.paperTrading;
+  const isPaper = env.tradingMode === "paper";
   const maxSameDir = isPaper ? MAX_SAME_DIRECTION_PAPER : MAX_SAME_DIRECTION_LIVE;
 
   const db = getDb();

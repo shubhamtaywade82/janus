@@ -86,7 +86,9 @@ export const autoExecutorRouter = createRouter({
       isActive: globalKillSwitch.isActive,
       state: globalKillSwitch.state,
     },
-    isPaperMode: !env.placeOrders,
+    tradingMode: env.tradingMode,
+    isPaperMode: env.tradingMode === "paper",
+    isMonitorMode: env.tradingMode === "live_monitor",
     isAutoExecuteEnabled: env.autoExecute,
   })),
 

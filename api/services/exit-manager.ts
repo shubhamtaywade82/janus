@@ -125,7 +125,7 @@ export function startDaemon() {
   const syncAndMonitor = async () => {
     try {
       const db = getDb();
-      const isPaperMode = env.paperTrading || !env.placeOrders;
+      const isPaperMode = env.tradingMode === "paper";
 
       const openPositions = await db.select().from(positions).where(and(eq(positions.status, "open"), eq(positions.isPaper, isPaperMode)));
       const openPosIds = new Set(openPositions.map(p => p.id));

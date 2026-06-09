@@ -406,7 +406,7 @@ async function sendHeartbeat(): Promise<void> {
     const hours = Math.floor(uptimeSec / 3600);
     const mins = Math.floor((uptimeSec % 3600) / 60);
     const killStr = globalKillSwitch.isActive ? "🔴 KILL SWITCH ACTIVE" : "🟢 trading enabled";
-    const modeStr = env.paperTrading ? "🧪 PAPER MODE" : env.placeOrders ? "💰 LIVE" : "📋 Dry-run";
+    const modeStr = env.tradingMode === "paper" ? "🧪 PAPER" : env.tradingMode === "live_monitor" ? "👁️ MONITOR" : "💰 LIVE TRADE";
 
     const curr = env.paperTrading ? "₹" : "USDT";
     const text =

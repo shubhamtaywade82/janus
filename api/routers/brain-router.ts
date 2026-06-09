@@ -137,7 +137,7 @@ brainRouter.post("/trigger-signal", async (c) => {
       extraMetadata: body.metadata || {},
     });
 
-    const isPaper = env.paperTrading || !env.placeOrders;
+    const isPaper = env.tradingMode === "paper";
 
     if (firstDecision && firstDecision.action === "skip") {
       return c.json({
@@ -151,8 +151,8 @@ brainRouter.post("/trigger-signal", async (c) => {
       symbol,
       direction,
       score: compositeScore,
-      mode: isPaper ? "paper" : "live",
-      message: firstDecision?.reason || `Signal injected and processed through 8-gate pipeline (${isPaper ? 'PAPER' : 'LIVE'} mode)`,
+      mode: env.tradingMode,
+      message: firstDecision?.reason || `Signal injected and processed through 8-gate pipeline (${env.tradingMode} mode)`,
     });
   } catch (err: any) {
     console.error("[Brain Router] Trigger signal failed:", err);
@@ -162,9 +162,8 @@ brainRouter.post("/trigger-signal", async (c) => {
 
 // GET /api/brain/mode — Returns current trading mode
 brainRouter.get("/mode", async (c) => {
-  const isPaper = env.paperTrading || !env.placeOrders;
   return c.json({
-    mode: isPaper ? "paper" : "live",
+    mode: env.tradingMode,
     placeOrders: env.placeOrders,
     paperTrading: env.paperTrading,
     autoExecute: env.autoExecute,

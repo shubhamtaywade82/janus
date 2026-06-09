@@ -281,9 +281,10 @@ export default function Portfolio() {
     localStorage.getItem("janus_portfolio_status") ?? "open"
   );
 
-  // Auto-detect paper mode from server env (PLACE_ORDERS=false → default to PAPER view)
+  // Auto-detect mode from server TRADING_MODE env
   const { data: botStatus } = trpc.autoExecutor.status.useQuery(undefined, { staleTime: 30_000 });
-  const defaultMode = botStatus?.isPaperMode ? "paper" : "live";
+  const serverTradingMode = (botStatus as any)?.tradingMode as "paper" | "live_monitor" | "live_trade" | undefined;
+  const defaultMode: "live" | "paper" = serverTradingMode === "paper" ? "paper" : "live";
   const [portfolioMode, setPortfolioMode] = useState<"live" | "paper">(() => {
     const saved = localStorage.getItem("janus_portfolio_mode");
     if (saved === "live" || saved === "paper") return saved;
@@ -301,9 +302,9 @@ export default function Portfolio() {
   useEffect(() => {
     if (botStatus && !modeSyncedRef.current) {
       modeSyncedRef.current = true;
-      setPortfolioMode(botStatus.isPaperMode ? "paper" : "live");
+      setPortfolioMode(serverTradingMode === "paper" ? "paper" : "live");
     }
-  }, [botStatus]);
+  }, [botStatus, serverTradingMode]);
 
   // Persist toggle states to localStorage
   useEffect(() => { localStorage.setItem("janus_portfolio_mode", portfolioMode); }, [portfolioMode]);
@@ -554,11 +555,15 @@ export default function Portfolio() {
       {/* Header */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <Wallet size={18} className={portfolioMode === "paper" ? "text-[#f59e0b]" : "text-[#3b82f6]"} />
+          <Wallet size={18} className={portfolioMode === "paper" ? "text-[#f59e0b]" : serverTradingMode === "live_monitor" ? "text-[#a78bfa]" : "text-[#3b82f6]"} />
           <div>
             <h2 className="text-sm font-semibold text-[#f4f4f5]">Portfolio</h2>
             <p className="text-[10px] text-[#71717a]">
-              {portfolioMode === "paper" ? "Paper trading — virtual capital" : "Live account — real positions"}
+              {portfolioMode === "paper"
+                ? "Paper trading — virtual capital"
+                : serverTradingMode === "live_monitor"
+                  ? "Live monitor — real positions, no execution"
+                  : "Live trade — real positions, full execution"}
             </p>
           </div>
         </div>
@@ -568,13 +573,18 @@ export default function Portfolio() {
             <button
               onClick={() => setPortfolioMode("live")}
               className={cn(
-                "px-3 py-1.5 transition-colors",
+                "px-3 py-1.5 transition-colors flex items-center gap-1",
                 portfolioMode === "live"
-                  ? "bg-j-up/10 text-j-up"
+                  ? serverTradingMode === "live_monitor"
+                    ? "bg-[#a78bfa]/10 text-[#a78bfa]"
+                    : "bg-j-up/10 text-j-up"
                   : "bg-[#09090b] text-[#52525b] hover:text-[#f4f4f5]"
               )}
             >
-              LIVE
+              {serverTradingMode === "live_monitor" ? "MONITOR" : serverTradingMode === "live_trade" ? "LIVE" : "LIVE"}
+              {serverTradingMode === "live_monitor" && portfolioMode === "live" && (
+                <span className="text-[8px] px-1 py-0.5 rounded bg-[#a78bfa]/20 text-[#a78bfa] border border-[#a78bfa]/30">NO EXEC</span>
+              )}
             </button>
             <button
               onClick={() => setPortfolioMode("paper")}

@@ -391,7 +391,7 @@ export class AutoExecutor {
       ? signal.symbol.slice(2).replace("_USDT", "USDT").replace("_", "")
       : signal.symbol;
     const side = signal.direction as "long" | "short";
-    const isPaperMode = !env.placeOrders || env.paperTrading;
+    const isPaperMode = env.tradingMode === "paper";
 
     const db = getDb();
     const openCount = await db
@@ -433,6 +433,11 @@ export class AutoExecutor {
 
   private async processSignal(signal: Signal, config: AutoExecutorConfig): Promise<ExecutorDecision> {
     this.state.signalsProcessed++;
+
+    if (env.isMonitorMode) {
+      return this.skip(signal, "live_monitor: observation only, no positions opened", "monitor_mode");
+    }
+
     const context = await this.prepareExecutionContext(signal, config);
     if (!context) return this.skip(signal, "execution context unavailable", "context");
 
