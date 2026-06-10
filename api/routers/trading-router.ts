@@ -10,12 +10,12 @@ import {
   getCurrencyConversions,
   getFuturesWallet,
   getFuturesPositions,
+  getFuturesOrders,
 } from "../services/coindcx";
 import { TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
 import { tradingEvents, initCoinDCXPrivateWs } from "../services/coindcx-ws";
 import { startExitMonitor, stopExitMonitor, getFeeBreakevenMap } from "../services/exit-manager";
-import { env } from "../lib/env";
 import { globalRiskEngine, getOrCreateSession, updateSession } from "../services/risk-engine";
 import { unregisterPosition } from "../services/trailing-stop";
 import { encrypt, decryptCreds } from "../lib/crypto";
@@ -23,7 +23,7 @@ import { fetchPortfolioData, executeOrder } from "../services/trading-service";
 
 export const tradingRouter = createRouter({
   positions: authedQuery
-    .input(z.object({ userId: z.number().optional(), status: z.enum(["open", "closed", "liquidated"]).optional(), symbol: z.string().optional() }))
+    .input(z.object({ userId: z.number().optional(), status: z.enum(["open", "closed", "liquidated"]).optional(), symbol: z.string().optional(), isPaper: z.boolean().optional() }))
     .query(async ({ input, ctx }) => {
       const db = getDb();
       const conditions = [];
@@ -31,6 +31,7 @@ export const tradingRouter = createRouter({
       conditions.push(eq(positions.userId, userId));
       if (input.status) conditions.push(eq(positions.status, input.status));
       if (input.symbol) conditions.push(eq(positions.symbol, input.symbol));
+      if (input.isPaper !== undefined) conditions.push(eq(positions.isPaper, input.isPaper));
       return db.select().from(positions).where(and(...conditions)).orderBy(desc(positions.createdAt));
     }),
 
@@ -80,6 +81,67 @@ export const tradingRouter = createRouter({
       return () => { tradingEvents.off(`portfolio-update:${ctx.user.id}`, onUpdate); clearInterval(interval); };
     });
   }),
+
+  // ─── Open/pending orders from exchange (limit orders awaiting fill) ───
+  openOrders: authedQuery
+    .input(z.object({ symbol: z.string().optional() }))
+    .query(async ({ input, ctx }) => {
+      const db = getDb();
+      const creds = await db
+        .select()
+        .from(exchangeCredentials)
+        .where(and(eq(exchangeCredentials.userId, ctx.user.id), eq(exchangeCredentials.exchange, "coindcx")))
+        .limit(1);
+      if (!creds[0]) return [];
+      try {
+        const params: Record<string, any> = { status: "open" };
+        if (input.symbol) {
+          params.market = `B-${input.symbol.replace("USDT", "_USDT")}`;
+        }
+        const orders = await getFuturesOrders(decryptCreds(creds[0]), params);
+        return orders.map((o: any) => ({
+          id: o.id,
+          symbol: o.pair ? o.pair.replace("B-", "").replace("_", "") : (o.market ?? ""),
+          coindcxPair: o.pair ?? o.market,
+          side: (o.side ?? "buy") as "buy" | "sell",
+          orderType: o.order_type ?? "limit_order",
+          price: parseFloat(o.price_per_unit ?? o.avg_price ?? "0"),
+          quantity: parseFloat(o.total_quantity ?? o.quantity ?? "0"),
+          filledQuantity: parseFloat(o.filled_quantity ?? "0"),
+          status: o.status,
+          createdAt: o.created_at ? new Date(o.created_at) : new Date(),
+        }));
+      } catch {
+        return [];
+      }
+    }),
+
+  // ─── Paper positions as orders (for unified order panel) ───
+  paperOrders: authedQuery
+    .input(z.object({ symbol: z.string().optional() }))
+    .query(async ({ input, ctx }) => {
+      const db = getDb();
+      const conditions = [
+        eq(positions.userId, ctx.user.id),
+        eq(positions.status, "open"),
+        eq(positions.isPaper, true),
+      ];
+      if (input.symbol) conditions.push(eq(positions.symbol, input.symbol));
+      const rows = await db.select().from(positions).where(and(...conditions));
+      return rows.map((p) => ({
+        id: String(p.id),
+        symbol: p.symbol,
+        coindcxPair: `B-${p.symbol.replace("USDT", "_USDT")}`,
+        side: p.side === "long" ? "buy" : "sell",
+        orderType: "market_order",
+        price: parseFloat(p.entryPrice),
+        quantity: parseFloat(p.size),
+        filledQuantity: parseFloat(p.size),
+        status: "filled",
+        createdAt: p.createdAt,
+        isPaper: true,
+      }));
+    }),
 
   credentials: authedQuery.query(async ({ ctx }) => {
     const rows = await getDb().select().from(exchangeCredentials).where(eq(exchangeCredentials.userId, ctx.user.id));
@@ -211,10 +273,10 @@ export const tradingRouter = createRouter({
 
       const refreshMonitor = () => {
         const db = getDb();
-        const isPaperMode = env.tradingMode === "paper";
+        // Monitor all open positions (paper + live) regardless of trading mode
         db.select()
           .from(positions)
-          .where(and(eq(positions.userId, ctx.user.id), eq(positions.status, "open"), eq(positions.isPaper, isPaperMode)))
+          .where(and(eq(positions.userId, ctx.user.id), eq(positions.status, "open")))
           .then((openPositions) => {
             const monitored = openPositions.map((p) => ({
               id: p.id,

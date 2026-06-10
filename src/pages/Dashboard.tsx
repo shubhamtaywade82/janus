@@ -418,7 +418,7 @@ const Dashboard = () => {
   const [portfolio, setPortfolio] = useState<any>(null);
   const { data: initialPortfolio } = trpc.trading.portfolio.useQuery(
     undefined,
-    { staleTime: Infinity }
+    { refetchInterval: 8000 }
   );
   useEffect(() => {
     if (initialPortfolio) {
@@ -443,8 +443,24 @@ const Dashboard = () => {
   );
 
   const openPositions = portfolio?.positions || [];
+  // Show ALL open positions for this symbol — both paper and live
   const symbolPositions = openPositions.filter(
-    (p: any) => p.symbol === selectedSymbol && p.status === "open"
+    (p: any) => p.symbol === selectedSymbol
+  );
+
+  const { data: openOrders } = trpc.trading.openOrders.useQuery(
+    { symbol: selectedSymbol },
+    { refetchInterval: 10_000, staleTime: 5_000 }
+  );
+  const { data: paperOrders } = trpc.trading.paperOrders.useQuery(
+    { symbol: selectedSymbol },
+    { refetchInterval: 10_000, staleTime: 5_000 }
+  );
+  const symbolOrders = [
+    ...(openOrders ?? []).map((o: any) => ({ ...o, isPaper: false })),
+    ...(paperOrders ?? []).map((o: any) => ({ ...o, isPaper: true })),
+  ].filter(
+    (o: any) => o.symbol === selectedSymbol && o.price > 0
   );
 
   const { data: instrInfo } = trpc.trading.instrumentInfo.useQuery(
@@ -608,6 +624,7 @@ const Dashboard = () => {
               <MiniChart
                 data={klines as KlineData[]}
                 positions={symbolPositions}
+                openOrders={symbolOrders}
                 lastPrice={lastPrice}
                 symbol={selectedSymbol}
                 interval={interval}

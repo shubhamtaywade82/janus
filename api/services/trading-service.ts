@@ -12,7 +12,7 @@ import {
 import { decryptCreds } from "../lib/crypto";
 import { markPriceCache, userPositionsCache, userBalancesCache, tradingEvents } from "./coindcx-ws";
 import { latestTickerCache, subscribeToSymbol } from "./streaming";
-import { env } from "../lib/env";
+import { env, coinDCXEnvCreds } from "../lib/env";
 import { globalKillSwitch } from "./kill-switch";
 import { TRPCError } from "@trpc/server";
 
@@ -90,7 +90,7 @@ export function mapPaperPosition(p: any, markets: any[] = []) {
 
 export async function fetchPortfolioData(userId: number) {
   const db = getDb();
-  const creds = await db
+  const dbCreds = await db
     .select()
     .from(exchangeCredentials)
     .where(
@@ -101,6 +101,9 @@ export async function fetchPortfolioData(userId: number) {
     )
     .limit(1);
 
+  // Fallback to env credentials when DB has no stored credentials
+  const coindcxCreds = dbCreds && dbCreds[0] ? decryptCreds(dbCreds[0]) : coinDCXEnvCreds;
+
   let openPositions: any[] = [];
   let totalRealizedPnl = 0;
   let totalMargin = 0;
@@ -109,13 +112,18 @@ export async function fetchPortfolioData(userId: number) {
   const usdtInrRate = await getUsdtInrRate().catch(() => 89);
   const markets = await getMarketsDetails().catch(() => []);
 
-  if (creds && creds[0]) {
+  if (coindcxCreds) {
     try {
-      // WS cache is fresher — use it if populated, else REST
-      const wsPositions = userPositionsCache.get(userId);
-      const livePositions = wsPositions && wsPositions.length > 0
-        ? wsPositions
-        : await getFuturesPositions(decryptCreds(creds[0]));
+      // Fetch live positions independently — failures here should not kill wallet/order data
+      let livePositions: any[] = [];
+      try {
+        const wsPositions = userPositionsCache.get(userId);
+        livePositions = wsPositions && wsPositions.length > 0
+          ? wsPositions
+          : await getFuturesPositions(coindcxCreds);
+      } catch (err) {
+        console.warn("[trading-service] Failed to fetch live positions from CoinDCX:", err);
+      }
 
       const getPrecisions = (symbol: string) => {
         const cdxPair = `B-${symbol.replace("USDT", "_USDT")}`;
@@ -234,7 +242,7 @@ export async function fetchPortfolioData(userId: number) {
 
       try {
         const filledOrders = await getFuturesOrders(
-          decryptCreds(creds[0]),
+          coindcxCreds,
           { status: "filled" }
         );
         recentTrades = filledOrders.slice(0, 20).map((o: any) => {
@@ -269,7 +277,7 @@ export async function fetchPortfolioData(userId: number) {
       let walletCurrency = "USDT";
 
       try {
-        const wallets = await getFuturesWallet(decryptCreds(creds[0]));
+        const wallets = await getFuturesWallet(coindcxCreds);
         for (const w of wallets) {
           const currency = w.currency_short_name || "";
           const free = parseFloat(w.balance || "0");
@@ -474,12 +482,13 @@ export async function executeOrder(userId: number, input: any) {
   if (input.leverage > 10) throw new TRPCError({ code: "BAD_REQUEST", message: "Leverage cap 10x" });
 
   const db = getDb();
-  const creds = await db.select().from(exchangeCredentials).where(and(eq(exchangeCredentials.userId, userId), eq(exchangeCredentials.exchange, "coindcx"))).limit(1);
+  const dbCreds = await db.select().from(exchangeCredentials).where(and(eq(exchangeCredentials.userId, userId), eq(exchangeCredentials.exchange, "coindcx"))).limit(1);
+  const coindcxCreds = dbCreds && dbCreds[0] ? decryptCreds(dbCreds[0]) : coinDCXEnvCreds;
 
   let exchangeOrderId: string | undefined;
-  if (creds[0] && env.placeOrders) {
+  if (coindcxCreds && env.placeOrders) {
     const coindcxSymbol = input.symbol.startsWith("B-") ? input.symbol : `B-${input.symbol.replace("USDT", "_USDT")}`;
-    const orderRes = await createFuturesOrder(decryptCreds(creds[0]), {
+    const orderRes = await createFuturesOrder(coindcxCreds, {
       market: coindcxSymbol, side: input.side === "long" ? "buy" : "sell", order_type: "market", total_quantity: parseFloat(input.size), price: parseFloat(input.entryPrice), leverage: input.leverage,
     });
     exchangeOrderId = orderRes?.id;

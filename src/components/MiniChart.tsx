@@ -80,8 +80,9 @@ const resolveCSSColor = (varName: string, fallback: string): string => {
   return `hsl(${formatted})`;
 };
 
-export const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice, cvdBars, liquidityEvents, orderBook }: {
+export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice, cvdBars, liquidityEvents, orderBook }: {
   data: KlineData[]; positions: any[]; lastPrice: number; symbol: string; interval: string;
+  openOrders?: Array<{ id: string; symbol: string; side: "buy" | "sell"; orderType: string; price: number; quantity: number; filledQuantity: number }>;
   onLoadMore?: (beforeTime: number) => void;
   overlayData?: PriceActionData | null;
   overlayToggles?: OverlayToggles;
@@ -100,6 +101,7 @@ export const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoad
   const [positionsY, setPositionsY] = useState<Record<number, { entryY: number | null; liqY: number | null }>>({});
   const [isScrolledBack, setIsScrolledBack] = useState(false);
   const priceLinesRef = useRef<any[]>([]);
+  const orderLinesRef = useRef<any[]>([]);
 
   const [alertRules, setAlertRules] = useState<any[]>([]);
   const customAlertLinesRef = useRef<any[]>([]);
@@ -566,6 +568,7 @@ export const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoad
       volumeMASeriesRef.current = null;
       volumeHistoryRef.current = [];
       indicatorSeriesRef.current.clear();
+      orderLinesRef.current = [];
       setChartInitialized(false);
     };
   }, []);
@@ -1596,13 +1599,14 @@ export const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoad
 
         const isLong = pos.side === "long";
         const color = isLong ? resolveCSSColor("--janus-up-bright", "#0ecb81") : resolveCSSColor("--janus-down-bright", "#f6465d");
+        const lineStyle = pos.isPaper ? LineStyle.Dashed : LineStyle.Solid;
 
         try {
           const line = series.createPriceLine({
             price: entryPrice,
             color: color,
             lineWidth: 1.5,
-            lineStyle: LineStyle.Dashed,
+            lineStyle: lineStyle,
             axisLabelVisible: true,
             title: "", // empty title, handled by HTML overlay
           });
@@ -1614,7 +1618,45 @@ export const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoad
       })
       .filter(Boolean);
 
-    // Create liquidation lines
+    // Stop-loss lines — red for long, green for short (price where the loss is cut)
+    const slLines = positions
+      .map((pos) => {
+        if (!pos.stopLoss) return null;
+        const slPrice = parseFloat(pos.stopLoss);
+        if (isNaN(slPrice) || slPrice <= 0) return null;
+        try {
+          return series.createPriceLine({
+            price: slPrice,
+            color: "#ef4444",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: `SL${pos.isPaper ? " (P)" : " (LIVE)"}`,
+          });
+        } catch { return null; }
+      })
+      .filter(Boolean);
+
+    // Take-profit lines — green for long, red for short
+    const tpLines = positions
+      .map((pos) => {
+        if (!pos.takeProfit) return null;
+        const tpPrice = parseFloat(pos.takeProfit);
+        if (isNaN(tpPrice) || tpPrice <= 0) return null;
+        try {
+          return series.createPriceLine({
+            price: tpPrice,
+            color: "#22c55e",
+            lineWidth: 1,
+            lineStyle: LineStyle.Dashed,
+            axisLabelVisible: true,
+            title: `TP${pos.isPaper ? " (P)" : " (LIVE)"}`,
+          });
+        } catch { return null; }
+      })
+      .filter(Boolean);
+
+    // Liquidation lines — amber warning
     const liqLines = positions
       .map((pos) => {
         if (!pos.liquidationPrice) return null;
@@ -1638,8 +1680,46 @@ export const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoad
       })
       .filter(Boolean);
 
-    priceLinesRef.current = [...newLines, ...liqLines];
+    priceLinesRef.current = [...newLines, ...slLines, ...tpLines, ...liqLines];
   }, [positions, chartInitialized]);
+
+  // Draw open/pending order lines (limit orders awaiting fill)
+  useEffect(() => {
+    const series = candlestickSeriesRef.current;
+    if (!series || !chartInitialized) return;
+
+    orderLinesRef.current.forEach((line) => {
+      try { series.removePriceLine(line); } catch {}
+    });
+    orderLinesRef.current = [];
+
+    if (!openOrders || openOrders.length === 0) return;
+
+    const lines = openOrders
+      .filter((o) => o.price > 0)
+      .map((o) => {
+        // buy = teal/cyan, sell = amber — distinct from position green/red
+        const color = o.side === "buy" ? "#22d3ee" : "#fb923c";
+        const filled = o.quantity > 0 ? o.filledQuantity / o.quantity : 0;
+        const filledPct = Math.round(filled * 100);
+        const label = `${o.side.toUpperCase()} ${o.orderType.replace("_order", "").replace("_", " ")} ${filledPct > 0 ? `${filledPct}%▶` : ""}${(o as any).isPaper ? " (P)" : " (LIVE)"}`;
+        try {
+          return series.createPriceLine({
+            price: o.price,
+            color,
+            lineWidth: 1,
+            lineStyle: LineStyle.SparseDotted,
+            axisLabelVisible: true,
+            title: label,
+          });
+        } catch {
+          return null;
+        }
+      })
+      .filter(Boolean);
+
+    orderLinesRef.current = lines;
+  }, [openOrders, chartInitialized]);
 
   // Draw custom price alert lines
   useEffect(() => {
@@ -1958,6 +2038,9 @@ export const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoad
                       transform: "translateY(-50%)",
                     }}
                   >
+                    <span className={cn("px-1 py-0 rounded text-[8px] font-bold mr-1", pos.isPaper ? "bg-amber-500/20 text-amber-400" : "bg-cyan-500/20 text-cyan-400")}>
+                      {pos.isPaper ? "PAPER" : "LIVE"}
+                    </span>
                     {isLong ? "LONG" : "SHORT"} {sizeStr} @ {entry.toFixed(2)}
                   </span>
                 </div>
@@ -1989,6 +2072,9 @@ export const MiniChart = ({ data, positions, lastPrice, symbol, interval, onLoad
                         transform: "translateY(-50%)",
                       }}
                     >
+                      <span className={cn("px-1 py-0 rounded text-[8px] font-bold mr-1", pos.isPaper ? "bg-amber-500/20 text-amber-400" : "bg-cyan-500/20 text-cyan-400")}>
+                        {pos.isPaper ? "PAPER" : "LIVE"}
+                      </span>
                       LIQ @ {parseFloat(pos.liquidationPrice || "0").toFixed(2)}
                     </span>
                   </div>

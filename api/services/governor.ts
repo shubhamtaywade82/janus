@@ -87,7 +87,7 @@ export class Governor {
     const existing = await db
       .select({ id: positions.id })
       .from(positions)
-      .where(and(eq(positions.userId, 1), eq(positions.symbol, symbol), eq(positions.status, "open"), eq(positions.isPaper, isPaperMode)))
+      .where(and(eq(positions.userId, 1), eq(positions.symbol, symbol), eq(positions.status, "open")))
       .limit(1);
     if (existing.length > 0) {
       return { approved: false, gate: "duplicate_position", reason: "position already open" };

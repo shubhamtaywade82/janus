@@ -88,6 +88,11 @@ const PositionRow = ({
                 PAPER
               </span>
             )}
+            {!position.isPaper && (
+              <span className="text-[8px] font-bold px-1 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/30">
+                LIVE
+              </span>
+            )}
           </div>
           {position.entryReason && (
             <span className="text-[9px] text-[#71717a] pl-3.5 max-w-[180px] truncate" title={position.entryReason}>
@@ -284,10 +289,10 @@ export default function Portfolio() {
   // Auto-detect mode from server TRADING_MODE env
   const { data: botStatus } = trpc.autoExecutor.status.useQuery(undefined, { staleTime: 30_000 });
   const serverTradingMode = (botStatus as any)?.tradingMode as "paper" | "live_monitor" | "live_trade" | undefined;
-  const defaultMode: "live" | "paper" = serverTradingMode === "paper" ? "paper" : "live";
-  const [portfolioMode, setPortfolioMode] = useState<"live" | "paper">(() => {
+  const defaultMode: "all" | "live" | "paper" = "all";
+  const [portfolioMode, setPortfolioMode] = useState<"all" | "live" | "paper">(() => {
     const saved = localStorage.getItem("janus_portfolio_mode");
-    if (saved === "live" || saved === "paper") return saved;
+    if (saved === "all" || saved === "live" || saved === "paper") return saved;
     return defaultMode;
   });
 
@@ -302,7 +307,8 @@ export default function Portfolio() {
   useEffect(() => {
     if (botStatus && !modeSyncedRef.current) {
       modeSyncedRef.current = true;
-      setPortfolioMode(serverTradingMode === "paper" ? "paper" : "live");
+      // Default to 'all' for unified view; user can switch after
+      setPortfolioMode("all");
     }
   }, [botStatus, serverTradingMode]);
 
@@ -356,8 +362,9 @@ export default function Portfolio() {
   );
 
   // Query historical positions only when viewing non-open filters
+  const dbQueryFilter = portfolioMode === "all" ? undefined : portfolioMode === "paper";
   const { data: dbPositions } = trpc.trading.positions.useQuery(
-    { status: statusFilter as any },
+    { status: statusFilter as any, isPaper: dbQueryFilter },
     { enabled: statusFilter !== "open" && statusFilter !== "equity_curve", refetchInterval: 10000 }
   );
 
@@ -368,6 +375,12 @@ export default function Portfolio() {
   );
   const paperPositions = (allDbOpenPositions || []).filter((p: any) => p.isPaper);
   const livePositionsFromStream: any[] = (portfolio?.positions || []).filter((p: any) => !p.isPaper);
+  const livePositionsFromDb = (allDbOpenPositions || []).filter((p: any) => !p.isPaper);
+
+  // Merge live positions: stream (exchange real-time) + DB fallback for IDs not in stream
+  const streamLiveIds = new Set(livePositionsFromStream.map((p: any) => p.id));
+  const livePositionsOnlyDb = livePositionsFromDb.filter((p: any) => !streamLiveIds.has(p.id));
+  const openLivePositions = [...livePositionsFromStream, ...livePositionsOnlyDb];
 
   // Paper wallet stats from auto-executor
   const { data: paperWalletData } = trpc.autoExecutor.paperWallet.useQuery(
@@ -391,13 +404,14 @@ export default function Portfolio() {
     setLivePrices((prev) => prev[sym] === price ? prev : { ...prev, [sym]: price });
   }, []);
 
-  // For "open" tab: switch between live (from stream) and paper (from DB direct query)
-  const openLivePositions = livePositionsFromStream;
+  // Respect portfolio mode: all shows both, live tab shows live, paper tab shows paper
   const allPositions = statusFilter !== "open"
-    ? (dbPositions || [])
-    : portfolioMode === "paper"
-      ? paperPositions
-      : openLivePositions;
+    ? (dbPositions || []).filter((p: any) => portfolioMode === "all" ? true : portfolioMode === "live" ? !p.isPaper : p.isPaper)
+    : portfolioMode === "all"
+      ? [...openLivePositions, ...paperPositions]
+      : portfolioMode === "live"
+        ? openLivePositions
+        : paperPositions;
 
   // Query historical positions and trades for tax metrics
   const { data: closedPositions } = trpc.trading.positions.useQuery(
@@ -568,12 +582,23 @@ export default function Portfolio() {
           </div>
         </div>
         <div className="flex items-center gap-3">
-          {/* LIVE / PAPER mode toggle */}
+          {/* ALL / LIVE / PAPER mode toggle */}
           <div className="flex rounded overflow-hidden border border-[#27272a] text-xs font-semibold">
+            <button
+              onClick={() => setPortfolioMode("all")}
+              className={cn(
+                "px-3 py-1.5 transition-colors",
+                portfolioMode === "all"
+                  ? "bg-[#3b82f6]/10 text-[#3b82f6]"
+                  : "bg-[#09090b] text-[#52525b] hover:text-[#f4f4f5]"
+              )}
+            >
+              ALL
+            </button>
             <button
               onClick={() => setPortfolioMode("live")}
               className={cn(
-                "px-3 py-1.5 transition-colors flex items-center gap-1",
+                "px-3 py-1.5 border-l border-[#27272a] transition-colors flex items-center gap-1",
                 portfolioMode === "live"
                   ? serverTradingMode === "live_monitor"
                     ? "bg-[#a78bfa]/10 text-[#a78bfa]"
@@ -581,7 +606,7 @@ export default function Portfolio() {
                   : "bg-[#09090b] text-[#52525b] hover:text-[#f4f4f5]"
               )}
             >
-              {serverTradingMode === "live_monitor" ? "MONITOR" : serverTradingMode === "live_trade" ? "LIVE" : "LIVE"}
+              {serverTradingMode === "live_monitor" ? "MONITOR" : "LIVE"}
               {serverTradingMode === "live_monitor" && portfolioMode === "live" && (
                 <span className="text-[8px] px-1 py-0.5 rounded bg-[#a78bfa]/20 text-[#a78bfa] border border-[#a78bfa]/30">NO EXEC</span>
               )}
@@ -844,31 +869,12 @@ export default function Portfolio() {
                 <span className="text-xs font-semibold text-[#f4f4f5]">
                   {statusFilter === "open" ? "Open Positions" : statusFilter === "closed" ? "Closed Positions" : "Liquidated Positions"}
                 </span>
-                {statusFilter === "open" && (
-                  <div className="flex rounded overflow-hidden border border-[#27272a] text-[10px] font-semibold">
-                    <button
-                      onClick={() => setPortfolioMode("live")}
-                      className={cn(
-                        "px-2.5 py-1 transition-colors",
-                        portfolioMode === "live"
-                          ? "bg-j-up/10 text-j-up"
-                          : "bg-[#18181b] text-[#52525b] hover:text-[#f4f4f5]"
-                      )}
-                    >
-                      LIVE {openLivePositions.length > 0 && `(${openLivePositions.length})`}
-                    </button>
-                    <button
-                      onClick={() => setPortfolioMode("paper")}
-                      className={cn(
-                        "px-2.5 py-1 border-l border-[#27272a] transition-colors",
-                        portfolioMode === "paper"
-                          ? "bg-[#f59e0b]/10 text-[#f59e0b]"
-                          : "bg-[#18181b] text-[#52525b] hover:text-[#f4f4f5]"
-                      )}
-                    >
-                      PAPER {paperPositions.length > 0 && `(${paperPositions.length})`}
-                    </button>
-                  </div>
+                {statusFilter === "open" && (openLivePositions.length > 0 || paperPositions.length > 0) && (
+                  <span className="text-[10px] text-[#52525b]">
+                    {openLivePositions.length > 0 && <span className="text-j-up">{openLivePositions.length} live</span>}
+                    {openLivePositions.length > 0 && paperPositions.length > 0 && <span> · </span>}
+                    {paperPositions.length > 0 && <span className="text-[#f59e0b]">{paperPositions.length} paper</span>}
+                  </span>
                 )}
               </div>
               <span className="text-[10px] text-[#71717a]">

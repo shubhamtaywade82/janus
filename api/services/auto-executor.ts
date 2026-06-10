@@ -37,7 +37,7 @@ import { latestRegimeCache } from "./regime-detector";
 import type { ExitDecision } from "./exit-manager";
 import { snapshotEquity } from "./performance-tracker";
 import { getPaperWallet, lockPaperMargin, releasePaperMargin, getPaperEquity } from "./paper-wallet";
-import { env } from "../lib/env";
+import { env, coinDCXEnvCreds } from "../lib/env";
 import { decryptCreds } from "../lib/crypto";
 import { recordPositionTransaction, estimateFee } from "./position-manager/transaction-ledger";
 import type { Signal, AutoExecutorConfig } from "@db/schema";
@@ -391,22 +391,39 @@ export class AutoExecutor {
       ? signal.symbol.slice(2).replace("_USDT", "USDT").replace("_", "")
       : signal.symbol;
     const side = signal.direction as "long" | "short";
-    const isPaperMode = env.tradingMode === "paper";
+    const isPaperMode = !env.placeOrders;
 
     const db = getDb();
     const openCount = await db
       .select({ id: positions.id })
       .from(positions)
-      .where(and(eq(positions.userId, 1), eq(positions.status, "open"), eq(positions.isPaper, isPaperMode)))
+      .where(and(eq(positions.userId, 1), eq(positions.status, "open")))
       .then((r) => r.length);
 
     let walletFree = 0;
     let walletLocked = 0;
-    const creds = await db
+    const dbCreds = await db
       .select()
       .from(exchangeCredentials)
       .where(and(eq(exchangeCredentials.userId, 1), eq(exchangeCredentials.exchange, "coindcx")))
       .limit(1);
+
+    const coindcxCreds = dbCreds && dbCreds[0] ? decryptCreds(dbCreds[0]) : coinDCXEnvCreds;
+
+    // Always fetch live wallet data for monitoring, even in paper mode
+    let liveWalletFree = 0;
+    let liveWalletLocked = 0;
+    if (coindcxCreds) {
+      try {
+        const liveWallets = await getFuturesWallet(coindcxCreds);
+        for (const w of liveWallets) {
+          liveWalletFree += parseFloat(w.balance ?? "0");
+          liveWalletLocked += parseFloat(w.locked_balance ?? "0");
+        }
+      } catch {
+        // Live wallet unavailable; keep zeros
+      }
+    }
 
     if (isPaperMode) {
       const paperBalance = parseFloat(config.paperStartingBalance ?? "100000");
@@ -414,29 +431,21 @@ export class AutoExecutor {
       const pw = await getPaperWallet(1, paperBalance, paperCurrency);
       walletFree = pw.balance;
       walletLocked = pw.lockedMargin;
-    } else if (creds[0]) {
-      try {
-        const liveWallets = await getFuturesWallet(decryptCreds(creds[0]));
-        for (const w of liveWallets) {
-          walletFree += parseFloat(w.balance ?? "0");
-          walletLocked += parseFloat(w.locked_balance ?? "0");
-        }
-      } catch {
+    } else {
+      walletFree = liveWalletFree;
+      walletLocked = liveWalletLocked;
+      if (!coindcxCreds || liveWalletFree === 0) {
         return null;
       }
     }
 
     const session = await getOrCreateSession(1, walletFree || 10_000);
 
-    return { symbol, side, isPaperMode, openCount, walletFree, walletLocked, session, creds: creds[0] };
+    return { symbol, side, isPaperMode, openCount, walletFree, walletLocked, session, creds: coindcxCreds ?? undefined };
   }
 
   private async processSignal(signal: Signal, config: AutoExecutorConfig): Promise<ExecutorDecision> {
     this.state.signalsProcessed++;
-
-    if (env.isMonitorMode) {
-      return this.skip(signal, "live_monitor: observation only, no positions opened", "monitor_mode");
-    }
 
     const context = await this.prepareExecutionContext(signal, config);
     if (!context) return this.skip(signal, "execution context unavailable", "context");
@@ -1026,42 +1035,7 @@ private async executePosition(params: {
       const paperCurrency = (position.marginCurrency as "USDT" | "INR") ?? (cfg?.paperCurrency as "USDT" | "INR") ?? "INR";
       await releasePaperMargin(position.userId, parseFloat(position.margin), realizedPnl, position.id, paperCurrency);
     } else {
-      // Place exit order on live exchange (CoinDCX)
-      const creds = await db
-        .select()
-        .from(exchangeCredentials)
-        .where(and(eq(exchangeCredentials.userId, position.userId), eq(exchangeCredentials.exchange, "coindcx")))
-        .limit(1);
-
-      if (creds[0]) {
-        try {
-          const decrypted = decryptCreds(creds[0]);
-          const coindcxSym = `B-${position.symbol.replace("USDT", "_USDT")}`;
-
-          console.log(`[Auto-Executor] Placing live exit market order for ${position.symbol} (ID: ${position.id})`);
-          const order = await createFuturesOrder(
-            decrypted,
-            {
-              market: coindcxSym,
-              side: position.side === "long" ? "sell" : "buy", // Close: opposite side
-              order_type: "market",
-              total_quantity: parseFloat(position.size),
-              price: payload.currentPrice,
-              leverage: position.leverage,
-            }
-          );
-          console.log(`[Auto-Executor] Live exit order placed: ${order?.id} for ${position.symbol}`);
-        } catch (err: any) {
-          console.error(`[Auto-Executor] Live exit order failed for ${position.symbol}: ${err.message}`);
-          await db.insert(systemLogs).values({
-            level: "error",
-            component: "auto-executor",
-            event: "live_exit_failed",
-            message: `Failed to place live exit order for ${position.symbol}: ${err.message}`,
-            metadata: { positionId: position.id, error: err.message },
-          }).catch(() => {});
-        }
-      }
+      console.log(`[auto-executor] Live position ${position.symbol} #${position.id} exit signal — DB updated, no exchange order placed (monitor-only)`);
     }
 
     // Update signal outcome for post-trade analysis / win-rate tracking

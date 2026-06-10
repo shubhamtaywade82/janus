@@ -20,7 +20,7 @@ import { eq, and } from "drizzle-orm";
 import { getFuturesPositions } from "./coindcx";
 import { decryptCreds } from "../lib/crypto";
 import { broadcastTelegramAlert } from "./telegram";
-import { env } from "../lib/env";
+import { env, coinDCXEnvCreds } from "../lib/env";
 
 const RECONCILE_INTERVAL_MS = 5 * 60_000; // every 5 minutes
 
@@ -53,22 +53,23 @@ class PositionReconciler {
   }
 
   async reconcile(): Promise<void> {
-    if (!env.placeOrders) return;
-
+    // Position reconciliation runs regardless of PLACE_ORDERS so live positions
+    // are always tracked locally for monitoring and portfolio display.
     const db = getDb();
 
-    const creds = await db
+    const dbCreds = await db
       .select()
       .from(exchangeCredentials)
-      .where(and(eq(exchangeCredentials.userId, 1), eq(exchangeCredentials.isActive, true)))
+      .where(and(eq(exchangeCredentials.userId, 1), eq(exchangeCredentials.exchange, "coindcx")))
       .limit(1)
       .catch(() => []);
 
-    if (!creds[0]) return;
+    const coindcxCreds = dbCreds && dbCreds[0] ? decryptCreds(dbCreds[0]) : coinDCXEnvCreds;
+    if (!coindcxCreds) return;
 
     let livePositions: any[];
     try {
-      livePositions = await getFuturesPositions(decryptCreds(creds[0]));
+      livePositions = await getFuturesPositions(coindcxCreds);
     } catch (err) {
       console.warn("[reconciler] Could not fetch live positions:", err);
       return;

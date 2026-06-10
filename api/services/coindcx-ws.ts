@@ -7,6 +7,7 @@ import { EventEmitter } from "events";
 import { latestTickerCache, marketEvents, activeStreams } from "./streaming";
 import { syncLiveAccountFromCoinDCX } from "./trading-account";
 import { decryptCreds } from "../lib/crypto";
+import { coinDCXEnvCreds } from "../lib/env";
 
 export const tradingEvents = new EventEmitter();
 tradingEvents.setMaxListeners(100);
@@ -55,12 +56,13 @@ export async function initCoinDCXPrivateWs() {
     )
     .limit(1);
 
-  if (!creds || !creds[0]) {
+  const coindcxCreds = creds && creds[0] ? decryptCreds(creds[0]) : coinDCXEnvCreds;
+  if (!coindcxCreds) {
     console.log("[coindcx-ws] No credentials found. WebSocket listener idle.");
     return;
   }
 
-  const { apiKey, apiSecret } = decryptCreds(creds[0]);
+  const { apiKey, apiSecret } = coindcxCreds;
   const wsUrl = "wss://stream.coindcx.com"; // CoinDCX Socket.io stream endpoint
 
   if (socket) {

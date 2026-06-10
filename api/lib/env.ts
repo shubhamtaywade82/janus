@@ -27,6 +27,10 @@ function resolveTradingMode(): "paper" | "live_monitor" | "live_trade" {
 }
 const _tradingMode = resolveTradingMode();
 
+// PLACE_ORDERS is the sole execution toggle:
+// true  → auto-executor sends real CoinDCX orders (live positions)
+// false → auto-executor creates local paper positions only
+// Live data sync (WS, positions, orders, wallet) is always-on when creds exist.
 export const env = {
   appId: required("APP_ID"),
   appSecret: required("APP_SECRET"),
@@ -41,6 +45,10 @@ export const env = {
   paperTrading: _tradingMode === "paper",
   placeOrders: _tradingMode === "live_trade",
   isMonitorMode: _tradingMode === "live_monitor",
+
+  // ─── CoinDCX credentials (fallback when not in DB) ───
+  coindcxApiKey: process.env.COINDCX_API_KEY ?? "",
+  coindcxApiSecret: process.env.COINDCX_API_SECRET ?? "",
 
   // Testnet mode — routes Binance market data to testnet endpoints
   useTestnet: process.env.USE_TESTNET === "true",
@@ -71,6 +79,11 @@ export const env = {
   // Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
   encryptionKey: process.env.ENCRYPTION_KEY ?? "",
 };
+
+// CoinDCX env credentials fallback (used when DB has no stored credentials)
+export const coinDCXEnvCreds = env.coindcxApiKey && env.coindcxApiSecret
+  ? { apiKey: env.coindcxApiKey, apiSecret: env.coindcxApiSecret }
+  : null;
 
 if (!env.encryptionKey) {
   throw new Error("ENCRYPTION_KEY missing");

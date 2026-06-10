@@ -6,7 +6,7 @@
  * the liquidation level. Fires a Telegram alert when within 5% and
  * triggers an auto-reduce (closes 50% of position) when within 2%.
  *
- * Only runs when PLACE_ORDERS=true — paper positions cannot be liquidated.
+ * Monitors live positions regardless of PLACE_ORDERS — alerts fire even in monitor-only mode.
  */
 
 import { EventEmitter } from "events";
@@ -28,7 +28,6 @@ const ALERT_COOLDOWN_MS = 5 * 60_000;
 let monitorInterval: ReturnType<typeof setInterval> | null = null;
 
 async function checkPositions(): Promise<void> {
-  if (!env.placeOrders) return;
 
   const db = getDb();
   const openPositions = await db

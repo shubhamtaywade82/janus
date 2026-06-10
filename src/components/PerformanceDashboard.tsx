@@ -36,12 +36,15 @@ function MiniEquityCurve({ data }: { data: EquityPoint[] }) {
       priceLineVisible: false,
     });
 
-    const points = data
+    const sorted = data
       .map((d) => ({
         time: Math.floor(new Date(d.snapshotAt).getTime() / 1000) as number,
         value: parseFloat(d.totalEquityUsdt),
       }))
       .sort((a, b) => a.time - b.time);
+    const seen = new Map<number, number>();
+    for (const pt of sorted) seen.set(pt.time, pt.value);
+    const points = Array.from(seen.entries()).map(([time, value]) => ({ time, value }));
 
     series.setData(points as any);
     chart.timeScale().fitContent();
@@ -58,12 +61,15 @@ function DetailedEquityCurve({ data }: { data: EquityPoint[] }) {
   useEffect(() => {
     if (!chartRef.current || data.length < 1) return;
 
-    const points = data
+    const sorted = data
       .map((d) => ({
         time: Math.floor(new Date(d.snapshotAt).getTime() / 1000) as number,
         value: parseFloat(d.totalEquityUsdt),
       }))
       .sort((a, b) => a.time - b.time);
+    const seenTs = new Map<number, number>();
+    for (const pt of sorted) seenTs.set(pt.time, pt.value);
+    const points = Array.from(seenTs.entries()).map(([time, value]) => ({ time, value }));
 
     const isNetPositive = points.length > 0 && points[points.length - 1].value >= points[0].value;
     const themeColor = isNetPositive ? "hsl(var(--janus-up))" : "hsl(var(--janus-down))";

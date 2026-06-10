@@ -128,9 +128,9 @@ export function startDaemon() {
   const syncAndMonitor = async () => {
     try {
       const db = getDb();
-      const isPaperMode = env.tradingMode === "paper";
 
-      const openPositions = await db.select().from(positions).where(and(eq(positions.status, "open"), eq(positions.isPaper, isPaperMode)));
+      // Monitor all open positions (both paper and live) regardless of trading mode
+      const openPositions = await db.select().from(positions).where(eq(positions.status, "open"));
       const openPosIds = new Set(openPositions.map(p => p.id));
 
       // Clean up closing set
