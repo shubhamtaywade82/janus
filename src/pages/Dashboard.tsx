@@ -10,6 +10,8 @@ import { Plus, Minus, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { ChartOverlayPanel } from "@/components/ChartOverlayPanel";
 import type { OverlayToggles } from "@/components/ChartOverlayPanel";
+import { CandleIntensityPanel } from "@/components/CandleIntensityPanel";
+import type { IntensityMode } from "@/lib/chart/candle-intensity";
 import { IndicatorPanel } from "@/components/IndicatorPanel";
 import { AlertConfigPanel } from "@/components/AlertConfigPanel";
 import type { IndicatorConfig } from "@/components/IndicatorPanel";
@@ -221,6 +223,8 @@ const Dashboard = () => {
       return saved ? JSON.parse(saved) : { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false, sweepMarkers: true };
     } catch { return { swings: true, orderBlocks: true, fvg: true, structure: true, liquidity: true, displacement: false, premiumDiscount: false, obv: false, sweepMarkers: true }; }
   });
+
+  const [intensityMode, setIntensityMode] = useState<IntensityMode>("off");
 
   const [liquidityEvents, setLiquidityEvents] = useState<any[]>([]);
   const handleLiquidityEvent = useCallback((event: any) => {
@@ -603,6 +607,7 @@ const Dashboard = () => {
             <div className="flex items-center gap-2">
               <RegimeIndicator symbol={selectedSymbol} />
               <ChartOverlayPanel onChange={setOverlayToggles} />
+              <CandleIntensityPanel onChange={setIntensityMode} />
               <IndicatorPanel onChange={setIndicatorCfg} />
               <AlertConfigPanel onChange={setAlertCfg} />
               <div className="h-3 w-px bg-[#27272a]" />
@@ -637,6 +642,7 @@ const Dashboard = () => {
                 cvdBars={cvdBars}
                 liquidityEvents={liquidityEvents}
                 orderBook={orderBook ?? undefined}
+                intensityMode={intensityMode}
               />
             ) : initialKlines === null || initialKlines === undefined ? (
               <div className="flex items-center justify-center h-full text-[#71717a] text-sm">
