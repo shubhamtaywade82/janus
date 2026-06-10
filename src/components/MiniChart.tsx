@@ -65,7 +65,6 @@ import {
   type CandleBar,
   buildIntensityBands,
   getIntensityColor,
-  getLiveIntensityColor,
 } from "@/lib/chart/candle-intensity";
 
 // ─── Types ───

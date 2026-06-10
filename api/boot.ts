@@ -12,6 +12,13 @@ import { Paths } from "@contracts/constants";
 import fs from "fs";
 import path from "path";
 import { getDb } from "./queries/connection";
+import { orders, autoExecutorConfig } from "@db/schema";
+import { eq } from "drizzle-orm";
+import { RiskManager } from "./services/RiskManager";
+import { WalletLedgerService } from "./services/WalletLedgerService";
+import { MatchingEngine } from "./services/MatchingEngine";
+import Decimal from "decimal.js";
+import crypto from "crypto";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
@@ -53,6 +60,100 @@ if (!env.isProduction) {
   });
 }
 app.get(Paths.oauthCallback, createOAuthCallbackHandler());
+
+app.post("/api/v1/orders/simulated", async (c) => {
+  try {
+    const body = await c.req.json();
+    const mockUserId = 1; // Pulled from contextual auth token verification layers in real app, hardcoded here
+
+    const db = getDb();
+    const [config] = await db
+      .select()
+      .from(autoExecutorConfig)
+      .where(eq(autoExecutorConfig.userId, mockUserId))
+      .limit(1);
+
+    const currency = config?.paperCurrency ?? "INR";
+
+    const orderParams = {
+      symbol: body.symbol,
+      side: body.side,
+      orderType: body.orderType,
+      quantity: body.quantity,
+      price: body.price,
+      leverage: body.leverage,
+      stopLoss: body.stopLoss,
+    };
+
+    // 1. Structural evaluation via RiskManager
+    await RiskManager.validateOrder(mockUserId, orderParams, true, currency);
+
+    const clientOrderId = crypto.randomUUID();
+
+    // 2. Insert order record into the database
+    const orderId = await db.transaction(async (tx) => {
+      const result = await tx
+        .insert(orders)
+        .values({
+          clientOrderId,
+          userId: mockUserId,
+          symbol: body.symbol,
+          side: body.side,
+          orderType: body.orderType,
+          price: body.price,
+          quantity: body.quantity,
+          status: "OPEN",
+          leverage: body.leverage,
+          stopLoss: body.stopLoss ? String(body.stopLoss) : null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning({ id: orders.id });
+      return result[0].id;
+    });
+
+    // 3. Pessimistically lock margin using WalletLedgerService
+    const qty = new Decimal(body.quantity);
+    const price = new Decimal(body.price);
+    const leverage = new Decimal(body.leverage);
+    const marginAllocation = qty.mul(price).div(leverage).toFixed(8);
+
+    await WalletLedgerService.lockMargin(
+      mockUserId,
+      "paper",
+      currency,
+      marginAllocation,
+      orderId,
+      "order"
+    );
+
+    // 4. Register trigger or matching job
+    if (body.orderType.toUpperCase() === "LIMIT") {
+      await MatchingEngine.registerOrderTrigger(
+        body.symbol,
+        body.side,
+        body.price,
+        clientOrderId
+      );
+    } else {
+      const { Queue } = await import("bullmq");
+      const { default: Redis } = await import("ioredis");
+      const executionQueue = new Queue("EngineExecution", {
+        connection: new Redis(process.env.REDIS_URL || "redis://127.0.0.1:6379") as any,
+      });
+
+      await executionQueue.add("ExecuteMatch", {
+        clientOrderId,
+        executionPrice: body.price,
+        timestamp: Date.now(),
+      });
+    }
+
+    return c.json({ success: true, clientOrderId, status: "OPEN" }, 201);
+  } catch (err: any) {
+    return c.json({ success: false, error: err.message }, 400);
+  }
+});
 
 import { brainRouter } from "./routers/brain-router";
 app.route("/api/brain", brainRouter);
@@ -201,6 +302,9 @@ globalLlmAdvisor.init().catch((err) => {
 
 console.log(`[auto-executor] AUTO_EXECUTE=${env.autoExecute} | PLACE_ORDERS=${env.placeOrders}`);
 
+// Start simulated exchange execution worker
+import { executionWorker } from "./workers/executionWorker";
+
 // Start AI position lifecycle manager (after LLM advisor is initialized)
 import { positionLifecycleManager } from "./services/position-manager/index";
 setTimeout(() => positionLifecycleManager.start().catch(console.error), 5_000);
@@ -256,6 +360,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
   stopLiquidationMonitor();
   keyRotationMonitor.stop();
   positionLifecycleManager.stop?.();
+  await executionWorker.close().catch((err) => console.error("[boot] Failed to close executionWorker:", err));
 
   // 3. Brief pause for in-flight DB writes to complete
   await new Promise((r) => setTimeout(r, 500));

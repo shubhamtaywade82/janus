@@ -827,3 +827,30 @@ export const killSwitchState = pgTable("kill_switch_state", {
 });
 
 export type KillSwitchStateRow = typeof killSwitchState.$inferSelect;
+
+// ─── Orders Table for Simulated/Paper Trading State Machine ───
+export const orders = pgTable("orders", {
+  id: serial("id").primaryKey(),
+  clientOrderId: varchar("client_order_id", { length: 255 }).notNull().unique(),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id),
+  symbol: varchar("symbol", { length: 20 }).notNull(),
+  side: varchar("side", { length: 10 }).notNull(), // 'BUY', 'SELL'
+  orderType: varchar("order_type", { length: 20 }).notNull(), // 'MARKET', 'LIMIT'
+  price: decimal("price", { precision: 18, scale: 8 }),
+  quantity: decimal("quantity", { precision: 18, scale: 8 }).notNull(),
+  filledQuantity: decimal("filled_quantity", { precision: 18, scale: 8 }).default("0.00000000").notNull(),
+  status: varchar("status", { length: 20 }).notNull(), // 'PENDING', 'OPEN', 'FILLED', 'CANCELLED', 'REJECTED'
+  leverage: integer("leverage").default(1).notNull(),
+  stopLoss: decimal("stop_loss", { precision: 18, scale: 8 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
+});
+
+export type Order = typeof orders.$inferSelect;
+export type InsertOrder = typeof orders.$inferInsert;
+

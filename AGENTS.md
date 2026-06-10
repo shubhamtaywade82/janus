@@ -190,3 +190,16 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **State Persistence (P1)**: `syncPositions()` now hydrates `breakevenApplied`, `extremePrice`, and `openedAlertSent` from DB into `ManagedPosition`. Added `strategyType` to `ManagedPosition` interface for trailing-stop registration.
 * **Test Coverage**: Added `api/services/position-manager/__tests__/sl-guard.test.ts` with 6 Vitest cases covering LONG/SHORT improvement, null current SL, and strict inequality rejection.
 * **Type Safety**: `policy-guard.ts` now imports `isSlImprovement` from `execution-manager.ts` instead of duplicating the logic. Event bus status values aligned to `"ok" | "failed"` union type.
+
+### [2026-06-11] High-Fidelity Node.js Simulated Exchange Engine
+* **Drizzle Schema Extension**: Added `orders` table to track simulated limit/stop/market order states (`PENDING`, `OPEN`, `FILLED`, `CANCELLED`, `REJECTED`). Pushed schema to database via Drizzle push and updated Relations mapping in `db/relations.ts`.
+* **RiskManager Service**: Created `api/services/RiskManager.ts` enforcing a 10x leverage cap and standard liquidation target safety buffer using `decimal.js` arithmetic.
+* **WalletLedgerService**: Created `api/services/WalletLedgerService.ts` utilizing pessimistic locking (`FOR UPDATE`) in database transactions to lock, release, refund margin, and charge fees with high precision `decimal.js` math.
+* **MatchingEngine & BullMQ Worker**:
+  - Created `api/services/MatchingEngine.ts` utilizing Redis sorted sets (`orders:trigger:buy:[symbol]` and `orders:trigger:sell:[symbol]`) to register limit/stop order triggers and match them against raw market ticks.
+  - Created `api/workers/executionWorker.ts` containing the BullMQ processor that matches and executes simulated order fills asynchronously, inserting open positions, charging taker fees, recording to transaction ledger, and registering for trailing.
+  - Integrated `MatchingEngine` evaluations directly into the primary trade tick stream in `api/services/streaming.ts`.
+  - Wired the worker lifecycle into `api/boot.ts` so it boots on startup and shuts down gracefully.
+* **Hono REST Integration**: Exposed the `/api/v1/orders/simulated` POST endpoint on Hono for simulated order placement, validating order properties via `RiskManager` and locking margin via `WalletLedgerService`.
+* **ESBuild Bundle Externalization**: Added `--packages=external` to the esbuild compiler command in `package.json`. This keeps dependencies like `bullmq`, `ioredis`, and `postgres` external in the bundled output, resolving prototype mismatch errors and fixing `TypeError: Cannot read properties of undefined (reading 'client')` at runtime.
+

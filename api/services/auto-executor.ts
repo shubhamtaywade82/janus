@@ -17,7 +17,7 @@ import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as path from "path";
 import { getDb } from "../queries/connection";
-import { positions, exchangeCredentials, autoExecutorConfig, systemLogs, signals, executorDecisions, brainEpisodes } from "@db/schema";
+import { positions, exchangeCredentials, autoExecutorConfig, systemLogs, signals, executorDecisions, brainEpisodes, orders } from "@db/schema";
 import { llmDecisionEvents } from "./llm-events";
 import { eq, and } from "drizzle-orm";
 import { globalKillSwitch } from "./kill-switch";
@@ -36,10 +36,13 @@ import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
 import type { ExitDecision } from "./exit-manager";
 import { snapshotEquity } from "./performance-tracker";
-import { getPaperWallet, lockPaperMargin, releasePaperMargin, getPaperEquity } from "./paper-wallet";
+import { getPaperWallet, releasePaperMargin, getPaperEquity } from "./paper-wallet";
 import { env, coinDCXEnvCreds } from "../lib/env";
 import { decryptCreds } from "../lib/crypto";
 import { recordPositionTransaction, estimateFee } from "./position-manager/transaction-ledger";
+import { RiskManager } from "./RiskManager";
+import { WalletLedgerService } from "./WalletLedgerService";
+import Decimal from "decimal.js";
 import type { Signal, AutoExecutorConfig } from "@db/schema";
 import type { StrategyType } from "./strategy-config";
 
@@ -537,9 +540,7 @@ export class AutoExecutor {
     this.recentExecutions.set(dedupKey, Date.now());
     await this.saveDedupCache();
 
-    if (isPaperMode) {
-      await lockPaperMargin(1, sizing.notional / sizing.leverage, undefined, paperCurrency);
-    }
+
 
     session.tradeCount++;
     await updateSession(session);
@@ -858,39 +859,77 @@ private async executePosition(params: {
   }): Promise<void> {
     const db = getDb();
     const clientOrderId = `AE-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const currency = params.isPaper ? (params.paperCurrency ?? "INR") : "USDT";
 
-    // 1. Pre-insert the position record in the database before order execution.
-    // If the process crashes or DB becomes unavailable now, no live order was placed.
-    // If the DB write succeeds but subsequent order placement crashes, the record is left
-    // as a pending tracking record with exchangeOrderId = clientOrderId for the reconciler.
-    const posId = await db.transaction(async (tx) => {
-      const result = await tx.insert(positions).values({
-        userId: params.userId,
-        symbol: params.symbol,
-        side: params.side,
-        entryPrice: String(params.currentPrice),
-        currentPrice: String(params.currentPrice),
-        size: String(params.size),
-        leverage: params.leverage,
-        margin: String((params.notional / params.leverage).toFixed(4)),
-        marginCurrency: params.isPaper ? (params.paperCurrency ?? "INR") : "USDT",
-        stopLoss: String(params.stopLoss),
-        takeProfit: String(params.takeProfit),
-        unrealizedPnl: "0",
-        realizedPnl: "0",
-        status: "open",
-        exchangeOrderId: clientOrderId, // Store temporary client ID first
-        signalId: params.signalId,
-        strategyType: params.strategyType,
-        isPaper: params.isPaper,
-        entryReason: params.entryReason,
-      }).returning({ id: positions.id });
+    // 1. Structural evaluation via RiskManager
+    const orderParams = {
+      symbol: params.symbol,
+      side: (params.side === "long" ? "BUY" : "SELL") as "BUY" | "SELL",
+      orderType: "MARKET" as const,
+      quantity: params.size.toString(),
+      price: params.currentPrice.toString(),
+      leverage: params.leverage,
+      stopLoss: params.stopLoss ? params.stopLoss.toString() : undefined,
+    };
+    await RiskManager.validateOrder(params.userId, orderParams, params.isPaper, currency);
+
+    // 2. Insert order record into the database
+    const orderId = await db.transaction(async (tx) => {
+      const result = await tx
+        .insert(orders)
+        .values({
+          clientOrderId,
+          userId: params.userId,
+          symbol: params.symbol,
+          side: params.side === "long" ? "BUY" : "SELL",
+          orderType: "MARKET",
+          price: params.currentPrice.toString(),
+          quantity: params.size.toString(),
+          status: params.isPaper ? "OPEN" : "PENDING",
+          leverage: params.leverage,
+          stopLoss: params.stopLoss ? params.stopLoss.toString() : null,
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .returning({ id: orders.id });
       return result[0].id;
     });
 
-    let exchangeOrderId: string | undefined;
+    // 3. Pessimistically lock margin using WalletLedgerService
+    const marginAllocation = new Decimal(params.size)
+      .mul(new Decimal(params.currentPrice))
+      .div(new Decimal(params.leverage))
+      .toFixed(8);
 
-    if (params.creds && !params.isPaper) {
+    await WalletLedgerService.lockMargin(
+      params.userId,
+      params.isPaper ? "paper" : "live",
+      currency,
+      marginAllocation,
+      orderId,
+      "order"
+    );
+
+    // 4. Execution path
+    if (params.isPaper) {
+      console.log(`[auto-executor] Enqueuing paper order ${clientOrderId} to matching engine queue`);
+      const { Queue } = await import("bullmq");
+      const { default: Redis } = await import("ioredis");
+      const executionQueue = new Queue("EngineExecution", {
+        connection: new Redis(process.env.REDIS_URL || "redis://127.0.0.1:6379") as any,
+      });
+
+      await executionQueue.add("ExecuteMatch", {
+        clientOrderId,
+        executionPrice: params.currentPrice.toString(),
+        timestamp: Date.now(),
+      });
+    } else {
+      if (!params.creds) {
+        throw new Error("No exchange credentials found for live execution");
+      }
+
+      let exchangeOrderId: string | undefined;
       try {
         const coindcxSym = `B-${params.symbol.replace("USDT", "_USDT")}`;
         const order = await placeEntryOrder(
@@ -909,76 +948,120 @@ private async executePosition(params: {
         exchangeOrderId = order?.id;
         console.log(`[auto-executor] Exchange order placed: ${exchangeOrderId} (client=${clientOrderId})`);
 
-        // Verify order was fully filled (remaining_quantity should be "0" for market orders)
         const remaining = parseFloat(order?.remaining_quantity ?? "0");
         if (remaining > 0) {
           console.warn(
-            `[auto-executor] Order ${exchangeOrderId} partially filled — remaining=${remaining}. ` +
-            `Position will reflect actual fill.`
+            `[auto-executor] Order ${exchangeOrderId} partially filled — remaining=${remaining}`
           );
         }
 
-        // 2. Update DB with actual exchangeOrderId and fill price (avg_price from exchange)
-        const fillPrice = parseFloat(order?.avg_price || order?.price_per_unit || "0");
-        const updateFields: { exchangeOrderId: string; entryPrice?: string; currentPrice?: string } = { exchangeOrderId: exchangeOrderId! };
-        if (fillPrice > 0 && Math.abs(fillPrice - params.currentPrice) / params.currentPrice > 0.0001) {
-          updateFields.entryPrice = String(fillPrice);
-          updateFields.currentPrice = String(fillPrice);
-          console.log(`[auto-executor] Fill price: ${params.currentPrice} → ${fillPrice} (slippage ${((fillPrice - params.currentPrice) / params.currentPrice * 100).toFixed(4)}%)`);
-        }
-        await db.update(positions)
-          .set(updateFields)
-          .where(eq(positions.id, posId));
+        const fillPrice = parseFloat(order?.avg_price || order?.price_per_unit || "0") || params.currentPrice;
 
-      } catch (err: any) {
-        console.error(`[auto-executor] Exchange order failed: ${err.message}. Cleaning up DB record ${posId}...`);
-        // 3. Rollback: delete the position record if order placement failed
-        await db.delete(positions).where(eq(positions.id, posId)).catch((dbErr) => {
-          console.error(`[auto-executor] Failed to clean up DB record after order failure:`, dbErr);
+        const posId = await db.transaction(async (tx) => {
+          await tx
+            .update(orders)
+            .set({
+              status: "FILLED",
+              filledQuantity: params.size.toString(),
+              updatedAt: new Date(),
+            })
+            .where(eq(orders.id, orderId));
+
+          const result = await tx
+            .insert(positions)
+            .values({
+              userId: params.userId,
+              symbol: params.symbol,
+              side: params.side,
+              entryPrice: String(fillPrice),
+              currentPrice: String(fillPrice),
+              size: String(params.size),
+              leverage: params.leverage,
+              margin: String((params.size * fillPrice / params.leverage).toFixed(4)),
+              marginCurrency: "USDT",
+              stopLoss: String(params.stopLoss),
+              takeProfit: String(params.takeProfit),
+              unrealizedPnl: "0",
+              realizedPnl: "0",
+              status: "open",
+              exchangeOrderId: exchangeOrderId,
+              signalId: params.signalId,
+              strategyType: params.strategyType,
+              isPaper: false,
+              entryReason: params.entryReason,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .returning({ id: positions.id });
+          return result[0].id;
         });
-        throw err; // re-throw so processSignal catches it
+
+        const feeVal = estimateFee(params.size * fillPrice);
+        await WalletLedgerService.chargeFee(
+          params.userId,
+          "live",
+          "USDT",
+          feeVal.toFixed(8),
+          posId
+        );
+
+        await recordPositionTransaction({
+          positionId: posId,
+          userId: params.userId,
+          symbol: params.symbol,
+          type: "OPEN",
+          side: params.side,
+          quantityBefore: 0,
+          quantityAfter: params.size,
+          quantityDelta: params.size,
+          price: fillPrice,
+          avgEntryPrice: fillPrice,
+          realizedPnl: 0,
+          fee: feeVal,
+          marginBefore: 0,
+          marginAfter: (params.size * fillPrice) / params.leverage,
+          metadata: {
+            signalId: params.signalId,
+            strategyType: params.strategyType,
+            isPaper: false,
+            exchangeOrderId: exchangeOrderId ?? clientOrderId,
+            leverage: params.leverage,
+            stopLoss: params.stopLoss,
+            takeProfit: params.takeProfit,
+          },
+        });
+
+        if (!params.disableTrailing) {
+          registerPositionForTrailing({
+            id: posId,
+            symbol: params.symbol,
+            side: params.side,
+            entryPrice: fillPrice,
+            stopLoss: params.stopLoss,
+            strategyType: params.strategyType,
+            userId: params.userId,
+            size: params.size,
+          });
+        }
+      } catch (err: any) {
+        console.error(
+          `[auto-executor] Exchange order failed: ${err.message}. Rejecting order and refunding margin...`
+        );
+        await db
+          .update(orders)
+          .set({ status: "REJECTED", updatedAt: new Date() })
+          .where(eq(orders.id, orderId));
+
+        await WalletLedgerService.refundMargin(
+          params.userId,
+          "live",
+          "USDT",
+          marginAllocation,
+          orderId,
+          "order"
+        );
+        throw err;
       }
-    }
-
-    // Record OPEN transaction in the immutable ledger
-    const margin = parseFloat((params.notional / params.leverage).toFixed(4));
-    await recordPositionTransaction({
-      positionId: posId,
-      userId: params.userId,
-      symbol: params.symbol,
-      type: "OPEN",
-      side: params.side,
-      quantityBefore: 0,
-      quantityAfter: params.size,
-      quantityDelta: params.size,
-      price: params.currentPrice,
-      avgEntryPrice: params.currentPrice,
-      realizedPnl: 0,
-      fee: estimateFee(params.notional),
-      marginBefore: 0,
-      marginAfter: margin,
-      metadata: {
-        signalId: params.signalId,
-        strategyType: params.strategyType,
-        isPaper: params.isPaper,
-        exchangeOrderId: exchangeOrderId ?? clientOrderId,
-        leverage: params.leverage,
-        stopLoss: params.stopLoss,
-        takeProfit: params.takeProfit,
-      },
-    });
-
-    if (!params.disableTrailing) {
-      registerPositionForTrailing({
-        id: posId,
-        symbol: params.symbol,
-        side: params.side,
-        entryPrice: params.currentPrice,
-        stopLoss: params.stopLoss,
-        strategyType: params.strategyType,
-        userId: params.userId,
-        size: params.size,
-      });
     }
 
     tradingEvents.emit(`portfolio-update:${params.userId}`);

@@ -146,10 +146,10 @@ export class Governor {
       // if (knnSnap.regime === "range") {
       //   return { approved: false, gate: "knn_range", reason: `KNN: range regime — signals suppressed for ${symbol}` };
       // }
-      const knnMinConf = 60;
-      const knnBias = knnSnap.knn.bias;
-      const knnConf = knnSnap.knn.confidence;
-      const biasSide = knnBias === "bullish" ? "long" : knnBias === "bearish" ? "short" : "neutral";
+      // const knnMinConf = 60;
+      // const knnBias = knnSnap.knn.bias;
+      // const knnConf = knnSnap.knn.confidence;
+      // const biasSide = knnBias === "bullish" ? "long" : knnBias === "bearish" ? "short" : "neutral";
       // KNN bias conflict check disabled to allow entries against short-term bias (user preference)
       // if (knnBias !== "neutral" && knnConf >= knnMinConf && biasSide !== side) {
       //   return {
