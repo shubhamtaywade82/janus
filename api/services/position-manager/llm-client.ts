@@ -96,8 +96,7 @@ function envLiveKeys(): LlmKey[] {
   const endpoint =
     process.env.PM_OLLAMA_CLOUD_ENDPOINT ?? "https://ollama.com";
   const model =
-    process.env.PM_OLLAMA_CLOUD_MODEL ??
-    process.env.OLLAMA_MODEL ?? "llama3.2";
+    process.env.PM_OLLAMA_CLOUD_MODEL ?? "gpt-oss:120b";
 
   const keys: LlmKey[] = [];
   for (let i = 1; i <= 3; i++) {
