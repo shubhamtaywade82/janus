@@ -159,9 +159,6 @@ export const positions = pgTable(
   (table) => ({
     userIdStatusIdx: index("idx_positions_user_status").on(table.userId, table.status),
     symbolIdx: index("idx_positions_symbol").on(table.symbol),
-    uqOpenPosition: uniqueIndex("uq_positions_open")
-      .on(table.userId, table.symbol, table.side)
-      .where(sql`${table.status} = 'open'`),
   })
 );
 

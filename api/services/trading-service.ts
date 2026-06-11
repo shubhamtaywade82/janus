@@ -332,25 +332,32 @@ export async function fetchPortfolioData(userId: number) {
         .where(and(eq(positions.userId, userId), eq(positions.status, "open")));
 
       // ── 5. Merge Live (Exchange) + DB ───────────────────────────────────
-      // We prioritize exchange truth for size/price, but use DB for ID/SL/TP metadata
+      // We prioritize exchange truth for size/price, but use DB for ID/SL/TP metadata.
+      // Group DB live positions by symbol:side so each exchange position consumes the next
+      // unmatched DB row, avoiding duplicate IDs when CoinDCX returns >1 position per pair.
+      const dbLiveByKey = new Map<string, typeof dbPositions>();
+      for (const dbp of dbPositions) {
+        if (dbp.isPaper) continue;
+        const key = `${dbp.symbol}:${dbp.side}`;
+        if (!dbLiveByKey.has(key)) dbLiveByKey.set(key, []);
+        dbLiveByKey.get(key)!.push(dbp);
+      }
+
       const mergedLive: any[] = [];
       const dbMatchedIds = new Set<number>();
 
       for (let i = 0; i < openPositions.length; i++) {
         const lp = openPositions[i];
-        const lpSymbol = lp.symbol;
-        const lpSide = lp.side;
+        const key = `${lp.symbol}:${lp.side}`;
+        const group = dbLiveByKey.get(key);
 
-        // Try to find a matching live position in the DB
-        const match = dbPositions.find(
-          (dbp) => !dbp.isPaper && dbp.symbol === lpSymbol && dbp.side === lpSide
-        );
-
-        if (match) {
+        if (group && group.length > 0) {
+          // Consume the first unmatched DB row for this symbol+side
+          const match = group.shift()!;
           dbMatchedIds.add(match.id);
           mergedLive.push({
             ...lp,
-            id: match.id, // Use real DB ID
+            id: match.id,
             stopLoss: match.stopLoss ? parseFloat(match.stopLoss) : lp.stopLoss,
             takeProfit: match.takeProfit ? parseFloat(match.takeProfit) : lp.takeProfit,
             entryReason: match.entryReason,
@@ -358,10 +365,41 @@ export async function fetchPortfolioData(userId: number) {
             isPaper: false,
           });
         } else {
-          // Orphan exchange position
+          // No matching DB row — orphan exchange position, assign synthetic ID
           mergedLive.push({
             ...lp,
             id: i + 10000,
+            isPaper: false,
+          });
+        }
+      }
+
+      // Append any DB live positions that were never matched (orphaned DB rows),
+      // preserving them in the stream so nothing is silently dropped.
+      for (const [, group] of dbLiveByKey) {
+        for (const orphan of group) {
+          dbMatchedIds.add(orphan.id);
+          mergedLive.push({
+            id: orphan.id,
+            userId,
+            symbol: orphan.symbol,
+            side: orphan.side,
+            entryPrice: orphan.entryPrice ?? "0",
+            currentPrice: orphan.currentPrice ?? orphan.entryPrice ?? "0",
+            size: orphan.size ?? "0",
+            leverage: orphan.leverage ?? 1,
+            margin: orphan.margin ?? "0",
+            unrealizedPnl: orphan.unrealizedPnl ?? "0",
+            realizedPnl: orphan.realizedPnl ?? "0.00",
+            liquidationPrice: orphan.liquidationPrice ? String(orphan.liquidationPrice) : null,
+            stopLoss: orphan.stopLoss ? parseFloat(orphan.stopLoss) : null,
+            takeProfit: orphan.takeProfit ? parseFloat(orphan.takeProfit) : null,
+            marginMode: orphan.marginMode || "isolated",
+            marginCurrency: orphan.marginCurrency || "USDT",
+            status: orphan.status || "open",
+            createdAt: orphan.createdAt,
+            updatedAt: orphan.updatedAt,
+            missingFromExchange: true,
             isPaper: false,
           });
         }

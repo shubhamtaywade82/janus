@@ -58,6 +58,8 @@ export const executionWorker = new Worker(
             })
             .where(eq(orders.id, order.id));
 
+          const mappedSide = order.side.toLowerCase() === "buy" ? "long" : "short";
+
           const qty = new Decimal(order.quantity);
           const price = new Decimal(executionPrice);
           const leverage = new Decimal(order.leverage);
@@ -80,7 +82,7 @@ export const executionWorker = new Worker(
             .values({
               userId: order.userId,
               symbol: order.symbol,
-              side: order.side.toLowerCase() as "long" | "short",
+              side: mappedSide,
               entryPrice: price.toFixed(8),
               currentPrice: price.toFixed(8),
               size: qty.toFixed(8),
@@ -113,7 +115,7 @@ export const executionWorker = new Worker(
             userId: order.userId,
             symbol: order.symbol,
             type: "OPEN",
-            side: order.side.toLowerCase() as "long" | "short",
+            side: mappedSide,
             quantityBefore: 0,
             quantityAfter: qty.toNumber(),
             quantityDelta: qty.toNumber(),
@@ -135,7 +137,7 @@ export const executionWorker = new Worker(
             registerPositionForTrailing({
               id: position.id,
               symbol: order.symbol,
-              side: order.side.toLowerCase() as "long" | "short",
+              side: mappedSide,
               entryPrice: price.toNumber(),
               stopLoss: parseFloat(order.stopLoss),
               strategyType: "intraday",

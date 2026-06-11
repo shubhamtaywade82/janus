@@ -383,7 +383,14 @@ export default function Portfolio() {
   // Merge live positions: stream (exchange real-time) + DB fallback for IDs not in stream
   const streamLiveIds = new Set(livePositionsFromStream.map((p: any) => p.id));
   const livePositionsOnlyDb = livePositionsFromDb.filter((p: any) => !streamLiveIds.has(p.id));
-  const openLivePositions = [...livePositionsFromStream, ...livePositionsOnlyDb];
+
+  // Deduplicate by composite key to handle duplicate IDs from backend merge bugs
+  const livePosMap = new Map<string, any>();
+  for (const p of [...livePositionsFromStream, ...livePositionsOnlyDb]) {
+    const key = `${p.id}-${p.symbol}-${p.side}`;
+    if (!livePosMap.has(key)) livePosMap.set(key, p);
+  }
+  const openLivePositions = Array.from(livePosMap.values());
 
   // Paper wallet stats from auto-executor
   const { data: paperWalletData } = trpc.autoExecutor.paperWallet.useQuery(
@@ -397,8 +404,7 @@ export default function Portfolio() {
       ...openPositions.map((p: any) => p.symbol as string),
       ...paperPositions.map((p: any) => p.symbol as string),
     ])],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [[...openPositions, ...paperPositions].map((p: any) => p.symbol).join(",")]
+    [openPositions, paperPositions]
   );
 
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
@@ -891,9 +897,9 @@ export default function Portfolio() {
                   </tr>
                 </thead>
                 <tbody>
-                  {allPositions?.map((pos: any) => (
+                  {allPositions?.map((pos: any, idx: number) => (
                     <PositionRow
-                      key={pos.id}
+                      key={`${pos.id}-${pos.symbol}-${pos.side}-${idx}`}
                       position={pos}
                       livePrice={livePrices[pos.symbol]}
                       onClose={handleClosePosition}

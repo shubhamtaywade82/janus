@@ -43,6 +43,8 @@ type KeyScope = "paper" | "live";
 
 const unhealthyUntil = new Map<number, number>();
 
+const envKeysSeenInvalid = new Set<string>();
+
 function isHealthy(id: number): boolean {
   const until = unhealthyUntil.get(id);
   return !until || Date.now() > until;
@@ -52,6 +54,7 @@ function markUnhealthy(id: number, status: number): void {
   const durationMs =
     status === 429 ? 5 * 60_000 :   // rate-limited → 5 min
     status === 503 ? 2 * 60_000 :   // overloaded  → 2 min
+    status === 401 ? 60_000 :       // auth error  → 1 min
     30_000;                          // other error → 30 s
   unhealthyUntil.set(id, Date.now() + durationMs);
 }
@@ -102,8 +105,17 @@ function envLiveKeys(): LlmKey[] {
   for (let i = 1; i <= 3; i++) {
     const apiKey = process.env[`PM_OLLAMA_CLOUD_KEY_${i}`];
     if (apiKey) {
+      if (
+        /^(YOUR_KEY|test|placeholder|null|undefined|)$/.test(apiKey.trim()) &&
+        !envKeysSeenInvalid.has(`pm-live-env-${i}`)
+      ) {
+        envKeysSeenInvalid.add(`pm-live-env-${i}`);
+        console.warn(
+          `[pm-llm] PM_OLLAMA_CLOUD_KEY_${i} appears to be a placeholder. Set valid Ollama.com cloud keys or unset these vars to silence LLM calls.`
+        );
+      }
       keys.push({
-        id: -(100 + i),      // negative = env-seeded, no DB row
+        id: -(100 + i), // negative = env-seeded, no DB row
         label: `pm-live-env-${i}`,
         endpoint,
         apiKey,
@@ -248,6 +260,8 @@ function parseResponse(
  * @param prompt   - formatted assessment prompt
  * @param isPaper  - true = use local Ollama; false = use Ollama.com cloud (3-key rotation)
  */
+const exhaustedWarningIssued = new Set<string>();
+
 export async function callPositionManagementLlm(
   prompt: string,
   isPaper: boolean
@@ -256,14 +270,20 @@ export async function callPositionManagementLlm(
   const keys = await resolveKeys(scope);
 
   if (keys.length === 0) {
-    console.warn(`[pm-llm] No ${scope} keys available — falling back to code logic`);
+    if (!exhaustedWarningIssued.has(scope)) {
+      exhaustedWarningIssued.add(scope);
+      console.warn(`[pm-llm] No ${scope} keys available — falling back to code logic`);
+    }
     return null;
   }
 
   const t0 = Date.now();
   const result = await callWithRotation(keys, prompt);
   if (!result) {
-    console.warn(`[pm-llm] All ${scope} keys exhausted — falling back to code logic`);
+    if (!exhaustedWarningIssued.has(scope)) {
+      exhaustedWarningIssued.add(scope);
+      console.warn(`[pm-llm] All ${scope} keys exhausted — falling back to code logic`);
+    }
     return null;
   }
 
