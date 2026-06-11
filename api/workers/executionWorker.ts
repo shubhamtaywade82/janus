@@ -90,6 +90,7 @@ export const executionWorker = new Worker(
               margin: margin.toFixed(8),
               marginCurrency: currency,
               stopLoss: order.stopLoss ? String(order.stopLoss) : null,
+              takeProfit: order.takeProfit ? String(order.takeProfit) : null,
               unrealizedPnl: "0.00000000",
               realizedPnl: "0.00000000",
               status: "open",

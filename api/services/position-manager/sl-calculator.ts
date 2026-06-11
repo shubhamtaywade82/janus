@@ -4,11 +4,11 @@ import { detectSwings } from "../price-action";
 import { getDb } from "../../queries/connection";
 import { marketData } from "@db/schema";
 import { eq, and, gte } from "drizzle-orm";
+import { SYMBOL_MIN_SL_PCT, DEFAULT_MIN_SL_PCT, type SupportedSymbol } from "../../../contracts/constants";
 
 // ─── Stop Loss Calculator ────────────────────────────────────────────────────
 // Modes: ATR (default), SWING (structure-based), VWAP, PERCENTAGE
 
-const MIN_SL_DISTANCE_PCT = 0.003;   // 0.3% minimum
 const MAX_SL_DISTANCE_PCT = 0.08;    // 8% maximum
 
 async function fetchKlines(binanceSymbol: string, limit = 100) {
@@ -46,6 +46,7 @@ export async function calculateStopLoss(
 ): Promise<SLResult> {
   const price = position.markPrice || position.entryPrice;
   const isLong = position.side === "LONG";
+  const minSlPct = SYMBOL_MIN_SL_PCT[position.binanceSymbol as SupportedSymbol] ?? DEFAULT_MIN_SL_PCT;
 
   // ── ATR mode (primary) ─────────────────────────────────────────────────
   if (ctx.atr14 && ctx.atrPct) {
@@ -56,7 +57,7 @@ export async function calculateStopLoss(
       ? price - slDistance
       : price + slDistance;
     const distancePct = slDistance / price;
-    if (distancePct >= MIN_SL_DISTANCE_PCT && distancePct <= MAX_SL_DISTANCE_PCT) {
+    if (distancePct >= minSlPct && distancePct <= MAX_SL_DISTANCE_PCT) {
       return { stopLoss: sl, mode: "ATR", distancePct };
     }
   }
@@ -75,7 +76,7 @@ export async function calculateStopLoss(
           ? recentSwing.price * 0.998  // 0.2% buffer below swing low
           : recentSwing.price * 1.002; // 0.2% buffer above swing high
         const distancePct = Math.abs(price - sl) / price;
-        if (distancePct >= MIN_SL_DISTANCE_PCT && distancePct <= MAX_SL_DISTANCE_PCT) {
+        if (distancePct >= minSlPct && distancePct <= MAX_SL_DISTANCE_PCT) {
           return { stopLoss: sl, mode: "SWING", distancePct };
         }
       }
@@ -89,12 +90,12 @@ export async function calculateStopLoss(
   const midPrice = state?.metrics?.midPrice;
   if (midPrice && midPrice > 0) {
     const distanceToMid = Math.abs(price - midPrice) / price;
-    if (distanceToMid >= MIN_SL_DISTANCE_PCT && distanceToMid <= MAX_SL_DISTANCE_PCT) {
+    if (distanceToMid >= minSlPct && distanceToMid <= MAX_SL_DISTANCE_PCT) {
       const sl = isLong
-        ? Math.min(price - price * MIN_SL_DISTANCE_PCT, midPrice * 0.998)
-        : Math.max(price + price * MIN_SL_DISTANCE_PCT, midPrice * 1.002);
+        ? Math.min(price - price * minSlPct, midPrice * 0.998)
+        : Math.max(price + price * minSlPct, midPrice * 1.002);
       const distancePct = Math.abs(price - sl) / price;
-      if (distancePct >= MIN_SL_DISTANCE_PCT && distancePct <= MAX_SL_DISTANCE_PCT) {
+      if (distancePct >= minSlPct && distancePct <= MAX_SL_DISTANCE_PCT) {
         return { stopLoss: sl, mode: "VWAP", distancePct };
       }
     }

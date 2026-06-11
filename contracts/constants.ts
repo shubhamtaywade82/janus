@@ -27,3 +27,16 @@ export const SUPPORTED_SYMBOLS = [
 ] as const;
 
 export type SupportedSymbol = (typeof SUPPORTED_SYMBOLS)[number];
+
+export const SYMBOL_MIN_SL_PCT: Record<SupportedSymbol, number> = {
+  BTCUSDT: 0.0025,  // 0.25%
+  ETHUSDT: 0.0030,  // 0.30%
+  SOLUSDT: 0.0040,  // 0.40%
+  BNBUSDT: 0.0030,  // 0.30%
+  XRPUSDT: 0.0030,  // 0.30%
+  ADAUSDT: 0.0035,  // 0.35%
+  DOGEUSDT: 0.0050, // 0.50%
+  AVAXUSDT: 0.0040, // 0.40%
+} as const;
+
+export const DEFAULT_MIN_SL_PCT = 0.003; // 0.30%

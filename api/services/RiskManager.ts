@@ -13,6 +13,7 @@ export interface OrderParams {
   price: string;
   leverage: number;
   stopLoss?: string;
+  takeProfit?: string;
 }
 
 export class RiskManager {

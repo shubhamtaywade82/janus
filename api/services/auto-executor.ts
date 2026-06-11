@@ -45,6 +45,7 @@ import { WalletLedgerService } from "./WalletLedgerService";
 import Decimal from "decimal.js";
 import type { Signal, AutoExecutorConfig } from "@db/schema";
 import type { StrategyType } from "./strategy-config";
+import { SYMBOL_MIN_SL_PCT, DEFAULT_MIN_SL_PCT, type SupportedSymbol } from "../../contracts/constants";
 
 const DEDUP_FILE = path.resolve(process.cwd(), "dedup-cache-state.json");
 
@@ -772,7 +773,7 @@ private async calculateSizing(params: {
   }
 
   // ── Sanity clamp: catch any remaining misscaled or out-of-range values ──
-  const MIN_SL_PCT = 0.003;  // 0.3%
+  const minSlPct = SYMBOL_MIN_SL_PCT[params.signal.symbol as SupportedSymbol] ?? DEFAULT_MIN_SL_PCT;
   const MAX_SL_PCT = 0.08;   // 8%
   const MIN_TP_PCT = 0.005;  // 0.5%
   const MAX_TP_PCT = 0.15;   // 15%
@@ -786,7 +787,7 @@ private async calculateSizing(params: {
     tp1Pct = tp1Pct / 100;
   }
 
-  slPct = Math.max(MIN_SL_PCT, Math.min(MAX_SL_PCT, slPct));
+  slPct = Math.max(minSlPct, Math.min(MAX_SL_PCT, slPct));
   tp1Pct = Math.max(MIN_TP_PCT, Math.min(MAX_TP_PCT, tp1Pct));
 
   const stopLoss = parseFloat((side === "long" ? currentPrice * (1 - slPct) : currentPrice * (1 + slPct)).toFixed(basePrecision));
@@ -794,13 +795,13 @@ private async calculateSizing(params: {
 
   // ── Final sanity: SL must be on correct side of entry ──
   if (side === "long" && stopLoss >= currentPrice) {
-    console.warn(`[auto-executor] SL ${stopLoss} >= entry ${currentPrice} for LONG — resetting to -${(MIN_SL_PCT * 100).toFixed(1)}%`);
-    const correctedSl = parseFloat((currentPrice * (1 - MIN_SL_PCT)).toFixed(basePrecision));
+    console.warn(`[auto-executor] SL ${stopLoss} >= entry ${currentPrice} for LONG — resetting to -${(minSlPct * 100).toFixed(1)}%`);
+    const correctedSl = parseFloat((currentPrice * (1 - minSlPct)).toFixed(basePrecision));
     return { size, leverage, notional, stopLoss: correctedSl, takeProfit, strategyType };
   }
   if (side === "short" && stopLoss <= currentPrice) {
-    console.warn(`[auto-executor] SL ${stopLoss} <= entry ${currentPrice} for SHORT — resetting to +${(MIN_SL_PCT * 100).toFixed(1)}%`);
-    const correctedSl = parseFloat((currentPrice * (1 + MIN_SL_PCT)).toFixed(basePrecision));
+    console.warn(`[auto-executor] SL ${stopLoss} <= entry ${currentPrice} for SHORT — resetting to +${(minSlPct * 100).toFixed(1)}%`);
+    const correctedSl = parseFloat((currentPrice * (1 + minSlPct)).toFixed(basePrecision));
     return { size, leverage, notional, stopLoss: correctedSl, takeProfit, strategyType };
   }
 
@@ -870,6 +871,7 @@ private async executePosition(params: {
       price: params.currentPrice.toString(),
       leverage: params.leverage,
       stopLoss: params.stopLoss ? params.stopLoss.toString() : undefined,
+      takeProfit: params.takeProfit ? params.takeProfit.toString() : undefined,
     };
     await RiskManager.validateOrder(params.userId, orderParams, params.isPaper, currency);
 
@@ -888,6 +890,7 @@ private async executePosition(params: {
           status: params.isPaper ? "OPEN" : "PENDING",
           leverage: params.leverage,
           stopLoss: params.stopLoss ? params.stopLoss.toString() : null,
+          takeProfit: params.takeProfit ? params.takeProfit.toString() : null,
           createdAt: new Date(),
           updatedAt: new Date(),
         })

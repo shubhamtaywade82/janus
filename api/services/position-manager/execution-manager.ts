@@ -106,6 +106,28 @@ export async function executeAction(
           return { success: false, detail: `Breakeven rejected: would lower SL` };
         }
 
+        const markPrice = position.markPrice;
+        if (position.side === "LONG" && newSl >= markPrice) {
+          positionManagerBus.emit(
+            "position:action-executed",
+            position.id,
+            action,
+            "failed",
+            `MOVE_TO_BREAKEVEN rejected: proposed SL ${newSl.toFixed(4)} is >= current mark ${markPrice.toFixed(4)}`
+          );
+          return { success: false, detail: `Breakeven rejected: SL would cross current mark price` };
+        }
+        if (position.side === "SHORT" && newSl <= markPrice) {
+          positionManagerBus.emit(
+            "position:action-executed",
+            position.id,
+            action,
+            "failed",
+            `MOVE_TO_BREAKEVEN rejected: proposed SL ${newSl.toFixed(4)} is <= current mark ${markPrice.toFixed(4)}`
+          );
+          return { success: false, detail: `Breakeven rejected: SL would cross current mark price` };
+        }
+
         await db
           .update(positions)
           .set({
@@ -156,6 +178,28 @@ export async function executeAction(
             `TRAIL_SL rejected: ${newSl.toFixed(4)} is worse than current ${position.stopLoss?.toFixed(4)}`
           );
           return { success: false, detail: `Trail rejected: would reverse SL` };
+        }
+
+        const markPrice = position.markPrice;
+        if (position.side === "LONG" && newSl >= markPrice) {
+          positionManagerBus.emit(
+            "position:action-executed",
+            position.id,
+            action,
+            "failed",
+            `TRAIL_SL rejected: proposed SL ${newSl.toFixed(4)} is >= current mark ${markPrice.toFixed(4)}`
+          );
+          return { success: false, detail: `Trail rejected: SL would cross current mark price` };
+        }
+        if (position.side === "SHORT" && newSl <= markPrice) {
+          positionManagerBus.emit(
+            "position:action-executed",
+            position.id,
+            action,
+            "failed",
+            `TRAIL_SL rejected: proposed SL ${newSl.toFixed(4)} is <= current mark ${markPrice.toFixed(4)}`
+          );
+          return { success: false, detail: `Trail rejected: SL would cross current mark price` };
         }
 
         await db

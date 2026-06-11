@@ -74,7 +74,7 @@ export function policyGuard(
     };
   }
 
-  // ── TRAIL_SL: ensure new SL is better than current ────────────────────
+  // ── TRAIL_SL: ensure new SL is better than current and doesn't cross mark price ────
   if (action === PA.TRAIL_SL && recommendation.newStopLoss !== undefined) {
     const newSl = recommendation.newStopLoss;
     const currentSl = position.stopLoss;
@@ -87,9 +87,24 @@ export function policyGuard(
         };
       }
     }
+    const markPrice = position.markPrice;
+    if (position.side === "LONG" && newSl >= markPrice) {
+      return {
+        approved: false,
+        action: PA.KEEP_OPEN,
+        reason: `TRAIL_SL rejected: proposed SL (${newSl.toFixed(4)}) would be >= current mark price (${markPrice.toFixed(4)})`,
+      };
+    }
+    if (position.side === "SHORT" && newSl <= markPrice) {
+      return {
+        approved: false,
+        action: PA.KEEP_OPEN,
+        reason: `TRAIL_SL rejected: proposed SL (${newSl.toFixed(4)}) would be <= current mark price (${markPrice.toFixed(4)})`,
+      };
+    }
   }
 
-  // ── MOVE_TO_BREAKEVEN: only if profitable and not already applied ────
+  // ── MOVE_TO_BREAKEVEN: only if profitable, not already applied, and doesn't cross mark price ────
   if (action === PA.MOVE_TO_BREAKEVEN) {
     if (position.unrealizedPnl <= 0) {
       return {
@@ -103,6 +118,26 @@ export function policyGuard(
         approved: false,
         action: PA.KEEP_OPEN,
         reason: "MOVE_TO_BREAKEVEN rejected: breakeven already applied to this position",
+      };
+    }
+    const newSl =
+      recommendation.newStopLoss ??
+      (position.side === "LONG"
+        ? position.entryPrice * (1 + 0.0005 * 2)
+        : position.entryPrice * (1 - 0.0005 * 2));
+    const markPrice = position.markPrice;
+    if (position.side === "LONG" && newSl >= markPrice) {
+      return {
+        approved: false,
+        action: PA.KEEP_OPEN,
+        reason: `MOVE_TO_BREAKEVEN rejected: target SL (${newSl.toFixed(4)}) would be >= current mark price (${markPrice.toFixed(4)})`,
+      };
+    }
+    if (position.side === "SHORT" && newSl <= markPrice) {
+      return {
+        approved: false,
+        action: PA.KEEP_OPEN,
+        reason: `MOVE_TO_BREAKEVEN rejected: target SL (${newSl.toFixed(4)}) would be <= current mark price (${markPrice.toFixed(4)})`,
       };
     }
   }

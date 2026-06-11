@@ -11,9 +11,7 @@ import {
   boolean,
   index,
   unique,
-  uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { sql } from "drizzle-orm";
 
 // ─── Enums (PostgreSQL custom types) ───
 export const roleEnum = pgEnum("role", ["user", "admin"]);
@@ -841,6 +839,7 @@ export const orders = pgTable("orders", {
   status: varchar("status", { length: 20 }).notNull(), // 'PENDING', 'OPEN', 'FILLED', 'CANCELLED', 'REJECTED'
   leverage: integer("leverage").default(1).notNull(),
   stopLoss: decimal("stop_loss", { precision: 18, scale: 8 }),
+  takeProfit: decimal("take_profit", { precision: 18, scale: 8 }),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at")
     .defaultNow()

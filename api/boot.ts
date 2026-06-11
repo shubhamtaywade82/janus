@@ -83,6 +83,7 @@ app.post("/api/v1/orders/simulated", async (c) => {
       price: body.price,
       leverage: body.leverage,
       stopLoss: body.stopLoss,
+      takeProfit: body.takeProfit,
     };
 
     // 1. Structural evaluation via RiskManager
@@ -105,6 +106,7 @@ app.post("/api/v1/orders/simulated", async (c) => {
           status: "OPEN",
           leverage: body.leverage,
           stopLoss: body.stopLoss ? String(body.stopLoss) : null,
+          takeProfit: body.takeProfit ? String(body.takeProfit) : null,
           createdAt: new Date(),
           updatedAt: new Date(),
         })
