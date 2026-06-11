@@ -63,6 +63,7 @@ export const env = {
   ollamaEndpoint: process.env.OLLAMA_ENDPOINT ?? "http://localhost:11434",
   ollamaApiKeys: (process.env.OLLAMA_API_KEYS ?? "").split(",").filter(Boolean),
   ollamaModel: process.env.OLLAMA_MODEL ?? "llama3.2",
+  ollamaTimeoutMs: parseInt(process.env.OLLAMA_TIMEOUT_MS ?? "30000", 10),
 
   // ─── Bot automation ───
   // BOT_AUTO_START=true — auto-start the executor on server boot (default: false)

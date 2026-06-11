@@ -25,6 +25,7 @@ import { llmApiKeys } from "@db/schema";
 import { eq, asc } from "drizzle-orm";
 import type { AiRecommendation } from "./types";
 import { PositionAction } from "./types";
+import { env } from "../../lib/env";
 
 // ─── Types ──────────────────────────────────────────────────────────────────
 
@@ -50,13 +51,15 @@ function isHealthy(id: number): boolean {
   return !until || Date.now() > until;
 }
 
-function markUnhealthy(id: number, status: number): void {
+function markUnhealthy(id: number, status: number | string): void {
+  const statusCode = Number(status);
   const durationMs =
-    status === 429 ? 5 * 60_000 :   // rate-limited → 5 min
-    status === 503 ? 2 * 60_000 :   // overloaded  → 2 min
-    status === 401 ? 60_000 :       // auth error  → 1 min
+    statusCode === 429 ? 5 * 60_000 :   // rate-limited → 5 min
+    statusCode === 503 ? 2 * 60_000 :   // overloaded  → 2 min
+    statusCode === 401 ? 12 * 60 * 60_000 : // auth error  → 12 hours (invalid key)
     30_000;                          // other error → 30 s
   unhealthyUntil.set(id, Date.now() + durationMs);
+  console.log(`[pm-llm] Key ID ${id} marked unhealthy (status: ${status}) for ${durationMs / 60_000} minutes.`);
 }
 
 // ─── Key loading ─────────────────────────────────────────────────────────────
@@ -171,7 +174,7 @@ async function callOllama(key: LlmKey, prompt: string): Promise<string> {
       keep_alive: "30m",
       options: { num_predict: 512 },
     }),
-    signal: AbortSignal.timeout(30_000),
+    signal: AbortSignal.timeout(env.ollamaTimeoutMs ?? 30_000),
   });
 
   if (!res.ok) {
