@@ -255,7 +255,13 @@ export class LiquidityEngine extends EventEmitter {
   private notifyTelegram(ev: LiquidityEvent) {
     const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const text = `🚨 <b>[${ev.priority}] ${esc(ev.symbol)} Liquidity Alert</b>\n\n<b>Type:</b> ${esc(ev.type.replace(/_/g, " "))}\n<b>Message:</b> ${esc(ev.message)}`;
-    broadcastTelegramAlert(text).catch(err => console.error("Failed to broadcast telegram alert", err));
+    
+    // Only sweeps (BUY_SIDE_SWEEP, SELL_SIDE_SWEEP) are treated as high-conviction bypass alerts.
+    // Extreme absorption (even if marked SSS) is filtered out when the Telegram toggle is disabled.
+    const isHighPriority = ev.type === "BUY_SIDE_SWEEP" || ev.type === "SELL_SIDE_SWEEP";
+    broadcastTelegramAlert(text, { isLiquidityAlert: true, isHighPriority }).catch(err => 
+      console.error("Failed to broadcast telegram alert", err)
+    );
   }
 }
 

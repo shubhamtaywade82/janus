@@ -228,3 +228,6 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
   - Upgraded buy/sell action buttons to use linear gradients (`from-j-up to-j-up/90` and `from-j-down to-j-down/90`), subtle shadow accents, and active click shrink transitions (`active:scale-[0.98]`).
   - Implemented a collapsible right sidebar (toggles `w-80` / `w-0` and persists state via `localStorage`), featuring a floating chevron handle button centered on its left border for seamless folding to maximize chart workspace.
   - Added modern hover borders and ring focus highlights to strategy selectors and order input fields.
+* **Telegram Priority Routing & Bug Fix**: Fixed a bug where disabling the "Enable Liquidity Alerts to Telegram" toggle blocked all Telegram messaging (price rules, structural signals, etc.). Refactored `broadcastTelegramAlert` to accept options. Standard alerts always deliver, while liquidity alerts are filtered except for high-conviction `SSS` sweeps (Buy-Side/Sell-Side Sweeps), which bypass the disabled toggle to prevent missing critical trend reversals.
+* **Server Reload**: Recompiled the production backend bundle and gracefully restarted the `janus-bot` PM2 process to apply the updated priority-based Telegram filtering rules.
+

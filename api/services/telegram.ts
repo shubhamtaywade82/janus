@@ -86,7 +86,10 @@ export async function testTelegramConnection(botToken: string, chatId: string): 
  * Broadcasts an alert message to the primary Telegram chat by fetching credentials from the DB.
  * Enforces global rate limiting — excess calls are silently dropped.
  */
-export async function broadcastTelegramAlert(text: string): Promise<boolean> {
+export async function broadcastTelegramAlert(
+  text: string,
+  options?: { isLiquidityAlert?: boolean; isHighPriority?: boolean }
+): Promise<boolean> {
   try {
     const db = getDb();
     const user = await db
@@ -100,10 +103,15 @@ export async function broadcastTelegramAlert(text: string): Promise<boolean> {
 
     if (!user || user.length === 0) return false;
     const settings = user[0];
-    if (!settings.telegramLiquidityAlertsEnabled) {
-      // Swallowed silently to avoid spamming the log files every few seconds
-      return false;
+
+    // If it's a liquidity alert, only filter out if the toggle is disabled AND it's not high priority.
+    // Non-liquidity alerts (user price rules, structural system signals, account alerts) always pass through.
+    if (options?.isLiquidityAlert) {
+      if (!settings.telegramLiquidityAlertsEnabled && !options.isHighPriority) {
+        return false;
+      }
     }
+
     if (!settings.telegramBotToken || !settings.telegramChatId) return false;
 
     return sendTelegramMessage({
