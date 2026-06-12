@@ -208,4 +208,14 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **Symbol-Specific Minimum Stop-Loss**: Centralized symbol-specific minimum stop-loss percentage configs in `contracts/constants.ts` (`SYMBOL_MIN_SL_PCT`), customized to matching volatility behaviors (e.g. DOGEUSDT: 0.50%, SOLUSDT: 0.40%, BTCUSDT: 0.25%, ETHUSDT: 0.30%, XRPUSDT: 0.30%). Integrated these symbol-specific constraints in the auto-executor sizing logic (`auto-executor.ts`) and the position manager stop-loss calculator (`sl-calculator.ts`).
 * **Paper Take-Profit Retention**: Added `takeProfit` to the `orders` database schema (synchronized via `npm run db:push` and cleaned up unused imports in `db/schema.ts` to pass tsc check). Wired `takeProfit` preservation from the auto-executor enqueuing stage down to the execution worker, preventing paper positions from losing their target take profit value and forcing `ensureProtection` to recalculate it.
 
+### [2026-06-12] Portfolio Page Live/Paper Isolation, Closed PnL Freeze & Margin/Precision Fixes
+* **Closed Position PnL Freeze**: Fixed `PositionRow` component in `Portfolio.tsx` to check if a position's status is open. Closed or liquidated positions now display their frozen exit price and realized PnL from the database, rather than subscribing to and calculating from the live ticker stream.
+* **Precision Formatting Fallback**: Integrated the `getPriceDecimals(symbol)` helper in the `PositionRow`'s Current price column so that closed positions (which lack a streamed `basePrecision` field) default to their symbol-specific decimals (e.g., 4 for XRP, 5 for DOGE) instead of rounding down to 2 decimals.
+* **Open Positions Logic Simplification**: Removed the redundant `allDbOpenPositions` query entirely. Extracted open positions by filtering directly from the real-time streamed `portfolio?.positions` property (using `!p.isPaper` for live, and `p.isPaper` for paper). This ensures paper open positions display with active, real-time ticker updates.
+* **Tax Metrics Isolation**: Modified `closedPositions` and `liquidatedPositions` queries used in the India VDA tax estimator to explicitly pass `isPaper: false`. This ensures virtual paper trades do not affect real VDA tax computations.
+* **Recent Trades Isolation**: Hidden the `Recent Trades` filled orders panel when viewing the Paper tab to prevent CoinDCX live trade logs from leaking into the Paper trading view.
+* **Reconciler Margin Calculation Fix**: Fixed `position-reconciler.ts` so that auto-imported orphan positions have their margins computed as `(size * entryPrice) / leverage` when exchange-reported margin is missing or zero. Corrected the margin column of 469 existing positions in the database via a one-off migration script.
+
+
+
 

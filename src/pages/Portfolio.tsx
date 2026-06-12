@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
-import { formatPrice, formatQty } from "@/utils/precision";
+import { formatPrice, formatQty, getPriceDecimals } from "@/utils/precision";
 
 // ─── Position Row ───
 const PositionRow = ({
@@ -32,20 +32,23 @@ const PositionRow = ({
   isClosing: boolean;
   usdtInrRate: number;
 }) => {
+  const isOpen = position.status === "open";
   const entryPrice = parseFloat(position.entryPrice || "0");
   const backendPrice = parseFloat(position.currentPrice || "0");
-  const livePriceVal = (livePrice && livePrice > 0 && !isNaN(livePrice)) ? livePrice : null;
+  const livePriceVal = (isOpen && livePrice && livePrice > 0 && !isNaN(livePrice)) ? livePrice : null;
   const dbPriceVal = (backendPrice > 0 && !isNaN(backendPrice)) ? backendPrice : null;
   const currentPrice = livePriceVal ?? dbPriceVal ?? entryPrice;
   const size = parseFloat(position.size || "0");
   const marginCurrency = position.marginCurrency || "USDT";
 
-  // Use live price for real-time PnL when available; fall back to backend-provided value
-  const pnl = currentPrice > 0
-    ? (position.side === "long"
-        ? (currentPrice - entryPrice) * size
-        : (entryPrice - currentPrice) * size)
-    : parseFloat(position.unrealizedPnl || "0");
+  // Use live price for real-time PnL when available (open positions only); otherwise use static realized PnL
+  const pnl = isOpen
+    ? (currentPrice > 0
+        ? (position.side === "long"
+            ? (currentPrice - entryPrice) * size
+            : (entryPrice - currentPrice) * size)
+        : parseFloat(position.unrealizedPnl || "0"))
+    : parseFloat(position.realizedPnl || "0");
   const isProfit = pnl >= 0;
   const margin = parseFloat(position.margin || "0");
   const roe = margin > 0 ? (pnl / margin) * 100 : parseFloat(position.roe || "0");
@@ -117,7 +120,7 @@ const PositionRow = ({
         {formatPrice(position.entryPrice, position.symbol, position.basePrecision)}
       </td>
       <td className={cn("px-3 py-2 text-xs text-[#f4f4f5] tabular-nums rounded", priceFlash)}>
-        <AnimatedNumber value={currentPrice} decimals={position.basePrecision ?? 2} duration={200} />
+        <AnimatedNumber value={currentPrice} decimals={position.basePrecision ?? getPriceDecimals(position.symbol)} duration={200} />
       </td>
       <td className="px-3 py-2 text-[10px] tabular-nums">
         <div className="flex flex-col gap-0.5">
@@ -371,26 +374,9 @@ export default function Portfolio() {
     { enabled: statusFilter !== "open" && statusFilter !== "equity_curve", refetchInterval: 10000 }
   );
 
-  // Always-on direct DB query for paper positions — independent of portfolioStream
-  const { data: allDbOpenPositions } = trpc.trading.positions.useQuery(
-    { status: "open" },
-    { refetchInterval: 5000 }
-  );
-  const paperPositions = (allDbOpenPositions || []).filter((p: any) => p.isPaper);
-  const livePositionsFromStream: any[] = (portfolio?.positions || []).filter((p: any) => !p.isPaper);
-  const livePositionsFromDb = (allDbOpenPositions || []).filter((p: any) => !p.isPaper);
-
-  // Merge live positions: stream (exchange real-time) + DB fallback for IDs not in stream
-  const streamLiveIds = new Set(livePositionsFromStream.map((p: any) => p.id));
-  const livePositionsOnlyDb = livePositionsFromDb.filter((p: any) => !streamLiveIds.has(p.id));
-
-  // Deduplicate by composite key to handle duplicate IDs from backend merge bugs
-  const livePosMap = new Map<string, any>();
-  for (const p of [...livePositionsFromStream, ...livePositionsOnlyDb]) {
-    const key = `${p.id}-${p.symbol}-${p.side}`;
-    if (!livePosMap.has(key)) livePosMap.set(key, p);
-  }
-  const openLivePositions = Array.from(livePosMap.values());
+  const openPositions: any[] = portfolio?.positions || [];
+  const openLivePositions = useMemo(() => openPositions.filter((p: any) => !p.isPaper), [openPositions]);
+  const paperPositions = useMemo(() => openPositions.filter((p: any) => p.isPaper), [openPositions]);
 
   // Paper wallet stats from auto-executor
   const { data: paperWalletData } = trpc.autoExecutor.paperWallet.useQuery(
@@ -398,13 +384,9 @@ export default function Portfolio() {
     { refetchInterval: 5000 }
   );
 
-  const openPositions: any[] = portfolio?.positions || [];
   const symbols = useMemo(
-    () => [...new Set([
-      ...openPositions.map((p: any) => p.symbol as string),
-      ...paperPositions.map((p: any) => p.symbol as string),
-    ])],
-    [openPositions, paperPositions]
+    () => [...new Set(openPositions.map((p: any) => p.symbol as string))],
+    [openPositions]
   );
 
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
@@ -420,18 +402,18 @@ export default function Portfolio() {
       ? openLivePositions
       : paperPositions;
 
-  // Query historical positions and trades for tax metrics
+  // Query historical positions and trades for tax metrics (always live only)
   const { data: closedPositions } = trpc.trading.positions.useQuery(
-    { status: "closed" },
+    { status: "closed", isPaper: false },
     { refetchInterval: 30000 }
   );
   const { data: liquidatedPositions } = trpc.trading.positions.useQuery(
-    { status: "liquidated" },
+    { status: "liquidated", isPaper: false },
     { refetchInterval: 30000 }
   );
   const { data: tradeHistory } = trpc.trading.trades.useQuery(
     {},
-    { refetchInterval: 30000 }
+    { enabled: portfolioMode === "live", refetchInterval: 30000 }
   );
 
   const taxMetrics = useMemo(() => {
@@ -920,8 +902,8 @@ export default function Portfolio() {
             </div>
           </div>
 
-          {/* Recent Trades */}
-          {portfolio && portfolio.recentTrades.length > 0 && (
+          {/* Recent Trades (Live only) */}
+          {portfolioMode === "live" && portfolio && portfolio.recentTrades.length > 0 && (
             <div className="bg-[#18181b] border border-[#27272a] rounded-lg overflow-hidden">
               <div className="px-4 py-2 border-b border-[#27272a]">
                 <span className="text-xs font-semibold text-[#f4f4f5]">Recent Trades</span>

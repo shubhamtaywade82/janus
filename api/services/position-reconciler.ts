@@ -158,7 +158,8 @@ class PositionReconciler {
         const markPrice = parseFloat(lp.mark_price || "0");
         const entryPrice = parseFloat(lp.entry_price || lp.avg_entry_price || "0") || markPrice;
         const leverage = parseInt(lp.leverage || "1");
-        const margin = parseFloat(lp.position_margin || "0");
+        const calculatedMargin = (Math.abs(qty) * entryPrice) / leverage;
+        const margin = parseFloat(lp.locked_margin || lp.locked_user_margin || lp.position_margin || "0") || calculatedMargin;
 
         if (entryPrice <= 0) {
           console.warn(`[reconciler] Skipping orphan import for ${pair}: zero entry price`);
