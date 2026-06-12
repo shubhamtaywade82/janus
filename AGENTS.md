@@ -218,4 +218,13 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 
 
 
-
+### [2026-06-12] Premium Dashboard Visual Upgrades & Typography pairing
+* **Typography Refactoring**: Loaded `Inter` (sans-serif) for general UI labels, controls, actions and text descriptions. Defined `.font-mono` pointing to `JetBrains Mono` (monospace) for all numeric values, tickers, order book rows, and calculation stats to ensure perfect tabular alignment.
+* **Glassmorphism & Depth**: Softened rigid solid borders (`#27272a` → `border-white/[0.06]`) and added background opacity layering across the top header and side panels.
+* **Desktop Navigation & Collapsible Sidebar**: Added a collapsible navigation sidebar with smooth width transition (toggles `w-16` / `w-52` and persists state via `localStorage`). Icons show text labels and an expanded user profile block when open. Added a vertical green indicator strip (`bg-j-up`) that dynamically aligns to the left of the active sidebar navigation item. Styled connection feeds in the top bar into capsule tag badges ("Binance Feed", "CoinDCX Exec", "Live").
+* **Ticker Tag Glow**: Replaced the solid active ticker border in the Ticker Strip with a glowing gradient badge (`border-amber-500/70 bg-amber-500/10 shadow-[0_0_8px_rgba(245,158,11,0.12)]`).
+* **Tactile Inputs & Buttons**:
+  - Replaced standard native HTML select dropdowns with a styled custom component with structured chevrons and hover animations.
+  - Upgraded buy/sell action buttons to use linear gradients (`from-j-up to-j-up/90` and `from-j-down to-j-down/90`), subtle shadow accents, and active click shrink transitions (`active:scale-[0.98]`).
+  - Implemented a collapsible right sidebar (toggles `w-80` / `w-0` and persists state via `localStorage`), featuring a floating chevron handle button centered on its left border for seamless folding to maximize chart workspace.
+  - Added modern hover borders and ring focus highlights to strategy selectors and order input fields.

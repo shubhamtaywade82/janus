@@ -96,8 +96,8 @@
     @apply border-border;
   }
   body {
-    @apply bg-background text-foreground;
-    font-family: ui-monospace, SFMono-Regular, 'Roboto Mono', 'Cascadia Code', 'Fira Code', monospace;
+    @apply bg-background text-foreground antialiased;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   }
 }
 
@@ -115,6 +115,9 @@
   .border-janus-green { border-color: hsl(var(--janus-up)); }
   .border-janus-red   { border-color: hsl(var(--janus-down)); }
 
+  .font-mono {
+    font-family: 'JetBrains Mono', ui-monospace, SFMono-Regular, 'Roboto Mono', monospace;
+  }
   .tabular-nums { font-variant-numeric: tabular-nums; }
 
   .scrollbar-thin {

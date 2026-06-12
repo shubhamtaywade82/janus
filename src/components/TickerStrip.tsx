@@ -31,15 +31,31 @@ export const TickerStrip = ({ activeSymbol, onSelectSymbol }: { activeSymbol: st
   const tickerList = supportedSymbols.map((s) => tickersMap[s]).filter(Boolean);
 
   return (
-    <div className="flex items-center gap-3 px-4 py-1.5 border-b border-[#27272a] bg-[#09090b] overflow-x-auto scrollbar-thin">
+    <div className="flex items-center gap-3 px-4 py-1.5 border-b border-white/[0.06] bg-[#09090b] overflow-x-auto scrollbar-thin">
       {supportedSymbols.map((symbol) => <TickerStreamSubscriber key={symbol} symbol={symbol} onUpdate={handleTickerUpdate} />)}
       {tickerList.map((t: any) => {
         const isActive = t.symbol === activeSymbol;
         return (
-          <button key={t.symbol} onClick={() => onSelectSymbol(t.symbol)} className={cn("flex items-center gap-2 flex-shrink-0 px-2 py-0.5 rounded transition-all hover:bg-[#27272a]/30 border text-left", isActive ? "border-[#f59e0b] bg-[#f59e0b]/5" : "border-transparent")}>
-            <span className={cn("text-[10px] font-semibold", isActive ? "text-[#f59e0b]" : "text-[#71717a]")}>{t.symbol}</span>
-            <span className="text-[10px] tabular-nums text-[#f4f4f5]"><AnimatedNumber value={parseFloat(t.lastPrice)} decimals={getPriceDecimals(t.symbol)} duration={150} /></span>
-            <span className={cn("text-[10px] tabular-nums", parseFloat(t.priceChangePercent) >= 0 ? "text-j-up" : "text-j-down")}>{parseFloat(t.priceChangePercent) >= 0 ? "+" : ""}{parseFloat(t.priceChangePercent).toFixed(2)}%</span>
+          <button
+            key={t.symbol}
+            onClick={() => onSelectSymbol(t.symbol)}
+            className={cn(
+              "flex items-center gap-2 flex-shrink-0 px-2.5 py-1 rounded-md transition-all border text-left text-[10px]",
+              isActive
+                ? "border-amber-500/70 bg-amber-500/10 shadow-[0_0_8px_rgba(245,158,11,0.12)]"
+                : "border-zinc-800/60 bg-zinc-900/20 hover:bg-zinc-800/30 hover:border-zinc-700/50"
+            )}
+          >
+            <span className={cn("font-semibold", isActive ? "text-amber-500" : "text-[#71717a]")}>
+              {t.symbol}
+            </span>
+            <span className="font-mono tabular-nums text-[#f4f4f5]">
+              <AnimatedNumber value={parseFloat(t.lastPrice)} decimals={getPriceDecimals(t.symbol)} duration={150} />
+            </span>
+            <span className={cn("font-mono tabular-nums font-medium", parseFloat(t.priceChangePercent) >= 0 ? "text-j-up" : "text-j-down")}>
+              {parseFloat(t.priceChangePercent) >= 0 ? "+" : ""}
+              {parseFloat(t.priceChangePercent).toFixed(2)}%
+            </span>
           </button>
         );
       })}
