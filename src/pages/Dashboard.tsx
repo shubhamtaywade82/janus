@@ -677,10 +677,10 @@ const Dashboard = () => {
           {/* Toggle Button Handle */}
           <button
             onClick={() => setIsRightSidebarCollapsed(prev => !prev)}
-            className="absolute top-1/2 -translate-y-1/2 -left-4 w-4 h-12 bg-zinc-950 border border-white/[0.06] border-r-0 rounded-l-md flex items-center justify-center text-zinc-500 hover:text-zinc-300 hover:bg-zinc-900 transition-all cursor-pointer shadow-lg z-30"
+            className="absolute top-[30%] -translate-y-1/2 -left-5 w-5 h-14 bg-zinc-900 border border-zinc-700/80 border-r-0 rounded-l-md flex items-center justify-center text-zinc-400 hover:text-zinc-100 hover:bg-zinc-800 transition-all cursor-pointer shadow-[0_4px_12px_rgba(0,0,0,0.5)] hover:border-zinc-500/80 z-30"
             title={isRightSidebarCollapsed ? "Expand Panel" : "Collapse Panel"}
           >
-            {isRightSidebarCollapsed ? <ChevronLeft size={11} className="stroke-[3]" /> : <ChevronRight size={11} className="stroke-[3]" />}
+            {isRightSidebarCollapsed ? <ChevronLeft size={12} className="stroke-[3]" /> : <ChevronRight size={12} className="stroke-[3]" />}
           </button>
 
           {/* Sidebar Content (masked when collapsed) */}
