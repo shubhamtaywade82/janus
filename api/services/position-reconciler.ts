@@ -143,54 +143,60 @@ class PositionReconciler {
       }
     }
 
-    // Orphan detection: exchange has a position that DB doesn't know about
-    const dbSymbols = new Set(dbOpen.map((p) => `B-${p.symbol.replace("USDT", "_USDT")}`));
-    for (const [pair, lp] of liveByPair) {
-      const qty = parseFloat(lp.active_pos ?? lp.quantity ?? "0");
-      if (qty !== 0 && !dbSymbols.has(pair)) {
-        const symbol = pair.replace("B-", "").replace("_", "");
-        console.log(
-          `[reconciler] AUTO-IMPORTING ORPHAN POSITION: ${pair} qty=${qty}`
-        );
-        
-        // Use exchange data to create DB entry
-        const side = parseFloat(lp.active_pos) > 0 ? "long" : "short";
-        const markPrice = parseFloat(lp.mark_price || "0");
-        const entryPrice = parseFloat(lp.entry_price || lp.avg_entry_price || "0") || markPrice;
-        const leverage = parseInt(lp.leverage || "1");
-        const calculatedMargin = (Math.abs(qty) * entryPrice) / leverage;
-        const margin = parseFloat(lp.locked_margin || lp.locked_user_margin || lp.position_margin || "0") || calculatedMargin;
+    // Orphan detection: exchange has a position that DB doesn't know about.
+    // Only auto-import orphans if the bot is allowed to place orders (live trade mode).
+    // In paper mode or monitor mode, we do not want to auto-import live positions
+    // since we cannot execute orders to close them, which would cause an infinite
+    // loop of DB imports and virtual closures.
+    if (env.placeOrders) {
+      const dbSymbols = new Set(dbOpen.map((p) => `B-${p.symbol.replace("USDT", "_USDT")}`));
+      for (const [pair, lp] of liveByPair) {
+        const qty = parseFloat(lp.active_pos ?? lp.quantity ?? "0");
+        if (qty !== 0 && !dbSymbols.has(pair)) {
+          const symbol = pair.replace("B-", "").replace("_", "");
+          console.log(
+            `[reconciler] AUTO-IMPORTING ORPHAN POSITION: ${pair} qty=${qty}`
+          );
+          
+          // Use exchange data to create DB entry
+          const side = parseFloat(lp.active_pos) > 0 ? "long" : "short";
+          const markPrice = parseFloat(lp.mark_price || "0");
+          const entryPrice = parseFloat(lp.entry_price || lp.avg_entry_price || "0") || markPrice;
+          const leverage = parseInt(lp.leverage || "1");
+          const calculatedMargin = (Math.abs(qty) * entryPrice) / leverage;
+          const margin = parseFloat(lp.locked_margin || lp.locked_user_margin || lp.position_margin || "0") || calculatedMargin;
 
-        if (entryPrice <= 0) {
-          console.warn(`[reconciler] Skipping orphan import for ${pair}: zero entry price`);
-          continue;
-        }
+          if (entryPrice <= 0) {
+            console.warn(`[reconciler] Skipping orphan import for ${pair}: zero entry price`);
+            continue;
+          }
 
-        try {
-          await db.insert(positions).values({
-            userId: 1,
-            symbol,
-            side,
-            entryPrice: String(entryPrice),
-            currentPrice: String(markPrice || entryPrice),
-            size: String(Math.abs(qty)),
-            leverage,
-            margin: String(margin),
-            status: "open",
-            isPaper: false,
-            exchangeOrderId: String(lp.id || lp.order_id || ""),
-            entryReason: "Auto-imported: Orphan live position detected during reconciliation",
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          });
+          try {
+            await db.insert(positions).values({
+              userId: 1,
+              symbol,
+              side,
+              entryPrice: String(entryPrice),
+              currentPrice: String(markPrice || entryPrice),
+              size: String(Math.abs(qty)),
+              leverage,
+              margin: String(margin),
+              status: "open",
+              isPaper: false,
+              exchangeOrderId: String(lp.id || lp.order_id || ""),
+              entryReason: "Auto-imported: Orphan live position detected during reconciliation",
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            });
 
-          await broadcastTelegramAlert(
-            `✅ <b>Live Position Imported:</b> ${symbol} ${side.toUpperCase()}\n` +
-            `Size: ${Math.abs(qty)}, Entry: ${entryPrice}\n` +
-            ` Janus is now tracking and managing this position.`
-          ).catch(() => {});
-        } catch (err) {
-          console.error(`[reconciler] Failed to import orphan position ${pair}:`, err);
+            await broadcastTelegramAlert(
+              `✅ <b>Live Position Imported:</b> ${symbol} ${side.toUpperCase()}\n` +
+              `Size: ${Math.abs(qty)}, Entry: ${entryPrice}\n` +
+              ` Janus is now tracking and managing this position.`
+            ).catch(() => {});
+          } catch (err) {
+            console.error(`[reconciler] Failed to import orphan position ${pair}:`, err);
+          }
         }
       }
     }

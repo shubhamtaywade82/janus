@@ -36,7 +36,12 @@ import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
 import type { ExitDecision } from "./exit-manager";
 import { snapshotEquity } from "./performance-tracker";
-import { getPaperWallet, releasePaperMargin, getPaperEquity } from "./paper-wallet";
+import { getPaperWallet, getPaperEquity } from "./paper-wallet";
+import {
+  lockPaperPositionMargin,
+  releasePaperPositionMargin,
+  walletToUsdt,
+} from "./paper-currency";
 import { env, coinDCXEnvCreds } from "../lib/env";
 import { decryptCreds } from "../lib/crypto";
 import { recordPositionTransaction, estimateFee } from "./position-manager/transaction-ledger";
@@ -263,7 +268,7 @@ export class AutoExecutor {
     targetSymbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"],
     defaultSizeUsdt: "50",
     defaultLeverage: 3,
-    capitalAllocationPct: "0.150",   // 15% base allocation (dynamic, conviction-scaled)
+    capitalAllocationPct: "0.250",   // 25% base allocation for paper (dynamic, conviction-scaled)
     useStrategyLeverage: true,        // use STRATEGY_CONFIGS leverage per regime
     stopLossPct: "0.015",
     tp1Pct: "0.015",
@@ -691,15 +696,23 @@ private async calculateSizing(params: {
   advisorAdvice?: any;
 }) {
   const { signal, config, context, currentPrice, brainResult, advisorAdvice } = params;
-  const { side, walletFree, session } = context;
+  const { side, walletFree, session, isPaperMode } = context;
   const sigMetadata = signal.metadata as Record<string, any> | null;
   const regimeData = latestRegimeCache.get("BTCUSDT");
   const strategyType = (regimeData?.strategy ?? "intraday") as StrategyType;
+  const paperCurrency = (config.paperCurrency as "USDT" | "INR") ?? "INR";
 
   const isManualOverride = sigMetadata?.sizeUsdt !== undefined && sigMetadata.sizeUsdt !== null;
-  const availEquity = walletFree || session.startingBalance;
-  const baseAllocPct = parseFloat(config.capitalAllocationPct ?? "0.15");
-  const MAX_ALLOC_PCT = 0.15;
+  const availEquityRaw = walletFree || session.startingBalance;
+  const availEquityUsdt = isPaperMode
+    ? await walletToUsdt(availEquityRaw, paperCurrency)
+    : availEquityRaw;
+  const baseAllocPct = parseFloat(
+    config.capitalAllocationPct ?? (isPaperMode ? "0.250" : "0.150")
+  );
+  const maxAllocPct = isPaperMode
+    ? Math.max(baseAllocPct, 0.30)
+    : Math.min(baseAllocPct, 0.20);
 
   const score = parseFloat(signal.compositeScore) || 75;
   const scoreMult = Math.max(0.7, Math.min(1.0, 0.7 + 0.3 * ((score - 75) / 25)));
@@ -712,14 +725,14 @@ private async calculateSizing(params: {
 
   let notional = isManualOverride
     ? parseFloat(String(sigMetadata!.sizeUsdt))
-    : availEquity * baseAllocPct * convictionMult;
+    : availEquityUsdt * baseAllocPct * convictionMult;
 
   if (brainHasAuthority && brainResult?.adjustedSizeUsdt) {
     notional = brainResult.adjustedSizeUsdt;
   }
 
   if (!isManualOverride) {
-    notional = Math.min(notional, availEquity * MAX_ALLOC_PCT);
+    notional = Math.min(notional, availEquityUsdt * maxAllocPct);
   }
 
   const strategyMaxLev = STRATEGY_CONFIGS[strategyType]?.maxLeverage ?? 5;
@@ -904,14 +917,24 @@ private async executePosition(params: {
       .div(new Decimal(params.leverage))
       .toFixed(8);
 
-    await WalletLedgerService.lockMargin(
-      params.userId,
-      params.isPaper ? "paper" : "live",
-      currency,
-      marginAllocation,
-      orderId,
-      "order"
-    );
+    if (params.isPaper) {
+      await lockPaperPositionMargin(
+        params.userId,
+        parseFloat(marginAllocation),
+        orderId,
+        currency,
+        "order"
+      );
+    } else {
+      await WalletLedgerService.lockMargin(
+        params.userId,
+        "live",
+        currency,
+        marginAllocation,
+        orderId,
+        "order"
+      );
+    }
 
     // 4. Execution path
     if (params.isPaper) {
@@ -1119,7 +1142,13 @@ private async executePosition(params: {
     if (position.isPaper) {
       const cfg = await this.getConfig();
       const paperCurrency = (position.marginCurrency as "USDT" | "INR") ?? (cfg?.paperCurrency as "USDT" | "INR") ?? "INR";
-      await releasePaperMargin(position.userId, parseFloat(position.margin), realizedPnl, position.id, paperCurrency);
+      await releasePaperPositionMargin(
+        position.userId,
+        parseFloat(position.margin),
+        realizedPnl,
+        position.id,
+        paperCurrency
+      );
     } else {
       console.log(`[auto-executor] Live position ${position.symbol} #${position.id} exit signal — DB updated, no exchange order placed (monitor-only)`);
     }

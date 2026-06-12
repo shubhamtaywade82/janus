@@ -2,6 +2,7 @@ import Decimal from "decimal.js";
 import { getDb } from "../queries/connection";
 import { tradingAccounts } from "@db/schema";
 import { and, eq } from "drizzle-orm";
+import { usdtToWallet } from "./paper-currency";
 
 Decimal.set({ precision: 30, rounding: Decimal.ROUND_HALF_UP });
 
@@ -35,7 +36,10 @@ export class RiskManager {
     const side = params.side.toUpperCase();
 
     const notionalValue = qty.mul(price);
-    const requiredMargin = notionalValue.div(leverage);
+    let requiredMargin = notionalValue.div(leverage);
+    if (isPaper && currency === "INR") {
+      requiredMargin = new Decimal(await usdtToWallet(requiredMargin.toNumber(), "INR"));
+    }
 
     const db = getDb();
     // Query existing tradingAccounts instead of the wallets table (using exact mode and currency)

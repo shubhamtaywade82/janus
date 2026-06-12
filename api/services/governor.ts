@@ -19,6 +19,7 @@ import { isFundingExtreme } from "./funding-filter";
 import { checkCorrelation } from "./correlation-guard";
 import { globalRiskEngine, type RiskSession } from "./risk-engine";
 import { knnSnapshotCache } from "./knn-supertrend";
+import { walletToUsdt } from "./paper-currency";
 
 export interface GovernorContext {
   signal: Signal;
@@ -82,14 +83,28 @@ export class Governor {
       return { approved: false, gate: "kill_switch", reason: "kill switch active" };
     }
 
-    // Gate 3: duplicate open position
+    // Gate 3: duplicate open position (paper/live isolated; paper allows same-side pyramiding via PM)
     const db = getDb();
     const existing = await db
-      .select({ id: positions.id })
+      .select({ id: positions.id, side: positions.side })
       .from(positions)
-      .where(and(eq(positions.userId, 1), eq(positions.symbol, symbol), eq(positions.status, "open")))
+      .where(
+        and(
+          eq(positions.userId, 1),
+          eq(positions.symbol, symbol),
+          eq(positions.status, "open"),
+          isPaperMode ? eq(positions.isPaper, true) : eq(positions.isPaper, false)
+        )
+      )
       .limit(1);
     if (existing.length > 0) {
+      if (isPaperMode && existing[0].side === side) {
+        return {
+          approved: false,
+          gate: "duplicate_position",
+          reason: "same-side paper position open — scale in via position manager",
+        };
+      }
       return { approved: false, gate: "duplicate_position", reason: "position already open" };
     }
 
@@ -123,16 +138,29 @@ export class Governor {
       };
     }
 
-    // Gate 7: risk engine
+    // Gate 7: risk engine (wallet values normalized to USDT for sizing checks)
     const isManualOverride = metadata?.sizeUsdt !== undefined && metadata.sizeUsdt !== null;
     const sizeUsdt = isManualOverride
       ? parseFloat(String(metadata.sizeUsdt))
       : parseFloat(config.defaultSizeUsdt ?? "50");
+    const paperCurrency = (config.paperCurrency as "USDT" | "INR") ?? "INR";
+    const walletBalanceUsdt = isPaperMode
+      ? await walletToUsdt(walletFree || session.startingBalance, paperCurrency)
+      : walletFree || session.startingBalance;
+    const walletLockedUsdt = isPaperMode
+      ? await walletToUsdt(walletLocked, paperCurrency)
+      : walletLocked;
+    const allocPct = parseFloat(
+      config.capitalAllocationPct ?? (isPaperMode ? "0.250" : "0.150")
+    );
+    const riskNotional = isManualOverride
+      ? sizeUsdt
+      : walletBalanceUsdt * allocPct;
 
     const riskCheck = globalRiskEngine.checkTradeAllowed(session, {
-      notional: sizeUsdt,
-      walletBalance: walletFree || session.startingBalance,
-      usedMargin: walletLocked,
+      notional: riskNotional,
+      walletBalance: walletBalanceUsdt,
+      usedMargin: walletLockedUsdt,
       isManualOverride,
     });
     if (!riskCheck.approved) {

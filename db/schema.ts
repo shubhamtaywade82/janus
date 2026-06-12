@@ -327,7 +327,7 @@ export const autoExecutorConfig = pgTable("auto_executor_config", {
   llmConfidenceThreshold: integer("llm_confidence_threshold").default(70),
   maxPositionsPerSymbol: integer("max_positions_per_symbol").default(1),
   maxTotalPositions: integer("max_total_positions").default(3),
-  capitalAllocationPct: decimal("capital_allocation_pct", { precision: 5, scale: 3 }).default("0.100"), // fraction of free balance per trade, e.g. 0.100 = 10%
+  capitalAllocationPct: decimal("capital_allocation_pct", { precision: 5, scale: 3 }).default("0.250"), // fraction of free balance per trade, e.g. 0.250 = 25%
   useStrategyLeverage: boolean("use_strategy_leverage").default(true).notNull(), // true = use STRATEGY_CONFIGS[strategy].maxLeverage, false = use defaultLeverage
   paperStartingBalance: decimal("paper_starting_balance", { precision: 12, scale: 2 }).default("100000"),
   paperCurrency: marginCurrencyEnum("paper_currency").default("INR").notNull(),

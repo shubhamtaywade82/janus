@@ -175,11 +175,15 @@ export function getIntensityColor(
   bar: CandleBar,
   mode: IntensityMode,
   bands: PercentileBands,
+  themeUpColor?: string,
+  themeDownColor?: string,
 ): IntensityColors {
   if (mode === "off") {
-    // Default flat candle colours — green/red with full opacity
+    // Default flat candle colours — green/red or theme colors
     const isBull = bar.close >= bar.open;
-    const c = isBull ? "rgba(14, 203, 129, 1)" : "rgba(246, 70, 93, 1)";
+    const up = themeUpColor || "rgba(14, 203, 129, 1)";
+    const down = themeDownColor || "rgba(246, 70, 93, 1)";
+    const c = isBull ? up : down;
     return { color: c, wickColor: c, borderColor: c };
   }
 
@@ -200,8 +204,10 @@ export function getLiveIntensityColor(
   bar: CandleBar,
   mode: IntensityMode,
   bands: PercentileBands,
+  themeUpColor?: string,
+  themeDownColor?: string,
 ): IntensityColors {
-  return getIntensityColor(bar, mode, bands);
+  return getIntensityColor(bar, mode, bands, themeUpColor, themeDownColor);
 }
 
 /**

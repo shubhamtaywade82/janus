@@ -12,7 +12,7 @@ import { isSlImprovement } from "./execution-manager";
 // May downgrade the action (e.g., SCALE_IN → KEEP_OPEN) if constraints not met.
 
 const MAX_CORRELATION_SAME_SIDE = 4;   // max open positions on same side
-const MIN_FREE_MARGIN_FOR_SCALE = 50;  // USDT
+const MIN_FREE_MARGIN_FOR_SCALE = 15;  // USDT (paper wallet values normalized to USDT in lifecycle)
 
 export interface PortfolioConstraints {
   availableBalance: number;
@@ -47,7 +47,7 @@ export function policyGuard(
     }
 
     const positionRisk = position.margin / portfolio.totalEquityUsdt;
-    if (positionRisk > 0.25) {
+    if (positionRisk > 0.40) {
       return {
         approved: false,
         action: PA.KEEP_OPEN,

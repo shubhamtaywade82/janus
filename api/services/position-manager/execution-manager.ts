@@ -8,10 +8,15 @@ import { createFuturesOrder, getFuturesInstrumentInfo } from "../coindcx";
 import { syncTrailingStopLoss } from "../trailing-stop";
 import { env } from "../../lib/env";
 import { getDb } from "../../queries/connection";
-import { positions, exchangeCredentials } from "@db/schema";
+import { positions, exchangeCredentials, autoExecutorConfig } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { decryptCreds } from "../../lib/crypto";
-import { releasePaperMargin } from "../paper-wallet";
+import {
+  lockPaperPositionMargin,
+  releasePaperPositionMargin,
+  walletToUsdt,
+} from "../paper-currency";
+import { getPaperWallet } from "../paper-wallet";
 import { recordPositionTransaction, estimateFee } from "../position-manager/transaction-ledger";
 
 /**
@@ -41,6 +46,29 @@ async function fetchCredentials(userId: number) {
     .limit(1);
   if (!cred) throw new Error(`No active credentials for user ${userId}`);
   return decryptCreds(cred);
+}
+
+async function paperWalletCurrency(userId: number): Promise<"USDT" | "INR"> {
+  const db = getDb();
+  const [cfg] = await db
+    .select({ paperCurrency: autoExecutorConfig.paperCurrency })
+    .from(autoExecutorConfig)
+    .where(eq(autoExecutorConfig.userId, userId))
+    .limit(1);
+  return (cfg?.paperCurrency as "USDT" | "INR") ?? "INR";
+}
+
+async function roundQty(symbol: string, qty: number): Promise<number> {
+  try {
+    const instrInfo = await getFuturesInstrumentInfo(symbol);
+    if (!instrInfo) return qty;
+    const stepSize = parseFloat(instrInfo.step ?? instrInfo.quantity_step ?? "0");
+    const targetPrecision = instrInfo.target_currency_precision ?? 4;
+    if (stepSize > 0) return Math.floor(qty / stepSize) * stepSize;
+    return parseFloat(qty.toFixed(targetPrecision));
+  } catch {
+    return qty;
+  }
 }
 
 export async function executeAction(
@@ -299,6 +327,10 @@ export async function executeAction(
           console.warn(`[execution-manager] Failed to fetch instrument info for precision mapping:`, err);
         }
 
+        if (exitQty <= 0) {
+          return { success: false, detail: "PARTIAL_EXIT skipped: exit quantity rounds to zero" };
+        }
+
         if (!position.isPaper) {
           if (!env.placeOrders) {
             return { success: false, detail: "PARTIAL_EXIT skipped: PLACE_ORDERS=false" };
@@ -343,8 +375,23 @@ export async function executeAction(
           .where(eq(positions.id, position.id));
 
         if (position.isPaper) {
-          const pCcy = (position.marginCurrency as "USDT" | "INR") ?? "USDT";
-          await releasePaperMargin(userId, marginReleased, partialPnl, position.id, pCcy);
+          const pCcy = (position.marginCurrency as "USDT" | "INR") ?? (await paperWalletCurrency(userId));
+          await releasePaperPositionMargin(
+            userId,
+            marginReleased,
+            partialPnl,
+            position.id,
+            pCcy
+          );
+        }
+
+        positionStore.updateQuantity(position.id, newQty, newMargin, undefined, nextRealized);
+        if (newQty <= 0) {
+          positionStore.updateLifecycleState(position.id, "CLOSED");
+          positionStore.remove(position.id);
+          positionManagerBus.emit("position:closed", position.id, recommendation.reasoning);
+        } else {
+          positionStore.updateLifecycleState(position.id, "MANAGED");
         }
 
         await recordPositionTransaction({
@@ -420,8 +467,14 @@ export async function executeAction(
           .where(eq(positions.id, position.id));
 
         if (position.isPaper) {
-          const pCcy = (position.marginCurrency as "USDT" | "INR") ?? "USDT";
-          await releasePaperMargin(userId, position.margin, realizedPnl, position.id, pCcy);
+          const pCcy = (position.marginCurrency as "USDT" | "INR") ?? (await paperWalletCurrency(userId));
+          await releasePaperPositionMargin(
+            userId,
+            position.margin,
+            realizedPnl,
+            position.id,
+            pCcy
+          );
         }
 
         await recordPositionTransaction({
@@ -455,11 +508,81 @@ export async function executeAction(
 
       // ── Scale in (add to position) ───────────────────────────────────
       case PA.SCALE_IN: {
-        // Scale-in is logged only — actual execution goes through auto-executor
-        // to respect all 8 gates. We emit an event for the executor to pick up.
+        if (!position.isPaper) {
+          positionManagerBus.emit("position:action-executed", position.id, action, "ok",
+            "Scale-in signal emitted to auto-executor");
+          return { success: true, detail: "Scale-in event emitted to auto-executor" };
+        }
+
+        const dbCfg = getDb();
+        const [cfg] = await dbCfg
+          .select({
+            capitalAllocationPct: autoExecutorConfig.capitalAllocationPct,
+            paperStartingBalance: autoExecutorConfig.paperStartingBalance,
+            paperCurrency: autoExecutorConfig.paperCurrency,
+          })
+          .from(autoExecutorConfig)
+          .where(eq(autoExecutorConfig.userId, userId))
+          .limit(1);
+        const paperCurrency = (cfg?.paperCurrency as "USDT" | "INR") ?? "INR";
+        const allocPct = parseFloat(cfg?.capitalAllocationPct ?? "0.250");
+        const scalePct = recommendation.exitSizePct ?? 0.5;
+        const startingBalance = parseFloat(cfg?.paperStartingBalance ?? "100000");
+        const pw = await getPaperWallet(userId, startingBalance, paperCurrency);
+        const equityUsdt = await walletToUsdt(pw.equity, paperCurrency);
+        const addNotionalUsdt = equityUsdt * allocPct * scalePct;
+        let addQty = addNotionalUsdt / position.markPrice;
+        addQty = await roundQty(position.symbol, addQty);
+
+        if (addQty <= 0) {
+          return { success: false, detail: "SCALE_IN skipped: add size rounds to zero" };
+        }
+
+        const addMargin = (addQty * position.markPrice) / position.leverage;
+        const newQty = position.quantity + addQty;
+        const newMargin = position.margin + addMargin;
+        const newEntry =
+          (position.entryPrice * position.quantity + position.markPrice * addQty) / newQty;
+
+        await lockPaperPositionMargin(userId, addMargin, position.id, paperCurrency, "position");
+
+        await db
+          .update(positions)
+          .set({
+            size: newQty.toFixed(8),
+            margin: newMargin.toFixed(8),
+            entryPrice: newEntry.toFixed(8),
+            updatedAt: new Date(),
+          })
+          .where(eq(positions.id, position.id));
+
+        await recordPositionTransaction({
+          positionId: position.id,
+          userId,
+          symbol: position.symbol,
+          type: "SCALE_IN",
+          side: position.side === "LONG" ? "long" : "short",
+          quantityBefore: position.quantity,
+          quantityAfter: newQty,
+          quantityDelta: addQty,
+          price: position.markPrice,
+          avgEntryPrice: newEntry,
+          realizedPnl: 0,
+          fee: estimateFee(position.markPrice * addQty),
+          marginBefore: position.margin,
+          marginAfter: newMargin,
+          metadata: {
+            addNotionalUsdt,
+            addQty,
+            scalePct,
+            isPaper: true,
+          },
+        });
+
+        positionStore.updateQuantity(position.id, newQty, newMargin, newEntry);
         positionManagerBus.emit("position:action-executed", position.id, action, "ok",
-          "Scale-in signal emitted to auto-executor");
-        return { success: true, detail: "Scale-in event emitted" };
+          `Scaled in ${addQty.toFixed(4)} @ ${position.markPrice.toFixed(4)}`);
+        return { success: true, detail: `Scale-in: added ${addQty.toFixed(4)} units` };
       }
 
       default:

@@ -139,6 +139,17 @@ const Dashboard = () => {
 
   const utils = trpc.useUtils();
 
+  // Refetch and backfill klines when tab becomes visible again (coming back from background)
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === "visible") {
+        utils.market.klines.invalidate({ symbol: selectedSymbol, interval });
+      }
+    };
+    document.addEventListener("visibilitychange", handleVisibility);
+    return () => document.removeEventListener("visibilitychange", handleVisibility);
+  }, [selectedSymbol, interval, utils]);
+
   // Lazy load older candles when user scrolls left past the start of loaded data
   const handleLoadMore = useCallback(async (beforeTime: number) => {
     try {

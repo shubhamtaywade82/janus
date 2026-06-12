@@ -21,6 +21,7 @@ import { eq, and, desc, gte as _gte } from "drizzle-orm";
 import { userPositionsCache, markPriceCache } from "../coindcx-ws";
 import { latestTickerCache } from "../streaming";
 import { getPaperWallet } from "../paper-wallet";
+import { walletToUsdt } from "../paper-currency";
 import { registerPositionForTrailing, syncTrailingStopLoss, isPositionTracked, unregisterPosition } from "../trailing-stop";
 import type { StrategyType } from "../strategy-config";
 // ─── Position Lifecycle Manager ──────────────────────────────────────────────
@@ -292,16 +293,20 @@ export class PositionLifecycleManager {
     if (openPositions.length === 0) return;
 
     // Fetch both portfolios (we track live even in paper mode)
-    const [paperBal, paperEq, liveBal, liveEq] = await Promise.all([
+    const [paperBal, paperEq, liveBal, liveEq, paperCurrency] = await Promise.all([
       this.fetchAvailableBalance(true),
       this.fetchTotalEquity(true),
       this.fetchAvailableBalance(false),
       this.fetchTotalEquity(false),
+      this.fetchPaperCurrency(),
     ]);
 
+    const paperBalUsdt = await walletToUsdt(paperBal, paperCurrency);
+    const paperEqUsdt = await walletToUsdt(paperEq, paperCurrency);
+
     const paperPortfolio = {
-      totalEquityUsdt: paperEq,
-      availableBalance: paperBal,
+      totalEquityUsdt: paperEqUsdt,
+      availableBalance: paperBalUsdt,
       totalUnrealizedPnl: positionStore.totalUnrealizedPnl(true),
       openPositionCount: openPositions.filter(p => p.isPaper).length,
     };
@@ -479,6 +484,20 @@ export class PositionLifecycleManager {
     this.assessmentHistory.push(record);
     if (this.assessmentHistory.length > this.MAX_HISTORY) {
       this.assessmentHistory.shift();
+    }
+  }
+
+  private async fetchPaperCurrency(): Promise<"USDT" | "INR"> {
+    try {
+      const db = getDb();
+      const [cfg] = await db
+        .select({ paperCurrency: autoExecutorConfig.paperCurrency })
+        .from(autoExecutorConfig)
+        .where(eq(autoExecutorConfig.userId, this.config.userId))
+        .limit(1);
+      return (cfg?.paperCurrency as "USDT" | "INR") ?? "INR";
+    } catch {
+      return "INR";
     }
   }
 

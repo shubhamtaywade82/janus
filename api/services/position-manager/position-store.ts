@@ -58,6 +58,31 @@ class PositionStore {
     positionManagerBus.emit("position:lifecycle-changed", id, prev, state);
   }
 
+  updateQuantity(
+    id: number,
+    quantity: number,
+    margin: number,
+    entryPrice?: number,
+    realizedPnl?: number
+  ): void {
+    const pos = this.store.get(id);
+    if (!pos) return;
+    const pnlMultiplier = pos.side === "LONG" ? 1 : -1;
+    const entry = entryPrice ?? pos.entryPrice;
+    const unrealizedPnl = pnlMultiplier * (pos.markPrice - entry) * quantity;
+    const roe = margin > 0 ? (unrealizedPnl / margin) * 100 : 0;
+    this.store.set(id, {
+      ...pos,
+      quantity,
+      margin,
+      entryPrice: entry,
+      unrealizedPnl,
+      roe,
+      realizedPnl: realizedPnl ?? pos.realizedPnl,
+      updatedAt: new Date(),
+    });
+  }
+
   updateProtection(id: number, stopLoss: number | null, takeProfit: number | null): void {
     const pos = this.store.get(id);
     if (!pos) return;

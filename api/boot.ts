@@ -15,7 +15,7 @@ import { getDb } from "./queries/connection";
 import { orders, autoExecutorConfig } from "@db/schema";
 import { eq } from "drizzle-orm";
 import { RiskManager } from "./services/RiskManager";
-import { WalletLedgerService } from "./services/WalletLedgerService";
+import { lockPaperPositionMargin } from "./services/paper-currency";
 import { MatchingEngine } from "./services/MatchingEngine";
 import Decimal from "decimal.js";
 import crypto from "crypto";
@@ -120,12 +120,11 @@ app.post("/api/v1/orders/simulated", async (c) => {
     const leverage = new Decimal(body.leverage);
     const marginAllocation = qty.mul(price).div(leverage).toFixed(8);
 
-    await WalletLedgerService.lockMargin(
+    await lockPaperPositionMargin(
       mockUserId,
-      "paper",
-      currency,
-      marginAllocation,
+      parseFloat(marginAllocation),
       orderId,
+      currency,
       "order"
     );
 

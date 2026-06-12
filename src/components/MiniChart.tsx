@@ -67,6 +67,8 @@ import {
   getIntensityColor,
 } from "@/lib/chart/candle-intensity";
 
+import { useTheme } from "@/providers/theme";
+
 // ─── Types ───
 export interface KlineData {
   openTime: number;
@@ -94,11 +96,13 @@ function getVolumeIntensityColor(
   intensityMode?: IntensityMode,
   intensityBands?: ReturnType<typeof buildIntensityBands>,
   high?: number, low?: number,
+  themeUpColor?: string,
+  themeDownColor?: string,
 ) {
   const bar: CandleBar = { open, high: high ?? Math.max(open, close), low: low ?? Math.min(open, close), close, volume };
   const mode = intensityMode || "off";
   const bands = intensityBands || { p10: 0, p50: 0, p90: 0, max: 0 };
-  return getIntensityColor(bar, mode, bands);
+  return getIntensityColor(bar, mode, bands, themeUpColor, themeDownColor);
 }
 
 export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice, cvdBars, liquidityEvents, orderBook, intensityMode = "off" }: {
@@ -115,6 +119,13 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
   orderBook?: { bids: [number, number][]; asks: [number, number][] };
   intensityMode?: IntensityMode;
 }) => {
+  const { meta } = useTheme();
+  const themeUpColorRef = useRef(meta.upColor);
+  const themeDownColorRef = useRef(meta.downColor);
+  useEffect(() => {
+    themeUpColorRef.current = meta.upColor;
+    themeDownColorRef.current = meta.downColor;
+  }, [meta.upColor, meta.downColor]);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
   const [chartInitialized, setChartInitialized] = useState(false);
@@ -304,10 +315,10 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
         }
 
         // Still do a final render
-        const idleColors = getVolumeIntensityColor(t.open, t.close, t.vol, maxVolumeRef.current, intensityModeRef.current, intensityBandsRef.current, t.high, t.low);
+        const idleColors = getVolumeIntensityColor(t.open, t.close, t.vol, maxVolumeRef.current, intensityModeRef.current, intensityBandsRef.current, t.high, t.low, themeUpColorRef.current, themeDownColorRef.current);
         candlestickSeriesRef.current.update({ time: t.time as UTCTimestamp, open: t.open, high: t.high, low: t.low, close: t.close, color: idleColors.color, wickColor: idleColors.wickColor, borderColor: idleColors.borderColor });
         if (volumeSeriesRef.current) {
-          volumeSeriesRef.current.update({ time: t.time as UTCTimestamp, value: t.vol, color: t.close >= t.open ? "rgba(14,203,129,0.15)" : "rgba(246,70,93,0.15)" });
+          volumeSeriesRef.current.update({ time: t.time as UTCTimestamp, value: t.vol, color: t.close >= t.open ? themeUpColorRef.current + "26" : themeDownColorRef.current + "26" });
         }
         if (priceLineSeriesRef.current) {
           priceLineSeriesRef.current.update({ time: t.time as UTCTimestamp, value: t.close });
@@ -339,7 +350,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
       // Use full high/low from animTarget directly — do NOT clamp to animated close.
       // Clamping made the wick length depend on the lerp position, causing wicks to
       // flicker every frame as `c` moved. Wicks are accurate; only close animates.
-      const moveColors = getVolumeIntensityColor(t.open, c, v, maxVolumeRef.current, intensityModeRef.current, intensityBandsRef.current, t.high, t.low);
+      const moveColors = getVolumeIntensityColor(t.open, c, v, maxVolumeRef.current, intensityModeRef.current, intensityBandsRef.current, t.high, t.low, themeUpColorRef.current, themeDownColorRef.current);
       candlestickSeriesRef.current.update({
         time: t.time as UTCTimestamp,
         open: t.open,
@@ -356,7 +367,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
         volumeSeriesRef.current.update({
           time: t.time as UTCTimestamp,
           value: v,
-          color: c >= t.open ? "rgba(14,203,129,0.15)" : "rgba(246,70,93,0.15)",
+          color: c >= t.open ? themeUpColorRef.current + "26" : themeDownColorRef.current + "26",
         });
       }
 
@@ -436,12 +447,12 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
     chartRef.current = chart;
 
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
-      upColor: resolveCSSColor("--janus-up-bright", "#0ecb81"),
-      downColor: resolveCSSColor("--janus-down-bright", "#f6465d"),
-      borderUpColor: resolveCSSColor("--janus-up-bright", "#0ecb81"),
-      borderDownColor: resolveCSSColor("--janus-down-bright", "#f6465d"),
-      wickUpColor: resolveCSSColor("--janus-up-bright", "#0ecb81"),
-      wickDownColor: resolveCSSColor("--janus-down-bright", "#f6465d"),
+      upColor: meta.upColor,
+      downColor: meta.downColor,
+      borderUpColor: meta.upColor,
+      borderDownColor: meta.downColor,
+      wickUpColor: meta.upColor,
+      wickDownColor: meta.downColor,
     });
     candlestickSeriesRef.current = candlestickSeries;
 
@@ -717,7 +728,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
       const bands = buildIntensityBands(bars, intensityMode);
       intensityBandsRef.current = bands;
       const chartData = bars.map((bar, i) => {
-        const { color, wickColor, borderColor } = getIntensityColor(bar, intensityMode, bands);
+        const { color, wickColor, borderColor } = getIntensityColor(bar, intensityMode, bands, meta.upColor, meta.downColor);
         return {
           time: (data[i].openTime / 1000) as UTCTimestamp,
           open: bar.open,
@@ -735,7 +746,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
         return {
           time: (d.openTime / 1000) as UTCTimestamp,
           value: parseFloat(d.volume),
-          color: c >= o ? "rgba(14, 203, 129, 0.15)" : "rgba(246, 70, 93, 0.15)",
+          color: c >= o ? meta.upColor + "26" : meta.downColor + "26",
         };
       }).sort((a, b) => (a.time as number) - (b.time as number));
       candlestickSeriesRef.current.setData(chartData);
@@ -830,13 +841,22 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
     });
   }, [data, symbol, interval]);
 
-  // 2b. Repaint candle colours when intensity mode changes (no full chart reload needed)
+  // 2b. Repaint candle and volume colours when intensity mode or theme changes (no full chart reload needed)
   useEffect(() => {
-    if (!candlestickSeriesRef.current || data.length === 0) return;
-    // Skip if mode hasn't actually changed (avoid double-paint on mount)
-    if (intensityModeRef.current === intensityMode) return;
+    if (!candlestickSeriesRef.current || dataRef.current.length === 0) return;
+
+    // Apply series options for dynamic theme colors
+    candlestickSeriesRef.current.applyOptions({
+      upColor: meta.upColor,
+      downColor: meta.downColor,
+      borderUpColor: meta.upColor,
+      borderDownColor: meta.downColor,
+      wickUpColor: meta.upColor,
+      wickDownColor: meta.downColor,
+    });
+
     intensityModeRef.current = intensityMode;
-    const bars: CandleBar[] = data.map((d) => ({
+    const bars: CandleBar[] = dataRef.current.map((d) => ({
       open: parseFloat(d.open),
       high: parseFloat(d.high),
       low: parseFloat(d.low),
@@ -845,11 +865,12 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
     }));
     const bands = buildIntensityBands(bars, intensityMode);
     intensityBandsRef.current = bands;
+
     // Re-set all candle data with new colours
     const chartData = bars.map((bar, i) => {
-      const { color, wickColor, borderColor } = getIntensityColor(bar, intensityMode, bands);
+      const { color, wickColor, borderColor } = getIntensityColor(bar, intensityMode, bands, meta.upColor, meta.downColor);
       return {
-        time: (data[i].openTime / 1000) as UTCTimestamp,
+        time: (dataRef.current[i].openTime / 1000) as UTCTimestamp,
         open: bar.open,
         high: bar.high,
         low: bar.low,
@@ -859,8 +880,23 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
         borderColor,
       };
     }).sort((a, b) => (a.time as number) - (b.time as number));
+
+    // Also update volume bar colors
+    const volumeData = dataRef.current.map((d) => {
+      const o = parseFloat(d.open);
+      const c = parseFloat(d.close);
+      return {
+        time: (d.openTime / 1000) as UTCTimestamp,
+        value: parseFloat(d.volume),
+        color: c >= o ? meta.upColor + "26" : meta.downColor + "26",
+      };
+    }).sort((a, b) => (a.time as number) - (b.time as number));
+
     candlestickSeriesRef.current.setData(chartData);
-  }, [intensityMode]);
+    if (volumeSeriesRef.current) {
+      volumeSeriesRef.current.setData(volumeData);
+    }
+  }, [intensityMode, meta.upColor, meta.downColor]);
 
   // 3. Live price tick — drives chart animation for all timeframes from ticker lastPrice.
   // klineStream provides high/low/volume updates; lastPrice provides real-time close.

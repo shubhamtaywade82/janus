@@ -65,7 +65,7 @@ export function AutoTraderPanel(_props: { userId?: number }) {
     targetSymbols: ["BTCUSDT", "ETHUSDT"] as string[],
     defaultSizeUsdt: "50",
     defaultLeverage: 3,
-    capitalAllocationPct: "0.100",   // 10%
+    capitalAllocationPct: "0.250",   // 25%
     useStrategyLeverage: true,
     stopLossPct: "0.015",
     tp1Pct: "0.015",
@@ -84,7 +84,7 @@ export function AutoTraderPanel(_props: { userId?: number }) {
         targetSymbols: (config.targetSymbols as string[]) ?? ["BTCUSDT", "ETHUSDT"],
         defaultSizeUsdt: config.defaultSizeUsdt ?? "50",
         defaultLeverage: config.defaultLeverage ?? 3,
-        capitalAllocationPct: config.capitalAllocationPct ?? "0.100",
+        capitalAllocationPct: config.capitalAllocationPct ?? "0.250",
         useStrategyLeverage: config.useStrategyLeverage ?? true,
         stopLossPct: config.stopLossPct ?? "0.015",
         tp1Pct: config.tp1Pct ?? "0.015",
