@@ -216,6 +216,12 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **Recent Trades Isolation**: Hidden the `Recent Trades` filled orders panel when viewing the Paper tab to prevent CoinDCX live trade logs from leaking into the Paper trading view.
 * **Reconciler Margin Calculation Fix**: Fixed `position-reconciler.ts` so that auto-imported orphan positions have their margins computed as `(size * entryPrice) / leverage` when exchange-reported margin is missing or zero. Corrected the margin column of 469 existing positions in the database via a one-off migration script.
 
+### [2026-06-12] Paper Capital Allocation, INR Margin Accounting & Pyramiding/Exits
+* **INR/USDT margin bug (CRITICAL)**: Paper entries locked USDT margin amounts directly into INR `trading_accounts` (e.g. locked ₹7 instead of ₹705). Added `api/services/paper-currency.ts` with `usdtToWallet` / `walletToUsdt` helpers; all paper margin lock/release paths now convert consistently (`auto-executor`, `RiskManager`, `boot.ts` simulated orders, `execution-manager`, `paper-wallet` adapter).
+* **Capital allocation increase**: Default paper allocation raised from 15% → **25%** (configurable up to 50% in Auto Trader UI). Removed hardcoded 15% sizing cap; paper trades can use up to **30%** of free equity per entry. Sizing now converts INR wallet balance to USDT before notional math.
+* **Paper pyramiding (SCALE_IN)**: Position manager `SCALE_IN` now executes on paper — locks additional margin, updates weighted average entry, size, and ledger (`SCALE_IN` transaction). Policy guard scale-in threshold lowered to 15 USDT free margin; max single-position risk before scale-in raised to 40%.
+* **Partial/full exit wallet fix**: Partial and full exits use `WalletLedgerService` via `releasePaperPositionMargin` (correct INR conversion). Position store syncs quantity/margin after partial exit. Manual `closePosition` releases paper margin. Governor duplicate gate now isolates paper/live and documents same-side scale-in path.
+
 
 
 ### [2026-06-12] Premium Dashboard Visual Upgrades & Typography pairing
