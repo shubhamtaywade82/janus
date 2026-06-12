@@ -56,7 +56,7 @@ function markUnhealthy(id: number, status: number | string): void {
   const durationMs =
     statusCode === 429 ? 5 * 60_000 :   // rate-limited → 5 min
     statusCode === 503 ? 2 * 60_000 :   // overloaded  → 2 min
-    statusCode === 401 ? 12 * 60 * 60_000 : // auth error  → 12 hours (invalid key)
+    statusCode === 401 || statusCode === 404 ? 12 * 60 * 60_000 : // auth/not-found error → 12 hours
     30_000;                          // other error → 30 s
   unhealthyUntil.set(id, Date.now() + durationMs);
   console.log(`[pm-llm] Key ID ${id} marked unhealthy (status: ${status}) for ${durationMs / 60_000} minutes.`);

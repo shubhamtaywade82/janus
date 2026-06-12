@@ -306,8 +306,11 @@ export async function executeAction(
           try {
             const creds = await fetchCredentials(userId);
             const coindcxSide = position.side === "LONG" ? "sell" : "buy";
+            const coindcxSymbol = position.symbol.startsWith("B-")
+              ? position.symbol
+              : `B-${position.symbol.replace("USDT", "_USDT")}`;
             await createFuturesOrder(creds, {
-              market: position.symbol,
+              market: coindcxSymbol,
               side: coindcxSide,
               order_type: "market",
               total_quantity: exitQty,
@@ -383,8 +386,11 @@ export async function executeAction(
           try {
             const creds = await fetchCredentials(userId);
             const coindcxSide = position.side === "LONG" ? "sell" : "buy";
+            const coindcxSymbol = position.symbol.startsWith("B-")
+              ? position.symbol
+              : `B-${position.symbol.replace("USDT", "_USDT")}`;
             await createFuturesOrder(creds, {
-              market: position.symbol,
+              market: coindcxSymbol,
               side: coindcxSide,
               order_type: "market",
               total_quantity: position.quantity,
