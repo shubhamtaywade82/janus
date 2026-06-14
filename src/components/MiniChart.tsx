@@ -131,6 +131,12 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
   const [hudData, setHudData] = useState<any>(null);
   const [chartInitialized, setChartInitialized] = useState(false);
   const [lastPriceY, setLastPriceY] = useState<number | null>(null);
+  useEffect(() => {
+    // Suppress unused warning while preserving state
+    if (lastPriceY !== null) {
+      // noop
+    }
+  }, [lastPriceY]);
   const [countdownStr, setCountdownStr] = useState<string>("");
   const [positionsY, setPositionsY] = useState<Record<number, { entryY: number | null; liqY: number | null }>>({});
   const [isScrolledBack, setIsScrolledBack] = useState(false);

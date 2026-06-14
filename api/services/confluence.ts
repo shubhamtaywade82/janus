@@ -212,6 +212,59 @@ export function calculateCompositeScore(
   return { composite: Math.round(composite * 100) / 100, direction };
 }
 
+// ─── Kronos-Aware Composite Score ───
+import { getKronosSignal } from "./kronos-client";
+
+export async function calculateKronosAugmentedScore(
+  symbol: string,
+  microScore: number,
+  intraScore: number,
+  swingScore: number,
+  weights = WEIGHTS,
+  threshold = DEFAULT_THRESHOLD
+): Promise<{ composite: number; direction: "long" | "short" | "neutral"; kronosBoost: number; kronosSignal?: any }> {
+  // Base confluence score
+  const baseComposite = weights.micro * microScore + weights.intra * intraScore + weights.swing * swingScore;
+
+  // Fetch Kronos signal
+  const kronos = await getKronosSignal(symbol, "1m", 4);
+  let kronosBoost = 0;
+  let direction: "long" | "short" | "neutral" = "neutral";
+
+  if (kronos && kronos.confidence > 0.6) {
+    const kronosDirection = kronos.directionSignal > 0.05 ? "long" : kronos.directionSignal < -0.05 ? "short" : "neutral";
+
+    // Boost composite if Kronos agrees with intra direction
+    const intraDirection = intraScore > 50 ? "long" : "short";
+
+    if (kronosDirection === intraDirection) {
+      // Kronos agrees with technical signal — boost up to +15 points
+      kronosBoost = Math.min(15, Math.abs(kronos.directionSignal) * 20 * kronos.confidence);
+    } else if (kronosDirection !== "neutral" && kronosDirection !== intraDirection) {
+      // Kronos disagrees — penalize up to -10 points
+      kronosBoost = -Math.min(10, Math.abs(kronos.directionSignal) * 15 * kronos.confidence);
+    }
+
+    // Volatility regime adjustment: reduce score in high predicted vol
+    if (kronos.volatilityForecast > 0.08) {
+      kronosBoost -= 5; // Penalty for chaotic conditions
+    }
+  }
+
+  const composite = Math.max(0, Math.min(100, baseComposite + kronosBoost));
+
+  if (composite >= threshold) {
+    direction = intraScore > 50 ? "long" : "short";
+  }
+
+  return { 
+    composite: Math.round(composite * 100) / 100, 
+    direction, 
+    kronosBoost,
+    kronosSignal: kronos
+  };
+}
+
 // ─── Full Confluence Analysis ───
 export function analyzeConfluence(
   symbol: string,

@@ -69,6 +69,17 @@ services:
       postgres:
         condition: service_healthy
 
+  kronos:
+    build:
+      context: ./kronos-service
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - KRONOS_PORT=8000
+      - KRONOS_MODEL_PATH=/app/weights
+
 volumes:
   pgdata:
     driver: local

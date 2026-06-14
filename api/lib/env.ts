@@ -79,6 +79,9 @@ export const env = {
   // ENCRYPTION_KEY — 32-byte hex key for AES-256-GCM field-level encryption of API credentials
   // Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
   encryptionKey: process.env.ENCRYPTION_KEY ?? "",
+
+  // ─── Kronos ───
+  kronosEndpoint: process.env.KRONOS_ENDPOINT ?? "http://localhost:8000",
 };
 
 // CoinDCX env credentials fallback (used when DB has no stored credentials)

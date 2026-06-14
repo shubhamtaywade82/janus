@@ -26,6 +26,7 @@ import { globalGovernor } from "./governor";
 import { BrainOrchestrator } from "../brain/brain-orchestrator";
 import { reflectOnTrade } from "../brain/brain-reflection";
 import { globalLlmAdvisor, type SignalContext } from "./llm-advisor";
+import { getKronosSignal } from "./kronos-client";
 import { latestTickerCache } from "./streaming";
 import { marketStateManager } from "./market-state";
 import { markPriceCache, tradingEvents } from "./coindcx-ws";
@@ -282,6 +283,8 @@ export class AutoExecutor {
     brainDriverEnabled: false,
     brainGateEnabled: false,
     brainShadowMode: true,
+    useKronosFilter: false,
+    kronosConfidenceThreshold: "0.5000",
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -490,6 +493,12 @@ export class AutoExecutor {
       return this.skip(signal, advisorAdvice.reason, advisorAdvice.gate, { llmDecision: advisorAdvice.llmDecision });
     }
 
+    // ─── Kronos Gate Evaluation ───
+    const kronosAdvice = await this.evaluateKronosGate(signal, config, context);
+    if (kronosAdvice && kronosAdvice.action === "skip") {
+      return this.skip(signal, kronosAdvice.reason, kronosAdvice.gate, { llmDecision: kronosAdvice.kronosDecision });
+    }
+
     // ─── Sizing & Price Discovery ───
     const currentPrice = await this.getCurrentPrice(symbol, signal);
     if (!currentPrice || currentPrice <= 0) {
@@ -669,7 +678,58 @@ export class AutoExecutor {
       takeProfitPct: advice.takeProfitPct,
     };
   }
-private async getCurrentPrice(symbol: string, signal: Signal): Promise<number> {
+
+  private async evaluateKronosGate(
+    _signal: Signal,
+    config: AutoExecutorConfig,
+    context: any
+  ): Promise<{ action: "skip" | "approve"; reason: string; gate: string; kronosDecision?: any } | null> {
+    if (!config.useKronosFilter) return null;
+
+    const kronos = await getKronosSignal(context.symbol, "1m", 4);
+    if (!kronos) return null;
+
+    const side = context.side as "long" | "short";
+    const kronosDirection = kronos.directionSignal > 0.05 ? "long" : kronos.directionSignal < -0.05 ? "short" : "neutral";
+
+    const threshold = parseFloat(config.kronosConfidenceThreshold ?? "0.5000");
+
+    if (kronos.confidence < threshold) {
+      return {
+        action: "skip",
+        reason: `Kronos confidence ${(kronos.confidence * 100).toFixed(0)}% < ${(threshold * 100).toFixed(0)}% — unclear directional bias`,
+        gate: "kronos_confidence",
+        kronosDecision: { decision: "skip", confidence: kronos.confidence * 100, reasoning: "low confidence", keyUsed: "kronos" }
+      };
+    }
+
+    if (kronosDirection !== "neutral" && kronosDirection !== side) {
+      return {
+        action: "skip",
+        reason: `Kronos veto: predicts ${kronosDirection} but signal is ${side} (signal=${kronos.directionSignal.toFixed(3)})`,
+        gate: "kronos_veto",
+        kronosDecision: { decision: "skip", confidence: kronos.confidence * 100, reasoning: `veto, predicts ${kronosDirection}`, keyUsed: "kronos" }
+      };
+    }
+
+    if (kronos.volatilityForecast > 0.12) {
+      return {
+        action: "skip",
+        reason: `Kronos volatility forecast ${(kronos.volatilityForecast * 100).toFixed(1)}% > 12% — avoiding chaotic conditions`,
+        gate: "kronos_volatility",
+        kronosDecision: { decision: "skip", confidence: kronos.confidence * 100, reasoning: "high volatility", keyUsed: "kronos" }
+      };
+    }
+
+    return {
+      action: "approve",
+      reason: `Kronos aligned: ${kronosDirection} (conf=${(kronos.confidence * 100).toFixed(0)}%, vol=${(kronos.volatilityForecast * 100).toFixed(1)}%)`,
+      gate: "kronos",
+      kronosDecision: { decision: "execute", confidence: kronos.confidence * 100, reasoning: `aligned: ${kronosDirection}`, keyUsed: "kronos" }
+    };
+  }
+
+  private async getCurrentPrice(symbol: string, signal: Signal): Promise<number> {
   let currentPrice = markPriceCache.get(signal.symbol) ?? 0;
   if (currentPrice <= 0) currentPrice = latestTickerCache.get(symbol)?.lastPrice ?? 0;
   if (currentPrice <= 0) currentPrice = marketStateManager.get(symbol)?.ltp ?? 0;
@@ -723,6 +783,25 @@ private async calculateSizing(params: {
     convictionMult *= brainResult.verdict === "REDUCE_RISK" ? 0.4 : 1.0;
   }
 
+  // NEW: Kronos conviction scaling
+  let kronosVolForecast: number | null = null;
+  try {
+    const kronos = await getKronosSignal(signal.symbol, "1m", 4);
+    if (kronos) {
+      kronosVolForecast = kronos.volatilityForecast;
+      if (kronos.confidence > 0.7) {
+        const kronosDirection = kronos.directionSignal > 0 ? "long" : "short";
+        if (kronosDirection === side) {
+          convictionMult *= 1.2; // agreement boost
+        } else {
+          convictionMult *= 0.6; // disagreement penalty
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[auto-executor] Failed to fetch Kronos signal for sizing:`, err);
+  }
+
   let notional = isManualOverride
     ? parseFloat(String(sigMetadata!.sizeUsdt))
     : availEquityUsdt * baseAllocPct * convictionMult;
@@ -740,7 +819,13 @@ private async calculateSizing(params: {
   const rawLeverage = manualLeverage !== undefined
     ? manualLeverage
     : (config.useStrategyLeverage ? strategyMaxLev : Math.min(config.defaultLeverage ?? 3, strategyMaxLev));
-  const leverage = manualLeverage !== undefined ? rawLeverage : Math.min(rawLeverage, 10);
+  let leverage = manualLeverage !== undefined ? rawLeverage : Math.min(rawLeverage, 10);
+
+  // NEW: Kronos volatility-based leverage cap
+  if (kronosVolForecast !== null && kronosVolForecast > 0.10) {
+    leverage = Math.min(leverage, 2);
+    console.log(`[auto-executor] Kronos high vol detected (${kronosVolForecast}) — capping leverage at ${leverage}x`);
+  }
 
   let size = notional / currentPrice;
   let basePrecision = 2;

@@ -5,6 +5,7 @@ import { desc, eq, and } from "drizzle-orm";
 import {
   analyzeConfluence,
   aggregateTradeTape,
+  calculateKronosAugmentedScore,
 } from "./confluence";
 import { fetchKlines, SUPPORTED_PAIRS } from "./binance";
 import { subscribeToSymbol, marketEvents } from "./streaming";
@@ -89,7 +90,7 @@ export async function runAnalysisForSymbol(binanceSymbol: string) {
       if (knnSnapshot) signalEvents.emit("knn-snapshot", { symbol: binanceSymbol, snapshot: knnSnapshot });
     }
 
-    const signalData = evaluateSymbolSignal(pair.coindcx, strategy, currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraMetrics);
+    const signalData = await evaluateSymbolSignalAsync(pair.coindcx, strategy, currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraMetrics);
 
     if (knnSnapshot) {
       signalData.metadata = { ...(signalData.metadata as object), knn: knnSnapshot };
@@ -137,7 +138,7 @@ async function getCandlesForTimeframe(symbol: string, timeframe: AnalysisTimefra
   return rows.reverse().map(r => ({ timestamp: r.timestamp.getTime(), open: parseFloat(r.open), high: parseFloat(r.high), low: parseFloat(r.low), close: parseFloat(r.close), volume: parseFloat(r.volume), quoteVolume: parseFloat(r.quoteVolume), trades: r.tradeCount ?? 0 }));
 }
 
-function evaluateSymbolSignal(coindcxSymbol: string, strategy: StrategyType, currentPrice: number, prices: number[], volumes: number[], highs: number[], lows: number[], obMetrics: any, tapeMetrics: any, extraMetrics?: any): any {
+async function evaluateSymbolSignalAsync(coindcxSymbol: string, strategy: StrategyType, currentPrice: number, prices: number[], volumes: number[], highs: number[], lows: number[], obMetrics: any, tapeMetrics: any, extraMetrics?: any): Promise<any> {
   const config = STRATEGY_CONFIGS[strategy];
   let res: any;
   if (strategy === "grid") res = evaluateGridStrategy(currentPrice, prices, config.threshold);
@@ -147,7 +148,38 @@ function evaluateSymbolSignal(coindcxSymbol: string, strategy: StrategyType, cur
   else if (strategy === "scalping_micro") res = evaluateScalpingMicro(currentPrice, obMetrics, tapeMetrics, config.threshold);
   else {
     const analysis = analyzeConfluence(coindcxSymbol, obMetrics, tapeMetrics, prices, volumes, extraMetrics, config.weights, config.threshold);
-    return { symbol: coindcxSymbol, microScore: String(analysis.microScore), intraScore: String(analysis.intraScore), swingScore: String(analysis.swingScore), compositeScore: String(analysis.compositeScore), threshold: String(analysis.threshold), isGated: analysis.isGated, direction: analysis.direction, metadata: { ...analysis.indicators, strategy, signalPrice: currentPrice } };
+    
+    // NEW: Kronos augmentation
+    const { composite, direction, kronosBoost, kronosSignal } = await calculateKronosAugmentedScore(
+      coindcxSymbol,
+      analysis.microScore,
+      analysis.intraScore,
+      analysis.swingScore,
+      config.weights,
+      config.threshold
+    );
+
+    return {
+      symbol: coindcxSymbol,
+      microScore: String(analysis.microScore),
+      intraScore: String(analysis.intraScore),
+      swingScore: String(analysis.swingScore),
+      compositeScore: String(composite),
+      threshold: String(analysis.threshold),
+      isGated: composite >= config.threshold,
+      direction,
+      metadata: {
+        ...analysis.indicators,
+        strategy,
+        signalPrice: currentPrice,
+        kronos: kronosSignal ? {
+          boost: kronosBoost,
+          directionSignal: kronosSignal.directionSignal,
+          volatilityForecast: kronosSignal.volatilityForecast,
+          confidence: kronosSignal.confidence,
+        } : null
+      }
+    };
   }
   return { symbol: coindcxSymbol, microScore: String(res.score), intraScore: "50.00", swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy, signalPrice: currentPrice } };
 }

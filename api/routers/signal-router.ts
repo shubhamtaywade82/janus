@@ -10,6 +10,7 @@ import { analyzeConfluence } from "../services/confluence";
 import { SUPPORTED_PAIRS } from "../services/binance";
 import { latestRegimeCache } from "../services/regime-detector";
 import { type KnnSupertrendSnapshot } from "../services/knn-supertrend";
+import { getKronosSignal, kronosEvents } from "../services/kronos-client";
 
 export { evictKnnSnapshot, startAutoAnalysis };
 
@@ -172,6 +173,22 @@ export const signalRouter = createRouter({
       const onSnapshot = (data: { symbol: string; snapshot: KnnSupertrendSnapshot }) => emit.next(data);
       signalEvents.on("knn-snapshot", onSnapshot);
       return () => signalEvents.off("knn-snapshot", onSnapshot);
+    });
+  }),
+
+  // ─── Kronos Latest Predictions ───
+  kronosLatest: authedQuery
+    .input(z.object({ symbol: z.string() }))
+    .query(async ({ input }) => {
+      return getKronosSignal(input.symbol, "1m", 4);
+    }),
+
+  // ─── Kronos Real-time stream ───
+  kronosStream: authedQuery.subscription(() => {
+    return observable<{ symbol: string; prediction: any }>((emit) => {
+      const onPrediction = (data: { symbol: string; prediction: any }) => emit.next(data);
+      kronosEvents.on("prediction", onPrediction);
+      return () => kronosEvents.off("prediction", onPrediction);
     });
   }),
 });

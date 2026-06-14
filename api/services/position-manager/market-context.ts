@@ -4,6 +4,7 @@ import { getDb } from "../../queries/connection";
 import { signals, marketData } from "@db/schema";
 import { eq, desc, and, gte } from "drizzle-orm";
 import type { MarketContext, MarketTrend, MarketStructure, VolatilityRegime, VolumeProfile, FundingBias } from "./types";
+import { getKronosSignal } from "../kronos-client";
 
 // ─── Market Context Builder ──────────────────────────────────────────────────
 // Aggregates multi-timeframe data into a single MarketContext snapshot.
@@ -193,6 +194,21 @@ export async function buildMarketContext(binanceSymbol: string): Promise<MarketC
     }
   }
 
+  // ── Kronos AI Predictions ──────────────────────────────────────────────
+  let kronosDirectionSignal: number | null = null;
+  let kronosVolatilityForecast: number | null = null;
+  let kronosConfidence: number | null = null;
+  try {
+    const kronos = await getKronosSignal(binanceSymbol, "1m", 4);
+    if (kronos) {
+      kronosDirectionSignal = kronos.directionSignal;
+      kronosVolatilityForecast = kronos.volatilityForecast;
+      kronosConfidence = kronos.confidence;
+    }
+  } catch {
+    // Non-fatal
+  }
+
   return {
     symbol: binanceSymbol,
     timestamp: now,
@@ -215,5 +231,8 @@ export async function buildMarketContext(binanceSymbol: string): Promise<MarketC
     confluenceScore,
     confluenceDirection,
     lastPrice,
+    kronosDirectionSignal,
+    kronosVolatilityForecast,
+    kronosConfidence,
   };
 }

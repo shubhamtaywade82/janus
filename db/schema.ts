@@ -110,6 +110,25 @@ export const signals = pgTable("signals", {
 
 export type Signal = typeof signals.$inferSelect;
 
+// ─── Kronos AI Signals (Foundation Model Predictions) ───
+export const kronosSignals = pgTable("kronos_signals", {
+  id: serial("id").primaryKey(),
+  symbol: varchar("symbol", { length: 20 }).notNull(),
+  interval: varchar("interval", { length: 10 }).notNull().default("1m"),
+  directionSignal: decimal("direction_signal", { precision: 8, scale: 6 }).notNull(),
+  volatilityForecast: decimal("volatility_forecast", { precision: 8, scale: 6 }).notNull(),
+  confidence: decimal("confidence", { precision: 5, scale: 4 }).notNull(),
+  task: varchar("task", { length: 30 }).notNull().default("return_forecast"),
+  horizon: integer("horizon").default(4).notNull(),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  symbolTimeIdx: index("idx_kronos_signals_symbol_time").on(table.symbol, table.createdAt),
+  symbolIntervalIdx: index("idx_kronos_signals_symbol_interval").on(table.symbol, table.interval),
+}));
+
+export type KronosSignal = typeof kronosSignals.$inferSelect;
+
 // ─── Positions (Open Trades) ───
 export const positions = pgTable(
   "positions",
@@ -335,6 +354,8 @@ export const autoExecutorConfig = pgTable("auto_executor_config", {
   brainDriverEnabled: boolean("brain_driver_enabled").default(false).notNull(), // brain autonomously proposes/opens trades
   brainGateEnabled: boolean("brain_gate_enabled").default(false).notNull(),     // brain acts as an extra confirmation gate on confluence signals
   brainShadowMode: boolean("brain_shadow_mode").default(true).notNull(),        // true = log only (governor skipped, no execution)
+  useKronosFilter: boolean("use_kronos_filter").default(false).notNull(),
+  kronosConfidenceThreshold: decimal("kronos_confidence_threshold", { precision: 5, scale: 4 }).default("0.5000").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });

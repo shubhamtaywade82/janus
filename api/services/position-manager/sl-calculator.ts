@@ -6,7 +6,7 @@ import { marketData } from "@db/schema";
 import { eq, and, gte } from "drizzle-orm";
 import { SYMBOL_MIN_SL_PCT, DEFAULT_MIN_SL_PCT, type SupportedSymbol } from "../../../contracts/constants";
 
-// ─── Stop Loss Calculator ────────────────────────────────────────────────────
+  // ─── Stop Loss Calculator ────────────────────────────────────────────────────
 // Modes: ATR (default), SWING (structure-based), VWAP, PERCENTAGE
 
 const MAX_SL_DISTANCE_PCT = 0.08;    // 8% maximum
@@ -48,10 +48,21 @@ export async function calculateStopLoss(
   const isLong = position.side === "LONG";
   const minSlPct = SYMBOL_MIN_SL_PCT[position.binanceSymbol as SupportedSymbol] ?? DEFAULT_MIN_SL_PCT;
 
+  // ── Kronos Volatility Adjustment to ATR / Base SL ──────────────────────
+  let volatilityMult = 1.0;
+  if (ctx.kronosVolatilityForecast !== undefined && ctx.kronosVolatilityForecast !== null) {
+    if (ctx.kronosVolatilityForecast > 0.10) {
+      volatilityMult = 1.6; // widen SL under high predicted volatility
+    } else if (ctx.kronosVolatilityForecast < 0.03) {
+      volatilityMult = 0.75; // tighten SL under low predicted volatility
+    }
+  }
+
   // ── ATR mode (primary) ─────────────────────────────────────────────────
   if (ctx.atr14 && ctx.atrPct) {
-    const multiplier = ctx.volatilityRegime === "HIGH" ? 1.5 :
-                       ctx.volatilityRegime === "EXTREME" ? 2.0 : 1.2;
+    const baseMultiplier = ctx.volatilityRegime === "HIGH" ? 1.5 :
+                           ctx.volatilityRegime === "EXTREME" ? 2.0 : 1.2;
+    const multiplier = baseMultiplier * volatilityMult;
     const slDistance = ctx.atr14 * multiplier;
     const sl = isLong
       ? price - slDistance

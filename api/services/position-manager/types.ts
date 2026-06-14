@@ -108,6 +108,10 @@ export interface MarketContext {
   confluenceDirection: "long" | "short" | "neutral";
   // Last price
   lastPrice: number;
+  // Kronos AI predictions
+  kronosDirectionSignal?: number | null;
+  kronosVolatilityForecast?: number | null;
+  kronosConfidence?: number | null;
 }
 
 /** Output from BiasEvaluator */
