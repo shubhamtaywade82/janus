@@ -8,10 +8,13 @@ import { kronosSignals, marketData } from "@db/schema";
 import { desc, eq, and } from "drizzle-orm";
 import { env } from "../lib/env";
 import EventEmitter from "events";
+import { fetchKlines } from "./binance";
 
 const KRONOS_URL = env.kronosEndpoint;
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes — Kronos is a slow-moving signal
 const INFERENCE_TIMEOUT_MS = 15_000;
+const MIN_KLINES = 50;
+const INSUFFICIENT_WARN_COOLDOWN_MS = 5 * 60 * 1000;
 
 export interface KronosPrediction {
   symbol: string;
@@ -23,6 +26,74 @@ export interface KronosPrediction {
 
 export const kronosEvents = new EventEmitter();
 
+const insufficientWarnAt = new Map<string, number>();
+
+function normalizeSymbol(symbol: string): string {
+  return symbol.replace(/^B-/, "").replace(/_/, "").toUpperCase();
+}
+
+function warnInsufficientKlines(symbol: string, interval: string, count: number): void {
+  const key = `${symbol}:${interval}`;
+  const lastWarn = insufficientWarnAt.get(key) ?? 0;
+  if (Date.now() - lastWarn < INSUFFICIENT_WARN_COOLDOWN_MS) return;
+
+  insufficientWarnAt.set(key, Date.now());
+  console.warn(`[kronos] Insufficient klines for ${symbol} ${interval} (${count} < ${MIN_KLINES})`);
+}
+
+type OhlcvaRow = [number, number, number, number, number, number];
+
+async function resolveOhlcvaInput(
+  normalizedSymbol: string,
+  interval: string
+): Promise<OhlcvaRow[] | null> {
+  const db = getDb();
+  const dbKlines = await db
+    .select()
+    .from(marketData)
+    .where(
+      and(
+        eq(marketData.symbol, normalizedSymbol),
+        eq(marketData.timeframe, interval)
+      )
+    )
+    .orderBy(desc(marketData.timestamp))
+    .limit(100)
+    .catch(() => []);
+
+  if (dbKlines.length >= MIN_KLINES) {
+    const sorted = [...dbKlines].reverse();
+    return sorted.map((k) => [
+      parseFloat(k.open),
+      parseFloat(k.high),
+      parseFloat(k.low),
+      parseFloat(k.close),
+      parseFloat(k.volume),
+      parseFloat(k.quoteVolume),
+    ]);
+  }
+
+  try {
+    const restKlines = await fetchKlines(normalizedSymbol, interval, 100);
+    if (restKlines.length < MIN_KLINES) {
+      warnInsufficientKlines(normalizedSymbol, interval, restKlines.length);
+      return null;
+    }
+
+    return restKlines.map((k) => [
+      parseFloat(k.open),
+      parseFloat(k.high),
+      parseFloat(k.low),
+      parseFloat(k.close),
+      parseFloat(k.volume),
+      parseFloat(k.quoteVolume || "0"),
+    ]);
+  } catch {
+    warnInsufficientKlines(normalizedSymbol, interval, dbKlines.length);
+    return null;
+  }
+}
+
 /**
  * Fetch latest Kronos prediction for a symbol.
  * Uses DB cache first; falls back to live inference if stale or missing.
@@ -32,6 +103,7 @@ export async function getKronosSignal(
   interval: string = "1m",
   horizon: number = 4
 ): Promise<KronosPrediction | null> {
+  const normalizedSymbol = normalizeSymbol(symbol);
   const db = getDb();
 
   // 1. Check DB cache
@@ -40,7 +112,7 @@ export async function getKronosSignal(
     .from(kronosSignals)
     .where(
       and(
-        eq(kronosSignals.symbol, symbol),
+        eq(kronosSignals.symbol, normalizedSymbol),
         eq(kronosSignals.interval, interval)
       )
     )
@@ -58,34 +130,9 @@ export async function getKronosSignal(
     };
   }
 
-  // 2. Fetch klines from DB for inference input
-  const klines = await db
-    .select()
-    .from(marketData)
-    .where(
-      and(
-        eq(marketData.symbol, symbol),
-        eq(marketData.timeframe, interval)
-      )
-    )
-    .orderBy(desc(marketData.timestamp))
-    .limit(100)
-    .catch(() => []);
-
-  if (klines.length < 50) {
-    console.warn(`[kronos] Insufficient klines for ${symbol} (${klines.length} < 50)`);
-    return null;
-  }
-
-  const sorted = [...klines].reverse();
-  const ohlcva = sorted.map(k => [
-    parseFloat(k.open),
-    parseFloat(k.high),
-    parseFloat(k.low),
-    parseFloat(k.close),
-    parseFloat(k.volume),
-    parseFloat(k.quoteVolume),
-  ]);
+  // 2. Resolve klines from DB, falling back to Binance REST when bootstrapping
+  const ohlcva = await resolveOhlcvaInput(normalizedSymbol, interval);
+  if (!ohlcva) return null;
 
   // 3. Call Kronos inference service
   try {
@@ -93,7 +140,7 @@ export async function getKronosSignal(
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        symbol,
+        symbol: normalizedSymbol,
         interval,
         ohlcva,
         task: "return_forecast",
@@ -124,7 +171,7 @@ export async function getKronosSignal(
 
     // 4. Persist to DB
     await db.insert(kronosSignals).values({
-      symbol: data.symbol,
+      symbol: normalizedSymbol,
       interval,
       directionSignal: String(data.direction_signal),
       volatilityForecast: String(data.volatility_forecast),
@@ -134,16 +181,16 @@ export async function getKronosSignal(
       metadata: { source: "live_inference", raw: data },
     });
 
-    kronosEvents.emit("prediction", { symbol, prediction: parsedPred });
+    kronosEvents.emit("prediction", { symbol: normalizedSymbol, prediction: parsedPred });
 
     return parsedPred;
 
   } catch (err: any) {
-    console.error(`[kronos] Inference failed for ${symbol}:`, err.message);
-    
+    console.error(`[kronos] Inference failed for ${normalizedSymbol}:`, err.message);
+
     // Return stale cache as fallback rather than failing completely
     if (cached.length > 0) {
-      console.log(`[kronos] Returning stale cached signal for ${symbol}`);
+      console.log(`[kronos] Returning stale cached signal for ${normalizedSymbol}`);
       return {
         symbol: cached[0].symbol,
         directionSignal: parseFloat(cached[0].directionSignal),

@@ -288,7 +288,9 @@ startMarketRegimeRecorder();
 
 // Start auto signal analysis loop with regime detection enabled
 import { startAutoAnalysis } from "./routers/signal-router";
-startAutoAnalysis("intraday", true); // true = regime auto-switch on
+startAutoAnalysis("intraday", true).catch((err) => {
+  console.error("[signal-engine] Failed to start auto analysis:", err);
+});
 
 // Start adaptive R-profile refresh — empirically derives realistic TP R-multiples
 // per symbol/horizon from each symbol's own historical price action (every 6h)

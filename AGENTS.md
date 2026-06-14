@@ -241,7 +241,8 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **Chart Visibility Auto-Backfill**: Added a `visibilitychange` listener to `Dashboard.tsx`. When the browser tab regains focus (goes from hidden to visible after being in the background), it automatically invalidates and refetches the `klines` query. This resolves the issue where switching tabs throttled/suspended websocket streams and left a gap of missing candles on the chart.
 * **Price Axis Label Clashing & Countdown Overlay Fix**: Hid bid/ask labels from the right-hand price scale axis (`axisLabelVisible: false`) to avoid axis congestion, drawing them as dashed lines on the canvas with the calculated spread appended to the `ASK` line label (e.g., `ASK (Spread: 0.01)`). Disabled the default candlestick series price line. Added a custom price line labeled `"LAST"` on the axis (with dynamic up/down theme color) and integrated the countdown timer directly into its title (e.g., `LAST (05:52)`) using `lineWidth: 0`. Created `LastPriceLinePrimitive` to render a partial price line on the canvas that starts from the last price axis on the right and stops exactly at the center of the current forming candle, ending with a solid dot and an outer glow ring, smooth-lerping inside the animation loop.
 
-
-
-
+### [2026-06-14] Kronos Startup Kline Backfill & Log Spam Fix
+* **Root cause**: `bootstrapHistoricalKlines()` was fire-and-forget while `subscribeToSymbol()` immediately polled only 5 candles and triggered confluence/Kronos analysis — producing dozens of `[kronos] Insufficient klines` warnings on every boot.
+* **`signal-engine.ts`**: `startAutoAnalysis()` now `await`s bootstrap before subscribing to WS streams. Bootstrap upserts 150×1m + 100×1h candles per symbol (regime detector uses 1h Kronos) with `onConflictDoUpdate` and per-symbol success logs.
+* **`kronos-client.ts`**: When DB has < 50 candles, falls back to Binance REST `fetchKlines()` instead of returning null. Warning logs are throttled to once per symbol+interval per 5 minutes. Symbol normalization (`B-ETH_USDT` → `ETHUSDT`) applied consistently to cache and inference queries.
 

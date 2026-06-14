@@ -184,24 +184,69 @@ async function evaluateSymbolSignalAsync(coindcxSymbol: string, strategy: Strate
   return { symbol: coindcxSymbol, microScore: String(res.score), intraScore: "50.00", swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy, signalPrice: currentPrice } };
 }
 
-export async function bootstrapHistoricalKlines() {
+async function persistKlines(
+  symbol: string,
+  timeframe: string,
+  klines: Awaited<ReturnType<typeof fetchKlines>>
+): Promise<number> {
+  const db = getDb();
+  let saved = 0;
+
+  for (const k of klines) {
+    await db.insert(marketData).values({
+      symbol,
+      timeframe,
+      timestamp: new Date(k.openTime),
+      open: String(k.open),
+      high: String(k.high),
+      low: String(k.low),
+      close: String(k.close),
+      volume: String(k.volume),
+      quoteVolume: String(k.quoteVolume || "0"),
+      tradeCount: k.trades || 0,
+    }).onConflictDoUpdate({
+      target: [marketData.symbol, marketData.timeframe, marketData.timestamp],
+      set: {
+        open: String(k.open),
+        high: String(k.high),
+        low: String(k.low),
+        close: String(k.close),
+        volume: String(k.volume),
+        quoteVolume: String(k.quoteVolume || "0"),
+        tradeCount: k.trades || 0,
+      },
+    });
+    saved++;
+  }
+
+  return saved;
+}
+
+export async function bootstrapHistoricalKlines(): Promise<void> {
+  console.log("[signal-engine] Bootstrapping historical klines...");
+
   for (const pair of SUPPORTED_PAIRS) {
     try {
-      const klines = await fetchKlines(pair.binance, "1m", 150);
-      for (const k of klines) {
-        await getDb().insert(marketData).values({ symbol: pair.binance, timeframe: "1m", timestamp: new Date(k.openTime), open: String(k.open), high: String(k.high), low: String(k.low), close: String(k.close), volume: String(k.volume), quoteVolume: String(k.quoteVolume || "0"), tradeCount: k.trades || 0 }).onConflictDoNothing();
-      }
-    } catch {}
+      const klines1m = await fetchKlines(pair.binance, "1m", 150);
+      const saved1m = await persistKlines(pair.binance, "1m", klines1m);
+
+      const klines1h = await fetchKlines(pair.binance, "1h", 100);
+      const saved1h = await persistKlines(pair.binance, "1h", klines1h);
+
+      console.log(`[signal-engine] Bootstrapped ${saved1m} 1m + ${saved1h} 1h klines for ${pair.binance}`);
+    } catch (err) {
+      console.warn(`[signal-engine] Kline bootstrap failed for ${pair.binance}:`, err);
+    }
   }
 }
 
 let klineUpdateListener: any = null;
 let manualStrategy: StrategyType | null = null;
 let autoSwitchEnabled = true;
-export function startAutoAnalysis(strategyType?: StrategyType, autoSwitch = true) {
+export async function startAutoAnalysis(strategyType?: StrategyType, autoSwitch = true): Promise<void> {
   autoSwitchEnabled = autoSwitch;
   manualStrategy = autoSwitch ? null : (strategyType ?? manualStrategy);
-  bootstrapHistoricalKlines();
+  await bootstrapHistoricalKlines();
   for (const pair of SUPPORTED_PAIRS) subscribeToSymbol(pair.binance);
   if (klineUpdateListener) marketEvents.off("kline-update", klineUpdateListener);
   klineUpdateListener = async (s: string, k: any) => { if (k.isClosed) await runAnalysisForSymbol(s); };
