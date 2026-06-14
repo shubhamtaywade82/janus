@@ -1,5 +1,5 @@
-import { FastAPI, HTTPException } from "fastapi";
-import { pydantic } from "pydantic";
+from fastapi import FastAPI, HTTPException
+import pydantic
 import torch
 import numpy as np
 import os
