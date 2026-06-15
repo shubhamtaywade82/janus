@@ -8,14 +8,14 @@ import { detectSwings, computeAtrArray, type Kline } from "./price-action";
 
 // Default trail % per strategy type
 export const TRAIL_PCT: Record<StrategyType, number> = {
-  scalping_micro: 0.003,  // 0.3% — very tight for micro scalps
-  scalping:       0.005,  // 0.5%
-  bb_reversion:   0.007,  // 0.7%
-  momentum_reversal: 0.008, // 0.8%
-  intraday:       0.010,  // 1.0%
-  grid:           0.010,  // 1.0%
-  swing:          0.020,  // 2.0%
-  ml_sizing:      0.015,  // 1.5%
+  scalping_micro: 0.005,  // 0.5% (was 0.3%)
+  scalping:       0.010,  // 1.0% (was 0.5%)
+  bb_reversion:   0.015,  // 1.5% (was 0.7%)
+  momentum_reversal: 0.020, // 2.0% (was 0.8%)
+  intraday:       0.025,  // 2.5% (was 1.0%)
+  grid:           0.025,  // 2.5% (was 1.0%)
+  swing:          0.050,  // 5.0% (was 2.0%)
+  ml_sizing:      0.025,  // 2.5% (was 1.5%)
 };
 
 const TAKER_FEE = 0.0005;
@@ -145,14 +145,14 @@ export function calcNewTrailingStop(
     newStop = Math.min(newStop, pctStop);
   }
 
-  // 2. Fee-Aware Breakeven Logic (1:1 RR based on static trailPct risk)
+  // 2. Fee-Aware Breakeven Logic (Wait until 2x risk is reached to lock breakeven)
   const initialRiskLevel = side === "long" ? entryPrice * (1 - trailPct) : entryPrice * (1 + trailPct);
   const initialRisk = Math.abs(entryPrice - initialRiskLevel);
   
-  if (side === "long" && currentPrice >= entryPrice + initialRisk) {
+  if (side === "long" && currentPrice >= entryPrice + (initialRisk * 2)) {
     const breakeven = entryPrice * (1 + TAKER_FEE * 2);
     newStop = Math.max(newStop, breakeven);
-  } else if (side === "short" && currentPrice <= entryPrice - initialRisk) {
+  } else if (side === "short" && currentPrice <= entryPrice - (initialRisk * 2)) {
     const breakeven = entryPrice * (1 - TAKER_FEE * 2);
     newStop = Math.min(newStop, breakeven);
   }
