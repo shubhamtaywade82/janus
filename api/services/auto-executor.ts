@@ -802,16 +802,57 @@ private async calculateSizing(params: {
     console.warn(`[auto-executor] Failed to fetch Kronos signal for sizing:`, err);
   }
 
-  let notional = isManualOverride
-    ? parseFloat(String(sigMetadata!.sizeUsdt))
-    : availEquityUsdt * baseAllocPct * convictionMult;
+  // ── 1. Determine Stop Loss and Take Profit Percentages first ──
+  let slPct = advisorAdvice?.stopLossPct ?? (sigMetadata?.stopLossPct ? parseFloat(String(sigMetadata.stopLossPct)) : parseFloat(config.stopLossPct ?? "0.015"));
+  let tp1Pct = advisorAdvice?.takeProfitPct ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
+
+  if (brainHasAuthority && brainResult) {
+    if (brainResult.adjustedSlPct !== undefined) slPct = brainResult.adjustedSlPct / 100;
+    if (brainResult.adjustedTpPct !== undefined) tp1Pct = brainResult.adjustedTpPct / 100;
+  }
+
+  const minSlPct = SYMBOL_MIN_SL_PCT[params.signal.symbol as SupportedSymbol] ?? DEFAULT_MIN_SL_PCT;
+  const MAX_SL_PCT = 0.08;   // 8%
+  const MIN_TP_PCT = 0.005;  // 0.5%
+  const MAX_TP_PCT = 0.15;   // 15%
+
+  if (slPct > 1) {
+    console.warn(`[auto-executor] slPct ${slPct} appears to be a whole percentage — dividing by 100`);
+    slPct = slPct / 100;
+  }
+  if (tp1Pct > 1) {
+    console.warn(`[auto-executor] tp1Pct ${tp1Pct} appears to be a whole percentage — dividing by 100`);
+    tp1Pct = tp1Pct / 100;
+  }
+
+  slPct = Math.max(minSlPct, Math.min(MAX_SL_PCT, slPct));
+  tp1Pct = Math.max(MIN_TP_PCT, Math.min(MAX_TP_PCT, tp1Pct));
+
+  // ── 2. Calculate Capital Allocation (Hybrid Risk-Aware) ──
+  // Limit how punishing the conviction multiplier can be (minimum 30% conviction to prevent tiny trades)
+  convictionMult = Math.max(0.3, convictionMult);
+
+  let notional = 0;
+  if (isManualOverride) {
+    notional = parseFloat(String(sigMetadata!.sizeUsdt));
+  } else {
+    // Base capital allocation model
+    const baseNotional = availEquityUsdt * baseAllocPct * convictionMult;
+    
+    // Risk-based ceiling (Don't risk more than 3% of total account balance on a single trade's stop loss)
+    const maxRiskUsdt = availEquityUsdt * 0.03;
+    const riskBasedCeiling = maxRiskUsdt / slPct;
+    
+    // Default fallback size (prevent micro-sizes in highly penalized conditions)
+    const defaultMinSize = parseFloat(config.defaultSizeUsdt ?? "50");
+
+    notional = Math.max(baseNotional, defaultMinSize);
+    notional = Math.min(notional, riskBasedCeiling);
+    notional = Math.min(notional, availEquityUsdt * maxAllocPct); // Hard cap on total notional
+  }
 
   if (brainHasAuthority && brainResult?.adjustedSizeUsdt) {
     notional = brainResult.adjustedSizeUsdt;
-  }
-
-  if (!isManualOverride) {
-    notional = Math.min(notional, availEquityUsdt * maxAllocPct);
   }
 
   const strategyMaxLev = STRATEGY_CONFIGS[strategyType]?.maxLeverage ?? 5;
@@ -846,12 +887,10 @@ private async calculateSizing(params: {
         size = parseFloat(size.toFixed(instrInfo.target_currency_precision ?? 4));
       }
 
-      // Re-check min quantity after rounding down to step size — rounding can push size below the exchange minimum
       if (minQty > 0 && size < minQty) {
         return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: `rounded size ${size.toFixed(6)} < min qty ${minQty}`, skipGate: "min_qty" };
       }
 
-      // Min notional check — exchange rejects orders whose value (qty × price) is below this threshold
       const minNotional = parseFloat(instrInfo.min_notional ?? "0");
       const roundedNotional = size * currentPrice;
       if (minNotional > 0 && roundedNotional < minNotional) {
@@ -861,32 +900,6 @@ private async calculateSizing(params: {
   } catch (err) {
     console.warn(`[auto-executor] Failed to fetch instrument info:`, err);
   }
-
-  let slPct = advisorAdvice?.stopLossPct ?? (sigMetadata?.stopLossPct ? parseFloat(String(sigMetadata.stopLossPct)) : parseFloat(config.stopLossPct ?? "0.015"));
-  let tp1Pct = advisorAdvice?.takeProfitPct ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
-
-  if (brainHasAuthority && brainResult) {
-    if (brainResult.adjustedSlPct !== undefined) slPct = brainResult.adjustedSlPct / 100;
-    if (brainResult.adjustedTpPct !== undefined) tp1Pct = brainResult.adjustedTpPct / 100;
-  }
-
-  // ── Sanity clamp: catch any remaining misscaled or out-of-range values ──
-  const minSlPct = SYMBOL_MIN_SL_PCT[params.signal.symbol as SupportedSymbol] ?? DEFAULT_MIN_SL_PCT;
-  const MAX_SL_PCT = 0.08;   // 8%
-  const MIN_TP_PCT = 0.005;  // 0.5%
-  const MAX_TP_PCT = 0.15;   // 15%
-
-  if (slPct > 1) {
-    console.warn(`[auto-executor] slPct ${slPct} appears to be a whole percentage — dividing by 100`);
-    slPct = slPct / 100;
-  }
-  if (tp1Pct > 1) {
-    console.warn(`[auto-executor] tp1Pct ${tp1Pct} appears to be a whole percentage — dividing by 100`);
-    tp1Pct = tp1Pct / 100;
-  }
-
-  slPct = Math.max(minSlPct, Math.min(MAX_SL_PCT, slPct));
-  tp1Pct = Math.max(MIN_TP_PCT, Math.min(MAX_TP_PCT, tp1Pct));
 
   const stopLoss = parseFloat((side === "long" ? currentPrice * (1 - slPct) : currentPrice * (1 + slPct)).toFixed(basePrecision));
   const takeProfit = parseFloat((side === "long" ? currentPrice * (1 + tp1Pct) : currentPrice * (1 - tp1Pct)).toFixed(basePrecision));
