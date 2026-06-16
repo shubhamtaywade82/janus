@@ -82,6 +82,11 @@ export const env = {
 
   // ─── Kronos ───
   kronosEndpoint: process.env.KRONOS_ENDPOINT ?? "http://localhost:8000",
+
+  // ─── Telegram ───
+  // TELEGRAM_API_BASE — override Bot API host (e.g. local Bot API server or proxy)
+  telegramApiBase: (process.env.TELEGRAM_API_BASE ?? "https://api.telegram.org").replace(/\/$/, ""),
+  telegramConnectTimeoutMs: parseInt(process.env.TELEGRAM_CONNECT_TIMEOUT_MS ?? "5000", 10),
 };
 
 // CoinDCX env credentials fallback (used when DB has no stored credentials)

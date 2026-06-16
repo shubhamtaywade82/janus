@@ -19,7 +19,7 @@ import { getDb } from "../queries/connection";
 import { users, positions } from "@db/schema";
 import { eq, and, gte } from "drizzle-orm";
 import { globalKillSwitch } from "./kill-switch";
-import { sendTelegramMessage } from "./telegram";
+import { getTelegramApiBase, isTelegramPaused, recordTelegramNetworkFailure, sendTelegramMessage } from "./telegram";
 import { env } from "../lib/env";
 
 // ─── Public exports ────────────────────────────────────────────────────────────
@@ -335,13 +335,14 @@ async function handleCommand(
 async function pollUpdates(): Promise<void> {
   const creds = await getBotCredentials();
   if (!creds) return; // no token configured yet — silently skip
+  if (isTelegramPaused()) return;
 
   try {
     const url =
-      `https://api.telegram.org/bot${creds.botToken}/getUpdates` +
+      `${getTelegramApiBase()}/bot${creds.botToken}/getUpdates` +
       `?offset=${lastUpdateId + 1}&timeout=2&allowed_updates=%5B%22message%22%5D`;
 
-    const res = await fetch(url, { signal: AbortSignal.timeout(5_000) });
+    const res = await fetch(url, { signal: AbortSignal.timeout(env.telegramConnectTimeoutMs) });
     if (!res.ok) return;
 
     const body = (await res.json()) as {
@@ -367,11 +368,17 @@ async function pollUpdates(): Promise<void> {
       });
     }
   } catch (err) {
-    // Network errors during polling are expected (timeout, transient failures)
-    // Log only non-timeout errors to avoid noise
-    if ((err as Error).name !== "TimeoutError" && (err as Error).name !== "AbortError") {
-      console.error("[telegram-bot] Poll error:", err);
+    const error = err as Error & { cause?: { code?: string } };
+    const isTransientNetwork =
+      error.name === "TimeoutError" ||
+      error.name === "AbortError" ||
+      error.message.includes("fetch failed") ||
+      error.cause?.code === "UND_ERR_CONNECT_TIMEOUT";
+    if (isTransientNetwork) {
+      recordTelegramNetworkFailure(error.message);
+      return;
     }
+    console.error("[telegram-bot] Poll error:", err);
   }
 }
 

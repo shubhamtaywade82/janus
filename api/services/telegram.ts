@@ -5,6 +5,7 @@
 
 import { getDb } from "../queries/connection";
 import { users } from "@db/schema";
+import { env } from "../lib/env";
 
 export interface SendTelegramMessageOptions {
   botToken: string;
@@ -16,13 +17,75 @@ export interface SendTelegramMessageOptions {
 // ─── Global rate limiter ───
 // Telegram allows 30 messages/second per bot, but practically 1 msg/s per chat
 // to avoid flooding. We enforce a minimum gap and respect 429 retry_after.
-const MIN_SEND_INTERVAL_MS = 3_000; // 1 alert per 3 seconds max
+const MIN_SEND_INTERVAL_MS = 3_000;
 let lastSentAt = 0;
-let blockedUntil = 0; // non-zero when a 429 told us to back off
+let rateLimitUntil = 0;
+
+// ─── Circuit breaker for unreachable API (blocked networks, DNS failures) ───
+const INITIAL_CIRCUIT_BACKOFF_MS = 60_000;
+const MAX_CIRCUIT_BACKOFF_MS = 30 * 60_000;
+const CIRCUIT_LOG_INTERVAL_MS = 5 * 60_000;
+let circuitOpenUntil = 0;
+let circuitBackoffMs = INITIAL_CIRCUIT_BACKOFF_MS;
+let lastCircuitLogAt = 0;
+
+export function getTelegramApiBase(): string {
+  return env.telegramApiBase;
+}
+
+export function isTelegramPaused(): boolean {
+  const now = Date.now();
+  return now < rateLimitUntil || now < circuitOpenUntil;
+}
+
+function isNetworkError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const cause = (error as { cause?: { code?: string } }).cause;
+  return (
+    error.message.includes("fetch failed") ||
+    cause?.code === "UND_ERR_CONNECT_TIMEOUT" ||
+    cause?.code === "ECONNREFUSED" ||
+    cause?.code === "ENOTFOUND" ||
+    cause?.code === "ETIMEDOUT"
+  );
+}
+
+function openCircuit(reason: string): void {
+  circuitOpenUntil = Date.now() + circuitBackoffMs;
+  const now = Date.now();
+  if (now - lastCircuitLogAt >= CIRCUIT_LOG_INTERVAL_MS) {
+    const backoffSec = Math.round(circuitBackoffMs / 1000);
+    console.warn(
+      `[telegram] API unreachable — pausing sends for ${backoffSec}s (${reason}). ` +
+        `Set TELEGRAM_API_BASE if using a local Bot API proxy.`,
+    );
+    lastCircuitLogAt = now;
+  }
+  circuitBackoffMs = Math.min(circuitBackoffMs * 2, MAX_CIRCUIT_BACKOFF_MS);
+}
+
+/** Record a network-level Telegram failure (shared by send + polling paths). */
+export function recordTelegramNetworkFailure(reason: string): void {
+  openCircuit(reason);
+}
+
+function closeCircuit(): void {
+  circuitOpenUntil = 0;
+  circuitBackoffMs = INITIAL_CIRCUIT_BACKOFF_MS;
+}
+
+/** Test-only reset for module-level rate/circuit state. */
+export function __resetTelegramStateForTests(): void {
+  lastSentAt = 0;
+  rateLimitUntil = 0;
+  circuitOpenUntil = 0;
+  circuitBackoffMs = INITIAL_CIRCUIT_BACKOFF_MS;
+  lastCircuitLogAt = 0;
+}
 
 /**
  * Sends a text message to a specific Telegram chat/channel using a Telegram Bot.
- * Respects the global rate limit and 429 backoff.
+ * Respects the global rate limit, 429 backoff, and network circuit breaker.
  */
 export async function sendTelegramMessage({
   botToken,
@@ -36,26 +99,27 @@ export async function sendTelegramMessage({
   }
 
   const now = Date.now();
-  if (now < blockedUntil) {
-    // Still in 429 backoff — silently drop
+  if (now < rateLimitUntil || now < circuitOpenUntil) {
     return false;
   }
   if (now - lastSentAt < MIN_SEND_INTERVAL_MS) {
-    // Rate-limit locally — silently drop
     return false;
   }
 
   try {
-    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
+    const response = await fetch(`${getTelegramApiBase()}/bot${botToken}/sendMessage`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ chat_id: chatId, text, parse_mode: parseMode }),
+      signal: AbortSignal.timeout(env.telegramConnectTimeoutMs),
     });
 
     if (response.status === 429) {
-      const body = await response.json().catch(() => ({})) as { parameters?: { retry_after?: number } };
+      const body = (await response.json().catch(() => ({}))) as {
+        parameters?: { retry_after?: number };
+      };
       const retryAfterSec = body?.parameters?.retry_after ?? 60;
-      blockedUntil = Date.now() + retryAfterSec * 1_000;
+      rateLimitUntil = Date.now() + retryAfterSec * 1_000;
       console.warn(`[telegram] Rate-limited — backing off ${retryAfterSec}s`);
       return false;
     }
@@ -67,9 +131,14 @@ export async function sendTelegramMessage({
     }
 
     lastSentAt = Date.now();
+    closeCircuit();
     return true;
   } catch (error) {
-    console.error("Failed to send Telegram message:", error);
+    if (isNetworkError(error)) {
+      openCircuit((error as Error).message);
+    } else {
+      console.error("Failed to send Telegram message:", error);
+    }
     return false;
   }
 }
@@ -88,15 +157,17 @@ export async function testTelegramConnection(botToken: string, chatId: string): 
  */
 export async function broadcastTelegramAlert(
   text: string,
-  options?: { isLiquidityAlert?: boolean; isHighPriority?: boolean }
+  options?: { isLiquidityAlert?: boolean },
 ): Promise<boolean> {
+  if (isTelegramPaused()) return false;
+
   try {
     const db = getDb();
     const user = await db
-      .select({ 
-        telegramBotToken: users.telegramBotToken, 
+      .select({
+        telegramBotToken: users.telegramBotToken,
         telegramChatId: users.telegramChatId,
-        telegramLiquidityAlertsEnabled: users.telegramLiquidityAlertsEnabled
+        telegramLiquidityAlertsEnabled: users.telegramLiquidityAlertsEnabled,
       })
       .from(users)
       .limit(1);
@@ -104,12 +175,8 @@ export async function broadcastTelegramAlert(
     if (!user || user.length === 0) return false;
     const settings = user[0];
 
-    // If it's a liquidity alert, only filter out if the toggle is disabled AND it's not high priority.
-    // Non-liquidity alerts (user price rules, structural system signals, account alerts) always pass through.
-    if (options?.isLiquidityAlert) {
-      if (!settings.telegramLiquidityAlertsEnabled && !options.isHighPriority) {
-        return false;
-      }
+    if (options?.isLiquidityAlert && !settings.telegramLiquidityAlertsEnabled) {
+      return false;
     }
 
     if (!settings.telegramBotToken || !settings.telegramChatId) return false;

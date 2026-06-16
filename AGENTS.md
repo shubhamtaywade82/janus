@@ -258,3 +258,15 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **Full Available Depth (Math.max)**: Reverted the row iteration to map to `Math.max(bidsWithSum.length, asksWithSum.length)` as requested, ensuring the full depth of both books is displayed even if they have different number of levels.
 * **Tailwind Opacity Fix**: Fixed a bug where the background depth volume bars were not displaying because `/8` (8% opacity) is a non-standard Tailwind opacity step. Changed `bg-j-up-bright/8` and `bg-j-down-bright/8` to `bg-j-up-bright/10` and `bg-j-down-bright/10` which compile and display correctly.
 * **Lowercase & Divider Styling**: Refined the headers and sub-headers to use lowercase font-mono layout (`bid | ask`, `amt price | price amt`) matching user design instructions, separated by a crisp, continuous center divider line (`border-r border-[#27272a]`).
+
+### [2026-06-16] Telegram Liquidity & Liquidation Alert Gating
+* **Liquidation monitor**: Removed Telegram sends from `liquidation-monitor.ts` — proximity critical/warning events stay in logs + `liquidationMonitorEvents` only.
+* **Liquidity engine**: `LONG_LIQUIDATION_CASCADE` / `SHORT_LIQUIDATION_CASCADE` no longer route to Telegram. Removed high-priority sweep bypass — when `telegramLiquidityAlertsEnabled=false`, **all** liquidity alerts are blocked.
+* **`broadcastTelegramAlert`**: Dropped `isHighPriority` option; liquidity gate is now a hard check on `telegramLiquidityAlertsEnabled`. Skips DB fetch when circuit breaker is open.
+
+### [2026-06-16] Telegram Network Circuit Breaker & Log Spam Fix
+* **Root cause**: `api.telegram.org:443` is unreachable from the host network (connect timeout `UND_ERR_CONNECT_TIMEOUT`). Liquidity/alert engines kept calling `sendTelegramMessage`, each waiting ~10s and logging a full stack trace — flooding PM2 logs.
+* **`api/services/telegram.ts`**: Added network circuit breaker with exponential backoff (60s → 30m cap). Failed sends and polling errors open the circuit; successful send closes it. Error logs throttled to once per 5 minutes. Connect timeout shortened to 5s via `AbortSignal.timeout`. Exported `isTelegramPaused()`, `recordTelegramNetworkFailure()`, `getTelegramApiBase()`.
+* **`api/services/telegram-bot.ts`**: Polling skips when circuit is open; poll network failures feed the shared circuit breaker instead of logging every 3s.
+* **Env**: `TELEGRAM_API_BASE` (default `https://api.telegram.org`) and `TELEGRAM_CONNECT_TIMEOUT_MS` (default `5000`) in `api/lib/env.ts` for local Bot API proxy setups.
+* **Tests**: Circuit breaker open/skip/close behavior covered in `api/services/__tests__/telegram.test.ts`.

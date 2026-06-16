@@ -408,7 +408,7 @@ const AlertsModal = ({ isOpen, onClose }: AlertsModalProps) => {
                     Enable Liquidity Alerts to Telegram
                   </label>
                   <span className="text-[8px] text-[#71717a]">
-                    Send high-priority liquidity alerts (sweeps, squeezes, cascades) to Telegram.
+                    Send liquidity alerts (sweeps, squeezes, pools) to Telegram. Liquidation events are never sent.
                   </span>
                 </div>
               </div>
