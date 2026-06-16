@@ -227,6 +227,7 @@ export const autoExecutorRouter = createRouter({
   killSwitchStatus: authedQuery.query(() => ({
     isActive: globalKillSwitch.isActive,
     state: globalKillSwitch.state,
+    autoResetAt: globalKillSwitch.getAutoResetAt(),
   })),
 
   // ─── Kill switch stream ───

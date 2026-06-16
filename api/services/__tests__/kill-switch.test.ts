@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterAll, vi } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, afterAll, vi } from "vitest";
 import * as fs from "fs";
 import * as path from "path";
 import { KillSwitch } from "../kill-switch";
@@ -200,5 +200,76 @@ describe("KillSwitch — DB persistence (initFromDb)", () => {
     }];
     await ks.initFromDb();
     expect(ks.isActive).toBe(false);
+  });
+});
+
+describe("KillSwitch — auto-reset TTL", () => {
+  let ks: KillSwitch;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.stubEnv("KILL_SWITCH_AUTO_RESET_MS", "3600000");
+    if (fs.existsSync(STATE_FILE)) fs.unlinkSync(STATE_FILE);
+    if (fs.existsSync(TMP_FILE)) fs.unlinkSync(TMP_FILE);
+    mockDbRows = [];
+    ks = new KillSwitch();
+  });
+
+  afterEach(() => {
+    ks.reset();
+    vi.useRealTimers();
+    vi.unstubAllEnvs();
+  });
+
+  afterAll(() => {
+    if (fs.existsSync(STATE_FILE)) fs.unlinkSync(STATE_FILE);
+    if (fs.existsSync(TMP_FILE)) fs.unlinkSync(TMP_FILE);
+  });
+
+  it("auto-resets after 1 hour", () => {
+    ks.trigger("manual", "test stop");
+    expect(ks.isActive).toBe(true);
+
+    vi.advanceTimersByTime(60 * 60 * 1000);
+
+    expect(ks.isActive).toBe(false);
+    expect(ks.canTrade()).toBe(true);
+  });
+
+  it("cancels auto-reset timer on manual reset", () => {
+    ks.trigger("manual", "test stop");
+    ks.reset();
+
+    vi.advanceTimersByTime(60 * 60 * 1000);
+
+    expect(ks.isActive).toBe(false);
+  });
+
+  it("reports autoResetAt while active", () => {
+    vi.setSystemTime(new Date("2026-06-17T12:00:00Z"));
+    ks.trigger("drawdown", "daily -5%");
+
+    expect(ks.getAutoResetAt()).toBe(Date.parse("2026-06-17T13:00:00Z"));
+  });
+
+  it("auto-resets immediately on boot when TTL already elapsed", async () => {
+    const triggeredAt = Date.now() - (60 * 60 * 1000 + 1);
+    mockDbRows = [{
+      key: "global", isActive: true, type: "feed_failure",
+      reason: "WS feeds lost", triggeredAt: String(triggeredAt), updatedAt: new Date(),
+    }];
+    await ks.initFromDb();
+    expect(ks.isActive).toBe(false);
+  });
+
+  it("does not auto-reset when KILL_SWITCH_AUTO_RESET_MS=0", () => {
+    vi.stubEnv("KILL_SWITCH_AUTO_RESET_MS", "0");
+    ks = new KillSwitch();
+    ks.trigger("manual", "persistent halt");
+
+    vi.advanceTimersByTime(2 * 60 * 60 * 1000);
+
+    expect(ks.isActive).toBe(true);
+    expect(ks.getAutoResetAt()).toBeNull();
   });
 });

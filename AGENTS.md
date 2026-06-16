@@ -270,3 +270,14 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **`api/services/telegram-bot.ts`**: Polling skips when circuit is open; poll network failures feed the shared circuit breaker instead of logging every 3s.
 * **Env**: `TELEGRAM_API_BASE` (default `https://api.telegram.org`) and `TELEGRAM_CONNECT_TIMEOUT_MS` (default `5000`) in `api/lib/env.ts` for local Bot API proxy setups.
 * **Tests**: Circuit breaker open/skip/close behavior covered in `api/services/__tests__/telegram.test.ts`.
+
+### [2026-06-17] Deterministic SMC Market Structure Engine
+* **`api/services/price-action.ts`**: Rewrote swing labeling and BOS/CHoCH detection to follow confirmed swing-sequence rules. HH/LH/HL/LL now compare only consecutive same-type swings (first swing unlabeled). Structure breaks require initial HIGH→LOW→HIGH (or inverse) pattern before emitting events. Bullish BOS = close > last HH; bearish BOS = close < last LL; bearish CHoCH = bullish trend + close < last HL; bullish CHoCH = bearish trend + close > last LH. Added duplicate-break suppression per level.
+* **`engine/src/application/analysis/market-structure-engine.ts`**: Mirrored the same state-machine logic; swing pivots now use strict `>`/`<` inequality (no tie qualifies). Trend derivation uses bar-accurate `deriveTrendFromStructure()`.
+* **Tests**: Added deterministic HH/HL/BOS/CHoCH fixtures in `api/services/__tests__/price-action.test.ts`; flat-market pivot test updated in `engine/.../analysis-engines.test.ts`.
+
+### [2026-06-17] Kill Switch 1-Hour Auto-Reset
+* **`api/services/kill-switch.ts`**: Active kill switch now schedules automatic `reset()` after 1 hour (configurable via `KILL_SWITCH_AUTO_RESET_MS`, default `3600000`; set `0` to disable). On server boot, expired halts from DB/file are cleared immediately; remaining TTL is rescheduled. Manual reset cancels the timer.
+* **`auto-executor-router.ts`**: `killSwitchStatus` exposes `autoResetAt` epoch for UI countdown.
+* **`KillSwitchButton.tsx`**: HALTED badge shows minutes until auto-resume.
+* **Tests**: Auto-reset TTL cases in `api/services/__tests__/kill-switch.test.ts`.
