@@ -1,13 +1,18 @@
-# Graph Report - .  (2026-06-16)
+# Graph Report - janus  (2026-06-16)
 
 ## Corpus Check
-- 472 files · ~368,173 words
+- 469 files · ~368,344 words
 - Verdict: corpus is large enough that graph structure adds value.
 
 ## Summary
-- 2893 nodes · 6493 edges · 167 communities (115 shown, 52 thin omitted)
+- 2893 nodes · 6494 edges · 166 communities (116 shown, 50 thin omitted)
 - Extraction: 100% EXTRACTED · 0% INFERRED · 0% AMBIGUOUS · INFERRED: 13 edges (avg confidence: 0.8)
-- Token cost: 4,500 input · 900 output
+- Token cost: 0 input · 0 output
+
+## Graph Freshness
+- Built from commit: `5a924f1c`
+- Run `git rev-parse HEAD` and compare to check if the graph is stale.
+- Run `graphify update .` after code changes (no API cost).
 
 ## Community Hubs (Navigation)
 - [[_COMMUNITY_UI Components & Shadcn Utilities|UI Components & Shadcn Utilities]]
@@ -143,7 +148,6 @@
 - [[_COMMUNITY_Comm 131 Scratch Test Futures|Comm 131: Scratch Test Futures]]
 - [[_COMMUNITY_Comm 132 Scratch Test Spot|Comm 132: Scratch Test Spot]]
 - [[_COMMUNITY_Comm 133 Scratch Verify Db|Comm 133: Scratch Verify Db]]
-- [[_COMMUNITY_Comm 134 Services Liquidity Engine|Comm 134: Services Liquidity Engine]]
 - [[_COMMUNITY_Comm 135 Test Conn|Comm 135: Test Conn]]
 - [[_COMMUNITY_Comm 136 Tests Auth Enforcement|Comm 136: Tests Auth Enforcement]]
 - [[_COMMUNITY_Comm 137 Concept Cybernetic Avatar|Comm 137: Concept Cybernetic Avatar]]
@@ -176,12 +180,12 @@
 10. `AutoExecutorConfig` - 25 edges
 
 ## Surprising Connections (you probably didn't know these)
-- `seed()` --calls--> `getDb()`  [EXTRACTED]
-  db/seed.ts → api/queries/connection.ts
 - `run()` --calls--> `getDb()`  [EXTRACTED]
   scratch/trigger-test-signal.ts → api/queries/connection.ts
 - `main()` --calls--> `getDb()`  [EXTRACTED]
   scratch/verify-phase3.ts → api/queries/connection.ts
+- `main()` --calls--> `callLLM()`  [EXTRACTED]
+  scratch/verify-phase1.ts → api/services/ollama.ts
 - `handlePnl()` --calls--> `fmt()`  [INFERRED]
   api/services/telegram-bot.ts → src/components/SystemReportPanel.tsx
 - `test()` --calls--> `fetchPortfolioData()`  [INFERRED]
@@ -198,35 +202,35 @@
 ## Hyperedges (group relationships)
 - **Autonomous AI Brain Subsystem** — docs_ai_brain_consolidated, docs_ai_brain_plan, concept_pgvector_migration [EXTRACTED 1.00]
 
-## Communities (167 total, 52 thin omitted)
+## Communities (166 total, 50 thin omitted)
 
 ### Community 0 - "UI Components & Shadcn Utilities"
-Cohesion: 0.03
-Nodes (78): cn(), AccordionContent(), AccordionItem(), AccordionTrigger(), BreadcrumbEllipsis(), BreadcrumbItem(), BreadcrumbLink(), BreadcrumbList() (+70 more)
+Cohesion: 0.04
+Nodes (76): cn(), AccordionContent(), AccordionItem(), AccordionTrigger(), BreadcrumbEllipsis(), BreadcrumbItem(), BreadcrumbLink(), BreadcrumbList() (+68 more)
 
 ### Community 1 - "Position Management & AI Advisor"
 Cohesion: 0.06
-Nodes (57): buildPositionPrompt(), codeBasedDecision(), getPositionRecommendation(), PortfolioSummary, evaluateBias(), positionManagerBus, PositionManagerEvents, executeAction() (+49 more)
+Nodes (51): signals, buildPositionPrompt(), codeBasedDecision(), getPositionRecommendation(), PortfolioSummary, evaluateBias(), positionManagerBus, PositionManagerEvents (+43 more)
 
 ### Community 2 - "Layouts & Navigation UI"
 Cohesion: 0.04
-Nodes (62): AuthLayout(), AuthLayoutContent(), AuthLayoutContentProps, menuItems, AuthLayoutSkeleton(), Layout(), useIsMobile(), useAuth() (+54 more)
+Nodes (61): AuthLayout(), AuthLayoutContent(), AuthLayoutContentProps, menuItems, AuthLayoutSkeleton(), useIsMobile(), useAuth(), UseAuthOptions (+53 more)
 
 ### Community 3 - "Chart Alerts & Animated UI"
 Cohesion: 0.06
-Nodes (53): ALERT_DEFAULTS, AlertConfig, AlertConfigPanel(), INDICATOR_ALERTS, KNN_ALERTS, Props, SMC_ALERTS, AnimatedNumber() (+45 more)
+Nodes (49): ALERT_DEFAULTS, AlertConfig, AlertConfigPanel(), INDICATOR_ALERTS, KNN_ALERTS, Props, SMC_ALERTS, AnimatedNumber() (+41 more)
 
 ### Community 4 - "Auto Executor & Database Queries"
 Cohesion: 0.06
-Nodes (46): equitySnapshots, getDb(), main(), main(), prices, main(), main(), main() (+38 more)
+Nodes (51): accountLedger, equitySnapshots, InsertUser, seed(), getDb(), findUserByUnionId(), upsertUser(), main() (+43 more)
 
 ### Community 5 - "Database Schemas & Seed Data"
 Cohesion: 0.06
-Nodes (48): futuresWallets, positions, trades, seed(), decrypt(), decryptCreds(), encrypt(), getKey() (+40 more)
+Nodes (42): exchangeCredentials, futuresWallets, positions, trades, decrypt(), decryptCreds(), encrypt(), getKey() (+34 more)
 
 ### Community 6 - "Paper Trading Adapter & Ledger"
 Cohesion: 0.03
-Nodes (58): ExecutionAdapter, PaperExecutionAdapter, AccountLedgerEntry, AccountSnapshot, AlertDeliveryFailure, BrainAction, brainActions, BrainCandidateRule (+50 more)
+Nodes (65): brainGovernor, GovernorOutcome, ExecutionAdapter, PaperExecutionAdapter, AccountLedgerEntry, AccountSnapshot, AlertDeliveryFailure, BrainAction (+57 more)
 
 ### Community 7 - "Node/NPM Dependencies"
 Cohesion: 0.03
@@ -237,12 +241,12 @@ Cohesion: 0.08
 Nodes (28): mapDepthToSnapshot(), mapKlineToCandle(), mapTradeToTick(), BinanceWsMessage, DeltaOrderEvent, EXCHANGE_ID, mapBalance(), mapFill() (+20 more)
 
 ### Community 9 - "Position Actions & Snapshots Schema"
-Cohesion: 0.07
-Nodes (52): shutdown(), AiAssessment, aiAssessments, PositionActionLog, positionActionLogs, PositionSnapshot, positionSnapshots, PositionTransaction (+44 more)
+Cohesion: 0.08
+Nodes (47): AiAssessment, aiAssessments, PositionActionLog, positionActionLogs, PositionSnapshot, positionSnapshots, PositionTransaction, positionTransactions (+39 more)
 
 ### Community 10 - "API Boot & Env Configurations"
-Cohesion: 0.05
-Nodes (36): app, _bootTime, distPath, exchangeCredentials, InsertUser, orders, env, _tradingMode (+28 more)
+Cohesion: 0.07
+Nodes (27): app, _bootTime, distPath, shutdown(), AppRouter, startBrainScheduler(), accountLedgerRelations, accountSnapshotsRelations (+19 more)
 
 ### Community 11 - "CoinDCX REST & Order Client"
 Cohesion: 0.10
@@ -250,7 +254,7 @@ Nodes (22): CoinDCXFillClient, CoinDCXOrderClient, CoinDCXPositionClient, CoinDC
 
 ### Community 12 - "Auth & TRPC Router Middleware"
 Cohesion: 0.07
-Nodes (34): authRouter, adminQuery, authedQuery, requireAuth, t, AppRouter, ErrorMessages, Paths (+26 more)
+Nodes (35): authRouter, adminQuery, authedQuery, requireAuth, t, ErrorMessages, Paths, Session (+27 more)
 
 ### Community 13 - "Technical Analysis Pipeline"
 Cohesion: 0.08
@@ -269,8 +273,8 @@ Cohesion: 0.09
 Nodes (33): test(), args, channelArgs, has(), main(), pairFlagIdx, main(), main() (+25 more)
 
 ### Community 17 - "Comm 17: Brain Brain Governor"
-Cohesion: 0.08
-Nodes (30): brainGovernor, GovernorOutcome, accountLedger, tradingAccounts, AutoExecutorState, brainOrchestrator, DEDUP_FILE, getCurrencyConversions() (+22 more)
+Cohesion: 0.09
+Nodes (30): tradingAccounts, executeAction(), fetchCredentials(), isSlImprovement(), paperWalletCurrency(), roundQty(), estimateFee(), recordPositionTransaction() (+22 more)
 
 ### Community 18 - "Comm 18: Delta Delta Market"
 Cohesion: 0.08
@@ -281,8 +285,8 @@ Cohesion: 0.10
 Nodes (14): RiskEngine, AutoExecutorConfig, riskSessions, Signal, AutoExecutor, GovernorContext, DEFAULT_RISK_CONFIG, RiskConfig (+6 more)
 
 ### Community 20 - "Comm 20: Components Settingsmodal"
-Cohesion: 0.08
-Nodes (26): SettingsModal(), SettingsModalProps, ThemeSwitcher(), Login(), componentIcons, levelConfig, LogRow(), NotFound() (+18 more)
+Cohesion: 0.13
+Nodes (15): AiAnalysis(), DEFAULT_SYMBOLS, Login(), componentIcons, levelConfig, LogRow(), NotFound(), Card() (+7 more)
 
 ### Community 21 - "Comm 21: Analysis Analysis Result"
 Cohesion: 0.13
@@ -293,32 +297,32 @@ Cohesion: 0.13
 Nodes (16): ExchangeId, OrderType, Side, Timestamp, InMemoryPortfolioRepository, Instrument, PortfolioAggregator, Portfolio (+8 more)
 
 ### Community 23 - "Comm 23: Chart Alert Engine"
-Cohesion: 0.09
-Nodes (34): AlertEvent, checkIndicatorAlerts(), checkKnnAlerts(), checkSMCAlerts(), KlineSimple, uid(), ADXResult, BBResult (+26 more)
+Cohesion: 0.07
+Nodes (41): AlertEvent, checkIndicatorAlerts(), checkKnnAlerts(), checkSMCAlerts(), KlineSimple, uid(), ADXResult, BBResult (+33 more)
 
 ### Community 24 - "Comm 24: Brain Brain Evolution"
-Cohesion: 0.11
-Nodes (20): backtestStrategyOnHistory(), evolveStrategies(), mutateStrategyPrompt(), memoryStore, BrainConfig, BrainDecision, brainEvents, BrainVerdict (+12 more)
+Cohesion: 0.09
+Nodes (27): backtestStrategyOnHistory(), evolveStrategies(), mutateStrategyPrompt(), memoryStore, BrainConfig, BrainDecision, brainEvents, BrainVerdict (+19 more)
 
 ### Community 25 - "Comm 25: Db Schema Orderbooksnapshots"
-Cohesion: 0.10
-Nodes (24): orderBookSnapshots, recentTicks, INTERVAL_MS, marketRouter, BINANCE_SPOT_BASES, BinanceAggTrade, BinanceCircuitBreaker, binanceFetch() (+16 more)
+Cohesion: 0.09
+Nodes (25): orderBookSnapshots, recentTicks, INTERVAL_MS, marketRouter, BINANCE_SPOT_BASES, BinanceAggTrade, BinanceCircuitBreaker, binanceFetch() (+17 more)
 
 ### Community 26 - "Comm 26: App Config Engineconfig"
 Cohesion: 0.10
 Nodes (11): EngineConfig, Container, ClockPort, SystemClock, ExchangeGatewayPort, ExecutionEngine, LedgerEngine, StrategyRunner (+3 more)
 
 ### Community 27 - "Comm 27: Db Schema Killswitchstate"
-Cohesion: 0.09
-Nodes (15): killSwitchState, calcBackoffMs(), FeedHealth, feedHealthEvents, feedHealthRegistry, FeedStatus, getOrCreateFeedHealth(), KillReason (+7 more)
+Cohesion: 0.24
+Nodes (3): KillSwitch, mockDbRows, STATE_FILE
 
 ### Community 28 - "Comm 28: App Bootstrap"
 Cohesion: 0.14
 Nodes (22): main(), ExchangeProfile, loadConfig(), buildContainer(), DomainEventName, DomainEvents, Logger, LogLevel (+14 more)
 
 ### Community 29 - "Comm 29: Db Schema Fundingratehistory"
-Cohesion: 0.08
-Nodes (22): FundingRateHistory, liquidationEvents, OpenInterestData, fetchOpenInterest(), engineQueue, MatchingEngine, redis, ActiveSymbolStream (+14 more)
+Cohesion: 0.07
+Nodes (36): FundingRateHistory, killSwitchState, liquidationEvents, OpenInterestData, _bootTime, healthRouter, run(), fetchOpenInterest() (+28 more)
 
 ### Community 30 - "Comm 30: Api Boot Createcontextwss"
 Cohesion: 0.11
@@ -329,32 +333,32 @@ Cohesion: 0.07
 Nodes (27): devDependencies, autoprefixer, drizzle-kit, esbuild, eslint, @eslint/js, eslint-plugin-react-hooks, eslint-plugin-react-refresh (+19 more)
 
 ### Community 32 - "Comm 32: Services Market Analysis"
-Cohesion: 0.14
-Nodes (25): ANALYSIS_TIMEFRAMES, analyzeCvd(), analyzeFunding(), analyzeOpenInterest(), analyzeTimeframeStructure(), analyzeVolumeFromCandles(), buildTradeSetup(), buildVolumeProfile() (+17 more)
+Cohesion: 0.16
+Nodes (21): ANALYSIS_TIMEFRAMES, analyzeCvd(), analyzeFunding(), analyzeOpenInterest(), analyzeVolumeFromCandles(), buildTradeSetup(), buildVolumeProfile(), clamp() (+13 more)
 
 ### Community 33 - "Comm 33: Services Price Action"
 Cohesion: 0.13
-Nodes (21): analyzeAll(), buildOrderBlock(), calculateOBV(), computeAtrArray(), detectDisplacement(), detectFVGs(), detectLiquidity(), detectOrderBlocks() (+13 more)
+Nodes (20): analyzeAll(), buildOrderBlock(), calculateOBV(), computeAtrArray(), detectDisplacement(), detectFVGs(), detectLiquidity(), detectOrderBlocks() (+12 more)
 
 ### Community 34 - "Comm 34: Tsconfig App"
 Cohesion: 0.07
 Nodes (26): compilerOptions, allowImportingTsExtensions, baseUrl, erasableSyntaxOnly, jsx, lib, module, moduleDetection (+18 more)
 
 ### Community 35 - "Comm 35: Ui Alert Dialog"
-Cohesion: 0.10
-Nodes (19): AlertDialogAction(), AlertDialogCancel(), AlertDialogContent(), AlertDialogDescription(), AlertDialogFooter(), AlertDialogHeader(), AlertDialogOverlay(), AlertDialogTitle() (+11 more)
+Cohesion: 0.07
+Nodes (32): AlertDialogAction(), AlertDialogCancel(), AlertDialogContent(), AlertDialogDescription(), AlertDialogFooter(), AlertDialogHeader(), AlertDialogOverlay(), AlertDialogTitle() (+24 more)
 
 ### Community 36 - "Comm 36: Chart Indicator Signals"
-Cohesion: 0.16
-Nodes (23): detectADXSignals(), detectCVDDivergence(), detectDirectionFlips(), detectDonchianBreakout(), detectIchimokuSignals(), detectMACDSignals(), detectNWBandTag(), detectRSIDivergence() (+15 more)
+Cohesion: 0.17
+Nodes (22): detectADXSignals(), detectCVDDivergence(), detectDirectionFlips(), detectDonchianBreakout(), detectIchimokuSignals(), detectMACDSignals(), detectNWBandTag(), detectRSIDivergence() (+14 more)
 
 ### Community 37 - "Comm 37: Engine Package"
 Cohesion: 0.08
 Nodes (25): dependencies, eventemitter3, nanoid, pino, socket.io-client, ws, zod, devDependencies (+17 more)
 
 ### Community 38 - "Comm 38: Ui Field"
-Cohesion: 0.10
-Nodes (22): Field(), FieldContent(), FieldDescription(), FieldError(), FieldGroup(), FieldLabel(), FieldLegend(), FieldSeparator() (+14 more)
+Cohesion: 0.20
+Nodes (11): FormControl(), FormDescription(), FormFieldContext, FormFieldContextValue, FormItem(), FormItemContext, FormItemContextValue, FormLabel() (+3 more)
 
 ### Community 39 - "Comm 39: Chart Pa Types"
 Cohesion: 0.12
@@ -373,12 +377,12 @@ Cohesion: 0.14
 Nodes (20): calculateTakeProfit(), TPResult, buildProfile(), clamp(), DEFAULT_PROFILE, deriveAchievedR(), getRProfile(), globalStore (+12 more)
 
 ### Community 44 - "Comm 44: Brain Signal Bridge"
-Cohesion: 0.10
-Nodes (18): proposeTradeAsSignal(), ProposeTradeOpts, ProposeTradeResult, accountLedgerRelations, accountSnapshotsRelations, exchangeCredentialsRelations, ordersRelations, positionsRelations (+10 more)
+Cohesion: 0.13
+Nodes (16): ExitDecision, MonitoredPosition, getOrCreateSession(), updateSession(), StrategyType, marketEvents, calcNewTrailingStop(), ensureTrailingEngine() (+8 more)
 
 ### Community 45 - "Comm 45: Services Knn Supertrend"
-Cohesion: 0.14
-Nodes (19): buildFV(), calcADX(), calcATR(), calcEMA(), calcRSI(), calcSupertrend(), classifyRegime(), computeKnnSupertrend() (+11 more)
+Cohesion: 0.13
+Nodes (20): buildFV(), calcADX(), calcATR(), calcEMA(), calcRSI(), calcSupertrend(), classifyRegime(), computeKnnSupertrend() (+12 more)
 
 ### Community 46 - "Comm 46: Tsconfig Server"
 Cohesion: 0.10
@@ -389,8 +393,8 @@ Cohesion: 0.12
 Nodes (15): Command(), CommandDialog(), CommandGroup(), CommandInput(), CommandItem(), CommandList(), CommandSeparator(), CommandShortcut() (+7 more)
 
 ### Community 48 - "Comm 48: Brain Tool Registry"
-Cohesion: 0.13
-Nodes (15): MarketSnapshot, PortfolioSnapshot, toolRegistry, main(), ConfluenceScore, analyzeSignalWithLLM(), ApiKey, callLLM() (+7 more)
+Cohesion: 0.18
+Nodes (11): ConfluenceScore, analyzeSignalWithLLM(), ApiKey, callLLM(), keyPool, LLMAdvice, markExhausted(), nextAvailableKey() (+3 more)
 
 ### Community 49 - "Comm 49: Common Types Orderstatus"
 Cohesion: 0.21
@@ -402,7 +406,7 @@ Nodes (5): DeltaGateway, DeltaCredentials, deltaPublicGet(), deltaRequest(), sig
 
 ### Community 51 - "Comm 51: Routers Signal Router"
 Cohesion: 0.16
-Nodes (18): signalRouter, aggregateTradeTape(), KnnSupertrendSnapshot, AnalysisCandle, AnalysisTimeframe, calculateRSI(), FVG, OrderBlock (+10 more)
+Nodes (19): aggregateTradeTape(), AnalysisCandle, AnalysisTimeframe, analyzeTimeframeStructure(), calculateRSI(), deriveTrend(), ema(), findSwings() (+11 more)
 
 ### Community 52 - "Comm 52: Tsconfig Node"
 Cohesion: 0.10
@@ -456,29 +460,25 @@ Nodes (13): analyzeConfluence(), calculateADXApproximation(), calculateComposite
 Cohesion: 0.35
 Nodes (13): evaluateSymbolSignalAsync(), calculateBollingerBands(), calculateEMA(), calculateMACD(), calculateRMI(), calculateRSI(), calculateSMA(), evaluateBBReversion() (+5 more)
 
-### Community 68 - "Comm 68: Components Indicatorpanel"
-Cohesion: 0.13
-Nodes (7): DEFAULTS, EMA_COLORS, IndicatorConfig, IndicatorPanel(), Props, SMA_COLORS, LastPriceLinePrimitive
-
 ### Community 69 - "Comm 69: Db Schema Alertdeliveryfailures"
-Cohesion: 0.19
-Nodes (12): alertDeliveryFailures, systemAlertLogs, userAlertLogs, userAlertRules, alertsRouter, alertTypeEnum, operatorEnum, alertEngineEvents (+4 more)
+Cohesion: 0.11
+Nodes (14): alertDeliveryFailures, systemAlertLogs, userAlertLogs, UserAlertRule, userAlertRules, alertsRouter, alertTypeEnum, operatorEnum (+6 more)
 
 ### Community 71 - "Comm 71: Services Regime Detector"
-Cohesion: 0.24
-Nodes (11): calcADX(), calcATRPct(), calcEMA(), calcRSI(), classifyRegime(), detectRegimeForSymbol(), REGIME_STRATEGY_MAP, regimeEvents (+3 more)
+Cohesion: 0.19
+Nodes (14): fetchKlines(), getErrorMessage(), mapKlines(), calcADX(), calcATRPct(), calcEMA(), calcRSI(), classifyRegime() (+6 more)
 
 ### Community 72 - "Comm 72: Ui Carousel"
-Cohesion: 0.19
-Nodes (13): Carousel(), CarouselApi, CarouselContent(), CarouselContext, CarouselContextProps, CarouselItem(), CarouselNext(), CarouselOptions (+5 more)
+Cohesion: 0.18
+Nodes (6): DrawerContent(), DrawerDescription(), DrawerFooter(), DrawerHeader(), DrawerOverlay(), DrawerTitle()
 
 ### Community 73 - "Comm 73: Components Performancedashboard"
 Cohesion: 0.19
 Nodes (8): EquityPoint, PerformanceDashboard(), StatCard(), StatCardLarge(), Bucket, fmt(), pnlColor(), SystemReportPanel()
 
 ### Community 74 - "Comm 74: Db Schema Kronossignals"
-Cohesion: 0.21
-Nodes (12): kronosSignals, MarketData, calculateKronosAugmentedScore(), getKronosSignal(), insufficientWarnAt, kronosEvents, KronosPrediction, normalizeSymbol() (+4 more)
+Cohesion: 0.16
+Nodes (15): kronosSignals, MarketData, signalRouter, calculateKronosAugmentedScore(), getKronosSignal(), insufficientWarnAt, kronosEvents, KronosPrediction (+7 more)
 
 ### Community 75 - "Comm 75: Ui Input"
 Cohesion: 0.21
@@ -501,12 +501,12 @@ Cohesion: 0.20
 Nodes (10): Agent Knowledge Base & Repository Memory, Simulated Matching Engine & BullMQ Worker, Paper vs. Live Trading Isolation, Postgres pgvector Vector Memory, PostgreSQL-backed Risk Session Persistence, Janus LLM-Powered Autonomous Brain Specification, AI Brain Step-by-Step Implementation Plan, Dual Live + Paper Monitor, Paper-Only Execution Plan (+2 more)
 
 ### Community 83 - "Comm 83: Components Alertsmodal"
-Cohesion: 0.22
-Nodes (6): AlertOperator, ALERTS_SUPPORTED_PAIRS, AlertsModalProps, AlertType, navItems, playAlertChime()
+Cohesion: 0.20
+Nodes (7): AlertOperator, ALERTS_SUPPORTED_PAIRS, AlertsModalProps, AlertType, Layout(), navItems, playAlertChime()
 
 ### Community 84 - "Comm 84: Db Schema Marketregimes"
-Cohesion: 0.29
-Nodes (8): marketRegimes, SUPPORTED_PAIRS, mapRegimeToDirection(), mapRegimeToMarketStructure(), mapRegimeToVolatility(), MarketRegimeSnapshot, recordMarketRegimes(), startMarketRegimeRecorder()
+Cohesion: 0.39
+Nodes (6): mapRegimeToDirection(), mapRegimeToMarketStructure(), mapRegimeToVolatility(), MarketRegimeSnapshot, recordMarketRegimes(), startMarketRegimeRecorder()
 
 ### Community 85 - "Comm 85: Primitives Liquiditysweepprimitive"
 Cohesion: 0.20
@@ -525,8 +525,8 @@ Cohesion: 0.22
 Nodes (8): compilerOptions, baseUrl, paths, files, @/*, @contracts/*, @db/*, references
 
 ### Community 93 - "Comm 93: Components Errorboundary"
-Cohesion: 0.25
-Nodes (3): ErrorBoundary, Props, State
+Cohesion: 0.10
+Nodes (16): ErrorBoundary, Props, State, SettingsModal(), SettingsModalProps, ThemeSwitcher(), ThemeContext, ThemeContextValue (+8 more)
 
 ### Community 96 - "Comm 96: Scripts Seed Test"
 Cohesion: 0.39
@@ -537,12 +537,12 @@ Cohesion: 0.57
 Nodes (6): deploy.sh script, die(), error(), info(), success(), warn()
 
 ### Community 101 - "Comm 101: Ui Badge"
-Cohesion: 0.29
-Nodes (3): Badge(), badgeVariants, HoverCardContent()
+Cohesion: 0.06
+Nodes (18): BrainControlPanel(), BrainDashboard(), Badge(), badgeVariants, Checkbox(), HoverCardContent(), PopoverContent(), Progress() (+10 more)
 
 ### Community 102 - "Comm 102: Ui Toggle"
-Cohesion: 0.43
-Nodes (5): ToggleGroup(), ToggleGroupContext, ToggleGroupItem(), Toggle(), toggleVariants
+Cohesion: 0.29
+Nodes (3): engineQueue, MatchingEngine, redis
 
 ### Community 103 - "Comm 103: Scratch Test Binance"
 Cohesion: 0.33
@@ -568,6 +568,10 @@ Nodes (4): get(), main(), post(), sign()
 Cohesion: 0.50
 Nodes (4): Alert(), AlertDescription(), AlertTitle(), alertVariants
 
+### Community 112 - "Comm 112: Ui Popover"
+Cohesion: 0.40
+Nodes (4): MarketSnapshot, PortfolioSnapshot, toolRegistry, main()
+
 ### Community 113 - "Comm 113: Home Nemesis Project"
 Cohesion: 0.83
 Nodes (3): backup-db.sh script, die(), info()
@@ -575,6 +579,10 @@ Nodes (3): backup-db.sh script, die(), info()
 ### Community 114 - "Comm 114: Home Nemesis Project"
 Cohesion: 0.83
 Nodes (3): rotate-logs.sh script, die(), info()
+
+### Community 115 - "Comm 115: Lib Position Utils"
+Cohesion: 0.83
+Nodes (3): main(), post(), sign()
 
 ### Community 116 - "Comm 116: Public Janus Logo"
 Cohesion: 0.50
@@ -601,24 +609,24 @@ Cohesion: 0.67
 Nodes (3): Docker Compose Configuration, Janus Trading Bot Operational Runbook, Janus Trading Bot Complete Setup Guide
 
 ## Knowledge Gaps
-- **674 isolated node(s):** `check-and-test.sh script`, `app`, `_bootTime`, `distPath`, `GovernorOutcome` (+669 more)
+- **674 isolated node(s):** `_g`, `ActiveSymbolStream`, `tickerStateCache`, `lastMessageAt`, `lastKlineCloseTime` (+669 more)
   These have ≤1 connection - possible missing edges or undocumented components.
-- **52 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
+- **50 thin communities (<3 nodes) omitted from report** — run `graphify query` to explore isolated nodes.
 
 ## Suggested Questions
 _Questions this graph is uniquely positioned to answer:_
 
-- **Why does `cn()` connect `UI Components & Shadcn Utilities` to `Layouts & Navigation UI`, `Chart Alerts & Animated UI`, `Comm 20: Components Settingsmodal`, `Comm 35: Ui Alert Dialog`, `Comm 36: Chart Indicator Signals`, `Comm 38: Ui Field`, `Comm 47: Ui Command`, `Comm 53: Ui Button Group`, `Comm 54: Chart Candle Intensity`, `Comm 62: Chart Alert Engine`, `Comm 65: Ui Context Menu`, `Comm 68: Components Indicatorpanel`, `Comm 72: Ui Carousel`, `Comm 73: Components Performancedashboard`, `Comm 75: Ui Input`, `Comm 80: Ui Chart`, `Comm 83: Components Alertsmodal`, `Comm 101: Ui Badge`, `Comm 102: Ui Toggle`, `Comm 111: Ui Alert`, `Comm 112: Ui Popover`?**
-  _High betweenness centrality (0.121) - this node is a cross-community bridge._
-- **Why does `getDb()` connect `Auto Executor & Database Queries` to `Position Management & AI Advisor`, `Database Schemas & Seed Data`, `Paper Trading Adapter & Ledger`, `Position Actions & Snapshots Schema`, `API Boot & Env Configurations`, `Auth & TRPC Router Middleware`, `Comm 16: Scratch Test Balances`, `Comm 17: Brain Brain Governor`, `Comm 19: Api Services Risk`, `Comm 24: Brain Brain Evolution`, `Comm 25: Db Schema Orderbooksnapshots`, `Comm 27: Db Schema Killswitchstate`, `Comm 29: Db Schema Fundingratehistory`, `Comm 32: Services Market Analysis`, `Comm 44: Brain Signal Bridge`, `Comm 48: Brain Tool Registry`, `Comm 51: Routers Signal Router`, `Comm 57: Position Manager Llm`, `Comm 58: Services Llm Advisor`, `Comm 69: Db Schema Alertdeliveryfailures`, `Comm 74: Db Schema Kronossignals`, `Comm 77: Db Schema Useralertrule`, `Comm 84: Db Schema Marketregimes`, `Comm 97: Brain Brain Orchestrator`, `Comm 110: Scratch Test Instrument`, `Comm 115: Lib Position Utils`, `Comm 119: Scratch Test Positions2`?**
-  _High betweenness centrality (0.095) - this node is a cross-community bridge._
-- **Why does `getPriceDecimals()` connect `Chart Alerts & Animated UI` to `Comm 36: Chart Indicator Signals`, `Comm 77: Db Schema Useralertrule`?**
+- **Why does `cn()` connect `UI Components & Shadcn Utilities` to `Layouts & Navigation UI`, `Chart Alerts & Animated UI`, `Comm 20: Components Settingsmodal`, `Comm 35: Ui Alert Dialog`, `Comm 36: Chart Indicator Signals`, `Comm 38: Ui Field`, `Comm 47: Ui Command`, `Comm 53: Ui Button Group`, `Comm 54: Chart Candle Intensity`, `Comm 62: Chart Alert Engine`, `Comm 65: Ui Context Menu`, `Comm 72: Ui Carousel`, `Comm 73: Components Performancedashboard`, `Comm 75: Ui Input`, `Comm 80: Ui Chart`, `Comm 83: Components Alertsmodal`, `Comm 93: Components Errorboundary`, `Comm 101: Ui Badge`, `Comm 111: Ui Alert`?**
+  _High betweenness centrality (0.120) - this node is a cross-community bridge._
+- **Why does `getDb()` connect `Auto Executor & Database Queries` to `Position Management & AI Advisor`, `Database Schemas & Seed Data`, `Paper Trading Adapter & Ledger`, `Position Actions & Snapshots Schema`, `API Boot & Env Configurations`, `Auth & TRPC Router Middleware`, `Comm 16: Scratch Test Balances`, `Comm 17: Brain Brain Governor`, `Comm 19: Api Services Risk`, `Comm 24: Brain Brain Evolution`, `Comm 25: Db Schema Orderbooksnapshots`, `Comm 27: Db Schema Killswitchstate`, `Comm 29: Db Schema Fundingratehistory`, `Comm 32: Services Market Analysis`, `Comm 44: Brain Signal Bridge`, `Comm 51: Routers Signal Router`, `Comm 57: Position Manager Llm`, `Comm 58: Services Llm Advisor`, `Comm 69: Db Schema Alertdeliveryfailures`, `Comm 74: Db Schema Kronossignals`, `Comm 84: Db Schema Marketregimes`, `Comm 97: Brain Brain Orchestrator`, `Comm 110: Scratch Test Instrument`, `Comm 112: Ui Popover`, `Comm 115: Lib Position Utils`, `Comm 119: Scratch Test Positions2`?**
+  _High betweenness centrality (0.078) - this node is a cross-community bridge._
+- **Why does `getPriceDecimals()` connect `Chart Alerts & Animated UI` to `Comm 36: Chart Indicator Signals`, `Comm 69: Db Schema Alertdeliveryfailures`?**
   _High betweenness centrality (0.030) - this node is a cross-community bridge._
-- **What connects `check-and-test.sh script`, `app`, `_bootTime` to the rest of the system?**
+- **What connects `_g`, `ActiveSymbolStream`, `tickerStateCache` to the rest of the system?**
   _674 weakly-connected nodes found - possible documentation gaps or missing edges._
 - **Should `UI Components & Shadcn Utilities` be split into smaller, more focused modules?**
-  _Cohesion score 0.029867256637168143 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.03515151515151515 - nodes in this community are weakly interconnected._
 - **Should `Position Management & AI Advisor` be split into smaller, more focused modules?**
-  _Cohesion score 0.06022408963585434 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.06296656929568321 - nodes in this community are weakly interconnected._
 - **Should `Layouts & Navigation UI` be split into smaller, more focused modules?**
-  _Cohesion score 0.039240506329113925 - nodes in this community are weakly interconnected._
+  _Cohesion score 0.03992210321324245 - nodes in this community are weakly interconnected._

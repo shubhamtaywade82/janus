@@ -1,6 +1,7 @@
 import { EventEmitter } from "events";
 import WebSocket from "ws";
 import { getDb } from "../queries/connection";
+import { SUPPORTED_SYMBOLS } from "../../contracts/constants";
 import { fundingRateHistory, liquidationEvents, marketData, openInterestData, orderBookSnapshots, recentTicks } from "@db/schema";
 import { marketStateManager } from "./market-state";
 import { getOrCreateFeedHealth, feedHealthRegistry } from "./feed-health";
@@ -403,7 +404,17 @@ export function unsubscribeFromSymbol(symbol: string) {
   if (!current) return;
 
   current.subscribers--;
-  if (current.subscribers <= 0) {
+  
+  // A bot running 24/7 needs to keep streaming alive for supported pairs
+  const isPermanent = SUPPORTED_SYMBOLS.includes(symbol as any);
+  const minSubscribers = isPermanent ? 1 : 0;
+  
+  if (current.subscribers <= minSubscribers) {
+    if (isPermanent) {
+      current.subscribers = 1;
+      return;
+    }
+    
     console.log(`[streaming] No subscribers left for ${symbol}. Closing WS connection.`);
     if (current.openInterestTimer) {
       clearInterval(current.openInterestTimer);
