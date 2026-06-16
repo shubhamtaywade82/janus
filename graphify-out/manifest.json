@@ -155,9 +155,9 @@
     "semantic_hash": "e53eec3a0ddbc41c1663c5c00da7fb1a"
   },
   "api/routers/auto-executor-router.ts": {
-    "mtime": 1781019211.6618721,
-    "ast_hash": "0dccf0dff21cfa58b055a913572f6e4b",
-    "semantic_hash": "0dccf0dff21cfa58b055a913572f6e4b"
+    "mtime": 1781637692.463398,
+    "ast_hash": "61ba9798020fd3731996e75119d06699",
+    "semantic_hash": ""
   },
   "api/routers/bot-router.ts": {
     "mtime": 1780774661.4535396,
@@ -245,9 +245,9 @@
     "semantic_hash": "35ac268915889016067bb825a64d4bf3"
   },
   "api/services/__tests__/kill-switch.test.ts": {
-    "mtime": 1780774661.5923703,
-    "ast_hash": "63e9bf0c9d84452ed3c5665cc14374fd",
-    "semantic_hash": "63e9bf0c9d84452ed3c5665cc14374fd"
+    "mtime": 1781638026.3883665,
+    "ast_hash": "41292344709a8aad8ce7b8423d96645e",
+    "semantic_hash": ""
   },
   "api/services/__tests__/llm-advisor.test.ts": {
     "mtime": 1780774661.4535396,
@@ -260,9 +260,9 @@
     "semantic_hash": "de7e636963507dc3da9a269a5d42951a"
   },
   "api/services/__tests__/price-action.test.ts": {
-    "mtime": 1780451906.9459345,
-    "ast_hash": "26e052717805a456a5a14b79b93130ad",
-    "semantic_hash": "26e052717805a456a5a14b79b93130ad"
+    "mtime": 1781637407.6681955,
+    "ast_hash": "9d69b27dee9a5d1ff8e821d8bcf77d82",
+    "semantic_hash": ""
   },
   "api/services/__tests__/regime-detector.test.ts": {
     "mtime": 1780344044.8323956,
@@ -360,9 +360,9 @@
     "semantic_hash": "0baa4dd91dbf5e88c369ccd1a6bf4022"
   },
   "api/services/kill-switch.ts": {
-    "mtime": 1780774661.5923703,
-    "ast_hash": "c5d08f0ec9c9c5e20033ad511af2e587",
-    "semantic_hash": "c5d08f0ec9c9c5e20033ad511af2e587"
+    "mtime": 1781637899.1227155,
+    "ast_hash": "f02024134e57eb461159de45e21ec0b3",
+    "semantic_hash": ""
   },
   "api/services/knn-supertrend.ts": {
     "mtime": 1780550452.8063903,
@@ -535,9 +535,9 @@
     "semantic_hash": "2501b851b69ef0e7f78c94cf80bacee8"
   },
   "api/services/price-action.ts": {
-    "mtime": 1780669267.7224963,
-    "ast_hash": "8d64546d110428cb6f93024cfed515dc",
-    "semantic_hash": "8d64546d110428cb6f93024cfed515dc"
+    "mtime": 1781637101.6381807,
+    "ast_hash": "7cd695ceda96250d3946dbef80702a83",
+    "semantic_hash": ""
   },
   "api/services/r-profile-engine.ts": {
     "mtime": 1780872858.4189942,
@@ -730,9 +730,9 @@
     "semantic_hash": "e4eb028e3a3a572731bbe9bc8f437609"
   },
   "engine/src/application/__tests__/analysis-engines.test.ts": {
-    "mtime": 1780551643.708057,
-    "ast_hash": "eea4a30458a2b1f9176849833e6e26bb",
-    "semantic_hash": "eea4a30458a2b1f9176849833e6e26bb"
+    "mtime": 1781636656.3751185,
+    "ast_hash": "41fe11a6829249bcf5e93626d9967357",
+    "semantic_hash": ""
   },
   "engine/src/application/__tests__/indicators.test.ts": {
     "mtime": 1780774661.4720502,
@@ -755,9 +755,9 @@
     "semantic_hash": "48dfa40be511c6de445a40aa59a59172"
   },
   "engine/src/application/analysis/market-structure-engine.ts": {
-    "mtime": 1780774661.4720502,
-    "ast_hash": "e202a02e91c28d89dae67795a52fdde9",
-    "semantic_hash": "e202a02e91c28d89dae67795a52fdde9"
+    "mtime": 1781637287.1658616,
+    "ast_hash": "2015ac34242d5fa63b5cda098d0f6fb6",
+    "semantic_hash": ""
   },
   "engine/src/application/analysis/multi-timeframe-manager.ts": {
     "mtime": 1780774661.4720502,
@@ -1680,9 +1680,9 @@
     "semantic_hash": "7497ebf0ddd042e53f904e8b8599a45a"
   },
   "src/components/KillSwitchButton.tsx": {
-    "mtime": 1780669267.7323215,
-    "ast_hash": "73e939ec5dfe46583d7c7d1aeb3dfc2b",
-    "semantic_hash": "73e939ec5dfe46583d7c7d1aeb3dfc2b"
+    "mtime": 1781637693.9620535,
+    "ast_hash": "e31332a965d88d689e5ab8d091572b29",
+    "semantic_hash": ""
   },
   "src/components/Layout.tsx": {
     "mtime": 1781264905.9148788,
@@ -2255,8 +2255,8 @@
     "semantic_hash": "4efcc4de86d375f7290bedba893e30f5"
   },
   "AGENTS.md": {
-    "mtime": 1781628664.8056455,
-    "ast_hash": "9800559b193bb8f42abf56a3f4456739",
+    "mtime": 1781637903.9921942,
+    "ast_hash": "f71c5db3e0a5713c65d7f9613b6a4166",
     "semantic_hash": ""
   },
   "AUDIT.md": {
