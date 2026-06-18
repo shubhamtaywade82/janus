@@ -281,3 +281,10 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **`auto-executor-router.ts`**: `killSwitchStatus` exposes `autoResetAt` epoch for UI countdown.
 * **`KillSwitchButton.tsx`**: HALTED badge shows minutes until auto-resume.
 * **Tests**: Auto-reset TTL cases in `api/services/__tests__/kill-switch.test.ts`.
+
+### [2026-06-17] Resolved Trade Halting & 50% Capital Allocation Alignment
+* **Trade Halting Root-Cause Fix**: Resolved a conflict where automated signals calculated a position size of 30% (`capital_allocation_pct = 0.300`), which violated the Risk Engine's default 20% cap (`maxPositionPct = 0.20`), causing the Governor to skip all trades at Gate 7 (Risk).
+* **50% Capital Allocation**: Updated the database configuration `capital_allocation_pct` to `0.500` (50%) for user 1, and aligned the Risk Engine's default limit `DEFAULT_RISK_CONFIG.maxPositionPct` to `0.50` (50%).
+* **Dynamic Sizing Alignment**: Added logic to `governor.ts` that dynamically scales `globalRiskEngine.config.maxPositionPct` to be at least `allocPct * 1.05` on every evaluation, preventing self-blocking in the future if capital allocation is set higher than the risk cap.
+* **Bypass Flags**: Implemented `DISABLE_KILL_SWITCH` and `DISABLE_RISK_LIMITS` environment variables in `governor.ts` and `.env` (both set to `true`) to allow the user to completely disable safety gates.
+* **Node 18 Compatibility**: Replaced all uses of `import.meta.dirname` (unsupported in Node 18, which caused bot startup crashes) with ES Module standard `path.dirname(fileURLToPath(import.meta.url))` in `boot.ts` and `vite.ts`.

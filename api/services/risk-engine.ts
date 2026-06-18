@@ -134,7 +134,7 @@ export class RiskEngine {
 }
 
 export const DEFAULT_RISK_CONFIG: RiskConfig = {
-  maxPositionPct: 0.20,
+  maxPositionPct: 0.50,
   dailyDrawdownPct: 0.05,
   maxConsecutiveLosses: 3,
   cooldownMs: 30 * 60 * 1000,

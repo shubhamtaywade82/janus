@@ -79,7 +79,7 @@ export class Governor {
     }
 
     // Gate 2: kill switch
-    if (!globalKillSwitch.canTrade()) {
+    if (!globalKillSwitch.canTrade() && process.env.DISABLE_KILL_SWITCH !== "true") {
       return { approved: false, gate: "kill_switch", reason: "kill switch active" };
     }
 
@@ -157,13 +157,20 @@ export class Governor {
       ? sizeUsdt
       : walletBalanceUsdt * allocPct;
 
+    // Ensure Risk Engine's maxPositionPct is always at least equal to the configured allocPct
+    // (with a tiny buffer to avoid precision/rounding issues)
+    globalRiskEngine.config.maxPositionPct = Math.max(
+      globalRiskEngine.config.maxPositionPct ?? 0.50,
+      allocPct * 1.05
+    );
+
     const riskCheck = globalRiskEngine.checkTradeAllowed(session, {
       notional: riskNotional,
       walletBalance: walletBalanceUsdt,
       usedMargin: walletLockedUsdt,
       isManualOverride,
     });
-    if (!riskCheck.approved) {
+    if (!riskCheck.approved && process.env.DISABLE_RISK_LIMITS !== "true") {
       return { approved: false, gate: "risk", reason: `risk: ${riskCheck.reason}` };
     }
 

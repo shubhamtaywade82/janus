@@ -19,6 +19,7 @@ import { lockPaperPositionMargin } from "./services/paper-currency";
 import { MatchingEngine } from "./services/MatchingEngine";
 import Decimal from "decimal.js";
 import crypto from "crypto";
+import { fileURLToPath } from "url";
 
 const app = new Hono<{ Bindings: HttpBindings }>();
 
@@ -173,7 +174,8 @@ app.use("/api/trpc/*", async (c) => {
 app.all("/api/*", (c) => c.json({ error: "Not Found" }, 404));
 
 // Static files + SPA fallback
-const distPath = path.resolve(import.meta.dirname, "../dist/public");
+const dirname = path.dirname(fileURLToPath(import.meta.url));
+const distPath = path.resolve(dirname, "../dist/public");
 
 app.get("*", async (c, next) => {
   const url = new URL(c.req.url);
