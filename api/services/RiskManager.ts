@@ -3,6 +3,7 @@ import { getDb } from "../queries/connection";
 import { tradingAccounts } from "@db/schema";
 import { and, eq } from "drizzle-orm";
 import { usdtToWallet } from "./paper-currency";
+import { MAX_SYSTEM_LEVERAGE } from "../../contracts/constants";
 
 Decimal.set({ precision: 30, rounding: Decimal.ROUND_HALF_UP });
 
@@ -26,8 +27,8 @@ export class RiskManager {
     isPaper: boolean,
     currency: "USDT" | "INR" = "USDT"
   ): Promise<boolean> {
-    if (params.leverage > 10) {
-      throw new Error("Risk Breach: Maximum permitted leverage is 10x");
+    if (params.leverage > MAX_SYSTEM_LEVERAGE) {
+      throw new Error(`Risk Breach: Maximum permitted leverage is ${MAX_SYSTEM_LEVERAGE}x`);
     }
 
     const qty = new Decimal(params.quantity);

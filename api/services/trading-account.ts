@@ -23,6 +23,7 @@ import {
 } from "@db/schema";
 import { and, eq, desc } from "drizzle-orm";
 import type { TradingAccount } from "@db/schema";
+import { MAX_SYSTEM_LEVERAGE } from "../../contracts/constants";
 
 export type AccountMode = "live" | "paper" | "backtest";
 
@@ -38,7 +39,7 @@ export interface DerivedAccountMetrics {
   openExposure: number;
   longExposure: number;
   shortExposure: number;
-  buyingPower: number; // freeMargin * 10 (10x cap from risk safeguards)
+  buyingPower: number; // freeMargin * MAX_SYSTEM_LEVERAGE
   healthScore: number; // 0-100, 100 = fully healthy
   marginBuffer: number;
   marginBufferPct: number;
@@ -274,7 +275,7 @@ export function computeDerivedMetrics(account: TradingAccount): DerivedAccountMe
   const marginUtilization = equity > 0 ? usedMargin / equity : 0;
   const drawdownPct = peakEquity > 0 ? drawdown / peakEquity : 0;
   const winRate = account.tradeCount > 0 ? account.winCount / account.tradeCount : 0;
-  const buyingPower = freeMargin * 10; // capped at 10x (system leverage cap)
+  const buyingPower = freeMargin * MAX_SYSTEM_LEVERAGE;
   const marginBuffer = Math.max(0, equity - usedMargin * 1.5); // 1.5x maintenance threshold
   const marginBufferPct = equity > 0 ? marginBuffer / equity : 1;
 
@@ -448,6 +449,7 @@ export async function resetAccount(
   const [updated] = await db
     .update(tradingAccounts)
     .set({
+      initialBalance: bal,
       walletBalance: bal,
       availableBalance: bal,
       lockedMargin: "0",

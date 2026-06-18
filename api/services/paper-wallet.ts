@@ -66,6 +66,7 @@ export async function getPaperWallet(
     startingBalance: parseFloat(account.initialBalance),
     balance: parseFloat(account.availableBalance),
     lockedMargin: parseFloat(account.lockedMargin),
+    walletBalance: parseFloat(account.walletBalance),
     realizedPnl: parseFloat(account.realizedPnl),
     unrealizedPnl: parseFloat(account.unrealizedPnl),
     equity: metrics.equity,

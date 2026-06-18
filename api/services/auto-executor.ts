@@ -51,7 +51,7 @@ import { WalletLedgerService } from "./WalletLedgerService";
 import Decimal from "decimal.js";
 import type { Signal, AutoExecutorConfig } from "@db/schema";
 import type { StrategyType } from "./strategy-config";
-import { SYMBOL_MIN_SL_PCT, DEFAULT_MIN_SL_PCT, type SupportedSymbol } from "../../contracts/constants";
+import { SYMBOL_MIN_SL_PCT, DEFAULT_MIN_SL_PCT, clampSystemLeverage, type SupportedSymbol } from "../../contracts/constants";
 
 const DEDUP_FILE = path.resolve(process.cwd(), "dedup-cache-state.json");
 
@@ -268,7 +268,7 @@ export class AutoExecutor {
     enabled: true,
     targetSymbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"],
     defaultSizeUsdt: "50",
-    defaultLeverage: 3,
+    defaultLeverage: 5,
     capitalAllocationPct: "0.250",   // 25% base allocation for paper (dynamic, conviction-scaled)
     useStrategyLeverage: true,        // use STRATEGY_CONFIGS leverage per regime
     stopLossPct: "0.015",
@@ -783,20 +783,12 @@ private async calculateSizing(params: {
     convictionMult *= brainResult.verdict === "REDUCE_RISK" ? 0.4 : 1.0;
   }
 
-  // NEW: Kronos conviction scaling
-  let kronosVolForecast: number | null = null;
+  // Kronos conviction scaling (direction agreement only — does not override leverage)
   try {
     const kronos = await getKronosSignal(signal.symbol, "1m", 4);
-    if (kronos) {
-      kronosVolForecast = kronos.volatilityForecast;
-      if (kronos.confidence > 0.7) {
-        const kronosDirection = kronos.directionSignal > 0 ? "long" : "short";
-        if (kronosDirection === side) {
-          convictionMult *= 1.2; // agreement boost
-        } else {
-          convictionMult *= 0.6; // disagreement penalty
-        }
-      }
+    if (kronos && kronos.confidence > 0.7) {
+      const kronosDirection = kronos.directionSignal > 0 ? "long" : "short";
+      convictionMult *= kronosDirection === side ? 1.2 : 0.6;
     }
   } catch (err) {
     console.warn(`[auto-executor] Failed to fetch Kronos signal for sizing:`, err);
@@ -859,14 +851,8 @@ private async calculateSizing(params: {
   const manualLeverage = sigMetadata?.leverage ? parseFloat(String(sigMetadata.leverage)) : undefined;
   const rawLeverage = manualLeverage !== undefined
     ? manualLeverage
-    : (config.useStrategyLeverage ? strategyMaxLev : Math.min(config.defaultLeverage ?? 3, strategyMaxLev));
-  let leverage = manualLeverage !== undefined ? rawLeverage : Math.min(rawLeverage, 10);
-
-  // NEW: Kronos volatility-based leverage cap
-  if (kronosVolForecast !== null && kronosVolForecast > 0.10) {
-    leverage = Math.min(leverage, 2);
-    console.log(`[auto-executor] Kronos high vol detected (${kronosVolForecast}) — capping leverage at ${leverage}x`);
-  }
+    : (config.useStrategyLeverage ? strategyMaxLev : Math.min(config.defaultLeverage ?? 5, strategyMaxLev));
+  const leverage = clampSystemLeverage(rawLeverage);
 
   let size = notional / currentPrice;
   let basePrecision = 2;

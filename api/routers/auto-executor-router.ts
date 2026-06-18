@@ -6,6 +6,7 @@ import { eq, desc, sql, and } from "drizzle-orm";
 import { observable } from "@trpc/server/observable";
 import { globalAutoExecutor, autoExecutorEvents } from "../services/auto-executor";
 import { globalKillSwitch, killSwitchEvents } from "../services/kill-switch";
+import { MIN_SYSTEM_LEVERAGE, MAX_SYSTEM_LEVERAGE } from "../../contracts/constants";
 import { computeMetrics } from "../services/performance-tracker";
 import {
   resetPaperWallet,
@@ -38,7 +39,7 @@ export const autoExecutorRouter = createRouter({
         enabled: z.boolean().optional(),
         targetSymbols: z.array(z.string()).optional(),
         defaultSizeUsdt: z.string().optional(),
-        defaultLeverage: z.number().min(1).max(10).optional(),
+        defaultLeverage: z.number().min(MIN_SYSTEM_LEVERAGE).max(MAX_SYSTEM_LEVERAGE).optional(),
         stopLossPct: z.string().optional(),
         tp1Pct: z.string().optional(),
         tp2Pct: z.string().optional(),

@@ -64,7 +64,7 @@ export function AutoTraderPanel(_props: { userId?: number }) {
     enabled: false,
     targetSymbols: ["BTCUSDT", "ETHUSDT"] as string[],
     defaultSizeUsdt: "50",
-    defaultLeverage: 3,
+    defaultLeverage: 5,
     capitalAllocationPct: "0.250",   // 25%
     useStrategyLeverage: true,
     stopLossPct: "0.015",
@@ -366,7 +366,7 @@ export function AutoTraderPanel(_props: { userId?: number }) {
             </div>
             {!form.useStrategyLeverage && (
               <div className="flex gap-1 mt-1.5">
-                {[1, 2, 3, 5, 7, 10].map((l) => (
+                {[5, 7, 10, 15, 20].map((l) => (
                   <button
                     key={l}
                     onClick={() => setForm((f) => ({ ...f, defaultLeverage: l }))}
@@ -382,7 +382,7 @@ export function AutoTraderPanel(_props: { userId?: number }) {
             )}
             {form.useStrategyLeverage && (
               <div className="text-[8px] text-[#52525b] mt-1">
-                scalping_micro=10x · scalping=10x · bb_reversion=8x · intraday=5x · swing=3x
+                scalping_micro=10x · scalping=10x · bb_reversion=8x · intraday=15x · swing=5x (min)
               </div>
             )}
           </div>

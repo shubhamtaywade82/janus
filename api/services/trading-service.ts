@@ -15,6 +15,7 @@ import { latestTickerCache, subscribeToSymbol } from "./streaming";
 import { env, coinDCXEnvCreds } from "../lib/env";
 import { globalKillSwitch } from "./kill-switch";
 import { TRPCError } from "@trpc/server";
+import { MIN_SYSTEM_LEVERAGE, MAX_SYSTEM_LEVERAGE } from "../../contracts/constants";
 
 export function mapPaperPosition(p: any, markets: any[] = []) {
   const symbol = p.symbol.startsWith("B-")
@@ -517,7 +518,12 @@ export async function fetchPortfolioData(userId: number) {
 
 export async function executeOrder(userId: number, input: any) {
   if (!globalKillSwitch.canTrade()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Trading halted" });
-  if (input.leverage > 10) throw new TRPCError({ code: "BAD_REQUEST", message: "Leverage cap 10x" });
+  if (input.leverage < MIN_SYSTEM_LEVERAGE || input.leverage > MAX_SYSTEM_LEVERAGE) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Leverage must be between ${MIN_SYSTEM_LEVERAGE}x and ${MAX_SYSTEM_LEVERAGE}x`,
+    });
+  }
 
   const db = getDb();
   const dbCreds = await db.select().from(exchangeCredentials).where(and(eq(exchangeCredentials.userId, userId), eq(exchangeCredentials.exchange, "coindcx"))).limit(1);

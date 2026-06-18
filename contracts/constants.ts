@@ -40,3 +40,10 @@ export const SYMBOL_MIN_SL_PCT: Record<SupportedSymbol, number> = {
 } as const;
 
 export const DEFAULT_MIN_SL_PCT = 0.003; // 0.30%
+
+export const MIN_SYSTEM_LEVERAGE = 5;
+export const MAX_SYSTEM_LEVERAGE = 20;
+
+export function clampSystemLeverage(leverage: number): number {
+  return Math.max(MIN_SYSTEM_LEVERAGE, Math.min(leverage, MAX_SYSTEM_LEVERAGE));
+}

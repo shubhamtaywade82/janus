@@ -46,7 +46,7 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     threshold: 50,
     takerFeeRate: 0.0005,
     signalIntervalMs: 30_000,
-    maxLeverage: 5,
+    maxLeverage: 15,
     preferLimitEntry: true,
   },
   swing: {

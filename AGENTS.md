@@ -289,6 +289,13 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **Bypass Flags**: Implemented `DISABLE_KILL_SWITCH` and `DISABLE_RISK_LIMITS` environment variables in `governor.ts` and `.env` (both set to `true`) to allow the user to completely disable safety gates.
 * **Node 18 Compatibility**: Replaced all uses of `import.meta.dirname` (unsupported in Node 18, which caused bot startup crashes) with ES Module standard `path.dirname(fileURLToPath(import.meta.url))` in `boot.ts` and `vite.ts`.
 
+### [2026-06-18] Leverage Range 5x–20x, Intraday 15x, Kronos Override Removed
+* **`contracts/constants.ts`**: Added `MIN_SYSTEM_LEVERAGE` (5), `MAX_SYSTEM_LEVERAGE` (20), and `clampSystemLeverage()`.
+* **`strategy-config.ts`**: `intraday.maxLeverage` raised to **15x**.
+* **`auto-executor.ts`**: Removed Kronos volatility leverage cap (`Math.min(leverage, 2)`); all entries clamped via `clampSystemLeverage()`. Kronos still scales conviction on direction agreement only.
+* **`RiskManager.ts`**, **`trading-service.ts`**, **`auto-executor-router.ts`**, **`trading-account.ts`**: Hard caps raised from 10x → 20x.
+* **UI**: Auto Trader presets `[5,7,10,15,20]`; Brain manual trigger capped at 20x.
+
 ### [2026-06-18] Adaptive Supertrend Lab — Live Kline Integration
 * **Engine**: `src/lib/adaptive-supertrend.ts` — Kaufman ER adaptive supertrend with fee/slippage-aware backtest (0.08% RT cost, 1% risk sizing), trade log, Sharpe, profit factor, max consecutive wins/losses.
 * **Historical fetch**: `fetchKlinesPaginated()` in `api/services/binance.ts`; tRPC `market.klinesBatch` + `market.klinesHistorical` for date-range pagination through Janus backend (no browser CORS).

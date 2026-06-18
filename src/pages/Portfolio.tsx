@@ -466,6 +466,7 @@ export default function Portfolio() {
   const isPaperCcyInr = paperWalletData?.currency === "INR";
   const rawPaperFree = parseFloat(String(paperWalletData?.balance ?? 1000000));
   const rawPaperLocked = parseFloat(String(paperWalletData?.lockedMargin ?? 0));
+  const rawPaperWallet = parseFloat(String(paperWalletData?.walletBalance ?? (rawPaperFree + rawPaperLocked)));
   const rawPaperRealized = parseFloat(String(paperWalletData?.realizedPnl ?? 0));
   const rawPaperStarting = parseFloat(String(paperWalletData?.startingBalance ?? 1000000));
 
@@ -474,6 +475,9 @@ export default function Portfolio() {
 
   const paperLockedMarginInr = isPaperCcyInr ? rawPaperLocked : rawPaperLocked * usdtInrRate;
   const paperLockedMarginUsdt = isPaperCcyInr ? rawPaperLocked / usdtInrRate : rawPaperLocked;
+
+  const paperWalletBalanceInr = isPaperCcyInr ? rawPaperWallet : rawPaperWallet * usdtInrRate;
+  const paperWalletBalanceUsdt = isPaperCcyInr ? rawPaperWallet / usdtInrRate : rawPaperWallet;
 
   const paperRealizedPnlInr = isPaperCcyInr ? rawPaperRealized : rawPaperRealized * usdtInrRate;
   const paperRealizedPnlUsdt = isPaperCcyInr ? rawPaperRealized / usdtInrRate : rawPaperRealized;
@@ -723,10 +727,10 @@ export default function Portfolio() {
               <span className="text-[8px] font-bold px-1 rounded bg-[#f59e0b]/10 text-[#f59e0b] border border-[#f59e0b]/20">VIRTUAL</span>
             </div>
             <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">
-              ₹<AnimatedNumber value={paperFreeBalanceInr} decimals={2} duration={400} />
+              ₹<AnimatedNumber value={paperWalletBalanceInr} decimals={2} duration={400} />
             </div>
             <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
-              <AnimatedNumber value={paperFreeBalanceUsdt} decimals={4} duration={400} suffix=" USDT" /> · Rate ₹{usdtInrRate.toFixed(2)}
+              <AnimatedNumber value={paperWalletBalanceUsdt} decimals={4} duration={400} suffix=" USDT" /> · Rate ₹{usdtInrRate.toFixed(2)}
               {rateMode === "static" && <span className="ml-1 text-[#f59e0b]">(static)</span>}
             </div>
             <div className="mt-2 flex items-center justify-between text-[9px] tabular-nums">

@@ -478,8 +478,8 @@ export default function BrainDashboard() {
               <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Leverage</label>
               <input
                 type="number"
-                min="1"
-                max="125"
+                min={5}
+                max={20}
                 value={triggerLeverage}
                 onChange={(e) => setTriggerLeverage(e.target.value)}
                 className="w-full px-2 py-1.5 rounded bg-[#09090b] border border-[#27272a] text-xs text-zinc-200 focus:border-emerald-500/50 outline-none"

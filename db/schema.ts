@@ -698,7 +698,7 @@ export const brainEpisodes = pgTable("brain_episodes", {
   signalSource: varchar("signal_source", { length: 50 }),     // "confluence" | "manual" | "brain"
   brainVerdict: varchar("brain_verdict", { length: 20 }),     // APPROVE | CAUTION | REDUCE_RISK | EXIT_NOW
   governorVerdict: varchar("governor_verdict", { length: 20 }), // approved | rejected
-  governorGate: varchar("governor_gate", { length: 50 }),     // which gate triggered (if rejected)
+  governorGate: varchar("governor_gate", { length: 255 }),     // which gate triggered (if rejected)
   executionResult: varchar("execution_result", { length: 20 }), // executed | skipped | error
   positionId: integer("position_id"),                         // FK to positions (if executed)
   // NOTE: the pgvector `embedding` column is NOT modelled in Drizzle — it is managed
