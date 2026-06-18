@@ -1,5 +1,7 @@
 # Janus: Algorithmic Trading Dashboard & Autonomous Execution Engine
 
+> **Not the same as [`ecosystem/bots/janus/`](../ecosystem/bots/janus/)** — that folder is a minimal Python reference bot for the Ferment paper/live exchange runtime. **This repo** is the standalone CoinDCX futures dashboard and autonomous execution engine.
+
 Janus is a full-stack algorithmic trading dashboard and autonomous execution engine for **CoinDCX futures**. It streams live market data from Binance (public) and CoinDCX (private), scores every tracked symbol every 30 seconds using a multi-timeframe confluence engine, automatically opens positions when a signal gates (score ≥ 75), and manages open positions through their full lifecycle using an AI-driven position manager.
 
 Built on React 19 · Hono · tRPC · PostgreSQL · Drizzle ORM.

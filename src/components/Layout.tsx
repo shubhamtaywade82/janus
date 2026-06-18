@@ -18,6 +18,7 @@ import {
   Bell,
   Brain,
   Zap,
+  LineChart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import SettingsModal from "./SettingsModal";
@@ -27,6 +28,7 @@ import { playAlertChime } from "@/lib/alert-sound";
 const navItems = [
   { path: "/", label: "Dashboard", icon: TrendingUp },
   { path: "/signals", label: "Signals", icon: Signal },
+  { path: "/adaptive-st", label: "Adaptive ST", icon: LineChart },
   { path: "/ai-analysis", label: "AI Analysis", icon: Brain },
   { path: "/brain", label: "Brain", icon: Zap },
   { path: "/portfolio", label: "Portfolio", icon: Wallet },

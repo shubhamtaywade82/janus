@@ -288,3 +288,9 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **Dynamic Sizing Alignment**: Added logic to `governor.ts` that dynamically scales `globalRiskEngine.config.maxPositionPct` to be at least `allocPct * 1.05` on every evaluation, preventing self-blocking in the future if capital allocation is set higher than the risk cap.
 * **Bypass Flags**: Implemented `DISABLE_KILL_SWITCH` and `DISABLE_RISK_LIMITS` environment variables in `governor.ts` and `.env` (both set to `true`) to allow the user to completely disable safety gates.
 * **Node 18 Compatibility**: Replaced all uses of `import.meta.dirname` (unsupported in Node 18, which caused bot startup crashes) with ES Module standard `path.dirname(fileURLToPath(import.meta.url))` in `boot.ts` and `vite.ts`.
+
+### [2026-06-18] Adaptive Supertrend Lab — Live Kline Integration
+* **Engine**: Added `src/lib/adaptive-supertrend.ts` — Kaufman ER-driven adaptive supertrend with ATR bands, flip signals, and simulated equity backtest (client-side).
+* **UI**: New `/adaptive-st` page (`AdaptiveSupertrend.tsx`) with price/ST chart, ER+factor panel, equity curve, parameter sliders, and Pine Script v6 export modal. Uses `trpc.market.klines` (Binance futures REST + DB fallback) and `trpc.market.pairs` for symbol selection; shares `janus_selected_symbol` with Dashboard.
+* **Nav**: Sidebar entry "Adaptive ST" with `LineChart` icon.
+* **Tests**: `api/services/__tests__/adaptive-supertrend.test.ts` covers kline conversion, engine output alignment, and ER regime classification.
