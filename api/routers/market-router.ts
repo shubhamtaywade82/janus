@@ -8,6 +8,7 @@ import { liquidityEngine } from "../services/liquidity-engine";
 import { marketStateManager } from "../services/market-state";
 import {
   fetchKlines,
+  fetchKlinesPaginated,
   fetch24hTicker,
   fetchOrderBook,
   fetchRecentTrades,
@@ -144,6 +145,46 @@ export const marketRouter = createRouter({
 
         return []; // no data available
       }
+    }),
+
+  // ─── Single batch (for paginated historical fetch from UI) ───
+  klinesBatch: authedQuery
+    .input(
+      z.object({
+        symbol: z.string(),
+        interval: z.string(),
+        limit: z.number().min(1).max(1500).default(1500),
+        startTime: z.number().optional(),
+        endTime: z.number().optional(),
+      })
+    )
+    .query(async ({ input }) => {
+      return fetchKlines(
+        input.symbol,
+        input.interval,
+        input.limit,
+        input.endTime,
+        input.startTime
+      );
+    }),
+
+  // ─── Full historical range (server-side pagination) ───
+  klinesHistorical: authedQuery
+    .input(
+      z.object({
+        symbol: z.string(),
+        interval: z.string(),
+        startTime: z.number(),
+        endTime: z.number(),
+      })
+    )
+    .query(async ({ input }) => {
+      return fetchKlinesPaginated(
+        input.symbol,
+        input.interval,
+        input.startTime,
+        input.endTime
+      );
     }),
 
   // ─── Fetch 24h ticker stats ───

@@ -290,7 +290,8 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **Node 18 Compatibility**: Replaced all uses of `import.meta.dirname` (unsupported in Node 18, which caused bot startup crashes) with ES Module standard `path.dirname(fileURLToPath(import.meta.url))` in `boot.ts` and `vite.ts`.
 
 ### [2026-06-18] Adaptive Supertrend Lab — Live Kline Integration
-* **Engine**: Added `src/lib/adaptive-supertrend.ts` — Kaufman ER-driven adaptive supertrend with ATR bands, flip signals, and simulated equity backtest (client-side).
-* **UI**: New `/adaptive-st` page (`AdaptiveSupertrend.tsx`) with price/ST chart, ER+factor panel, equity curve, parameter sliders, and Pine Script v6 export modal. Uses `trpc.market.klines` (Binance futures REST + DB fallback) and `trpc.market.pairs` for symbol selection; shares `janus_selected_symbol` with Dashboard.
-* **Nav**: Sidebar entry "Adaptive ST" with `LineChart` icon.
-* **Tests**: `api/services/__tests__/adaptive-supertrend.test.ts` covers kline conversion, engine output alignment, and ER regime classification.
+* **Engine**: `src/lib/adaptive-supertrend.ts` — Kaufman ER adaptive supertrend with fee/slippage-aware backtest (0.08% RT cost, 1% risk sizing), trade log, Sharpe, profit factor, max consecutive wins/losses.
+* **Historical fetch**: `fetchKlinesPaginated()` in `api/services/binance.ts`; tRPC `market.klinesBatch` + `market.klinesHistorical` for date-range pagination through Janus backend (no browser CORS).
+* **UI**: `/adaptive-st` — 20 symbols, 14 intervals, date presets (1D–1Y), Fetch & Run workflow, pan/zoom chart viewport, volume panel, trade log table, expanded backtest sidebar stats, Pine v6 export with commission/slippage.
+* **Nav**: Sidebar "Adaptive ST" entry.
+* **Tests**: `api/services/__tests__/adaptive-supertrend.test.ts`.
