@@ -289,6 +289,19 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **Bypass Flags**: Implemented `DISABLE_KILL_SWITCH` and `DISABLE_RISK_LIMITS` environment variables in `governor.ts` and `.env` (both set to `true`) to allow the user to completely disable safety gates.
 * **Node 18 Compatibility**: Replaced all uses of `import.meta.dirname` (unsupported in Node 18, which caused bot startup crashes) with ES Module standard `path.dirname(fileURLToPath(import.meta.url))` in `boot.ts` and `vite.ts`.
 
+### [2026-06-18] Paper Margin Currency Normalization (PnL / ROE / Exits)
+* **`paper-currency.ts`**: Central helpers `computeMarginUsdt`, `resolvePaperPositionMargin`, legacy INR/USDT detection, and wallet/USDT converters.
+* **`executionWorker.ts`**: Stores margin in wallet currency (fixed earlier).
+* **`trading-service.ts`**, **`Portfolio.tsx`**: Display + ROE use normalized wallet/USDT margin.
+* **`position-lifecycle.ts`**, **`position-store.ts`**, **`policy-guard.ts`**: ROE/risk/margin totals derive from USDT margin math, not raw DB field.
+* **`execution-manager.ts`**, **`auto-executor.ts`**, **`trading-router.ts`**: Paper exits/partial/scale-in always pass USDT amounts to `releasePaperPositionMargin` / `lockPaperPositionMargin`.
+* **`position-reconciler.ts`**: Repairs legacy mis-stored margin rows on reconcile.
+
+### [2026-06-18] Paper Position Margin Display Fix (INR Currency Mismatch)
+* **`executionWorker.ts`**: Paper positions now store `margin` in wallet currency (INR via `usdtToWallet`) instead of raw USDT amount with `marginCurrency: INR`. Fees charged in wallet currency too.
+* **`trading-service.ts`**: `mapPaperPosition()` converts legacy mis-stored USDT margins to INR for display when `margin ≤ notional/leverage`.
+* **`position-reconciler.ts`**: Paper margin reconciliation uses stored wallet-currency amounts; auto-repairs legacy INR-labelled USDT margin rows on reconcile cycle.
+
 ### [2026-06-18] Leverage Range 5x–20x, Intraday 15x, Kronos Override Removed
 * **`contracts/constants.ts`**: Added `MIN_SYSTEM_LEVERAGE` (5), `MAX_SYSTEM_LEVERAGE` (20), and `clampSystemLeverage()`.
 * **`strategy-config.ts`**: `intraday.maxLeverage` raised to **15x**.
@@ -302,3 +315,16 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **UI**: `/adaptive-st` — 20 symbols, 14 intervals, date presets (1D–1Y), Fetch & Run workflow, pan/zoom chart viewport, volume panel, trade log table, expanded backtest sidebar stats, Pine v6 export with commission/slippage.
 * **Nav**: Sidebar "Adaptive ST" entry.
 * **Tests**: `api/services/__tests__/adaptive-supertrend.test.ts`.
+
+### [2026-06-18] Telegram TimeoutError Circuit Breaker
+* **`telegram.ts`**: `AbortSignal.timeout()` throws `DOMException TimeoutError` — now treated as a network failure (opens circuit, no full stack trace). Transient send errors log message only.
+* **`position-telegram-notifier.ts`**: Skips DB lookup when `isTelegramPaused()`.
+
+### [2026-06-18] Manual Signal Injection Fix (INR Equity Sizing + Gate Bypasses)
+* **`BrainDashboard.tsx`**: Paper capital sizing now uses `equityUsdt` (INR wallet no longer treated as USDT — was sending ~$29,977 on a ~$1,000 account).
+* **`paper-wallet.ts`**: Exposes `equityUsdt`, `balanceUsdt`, `freeMarginUsdt` for UI sizing.
+* **`auto-executor.ts`**: Manual triggers bypass Brain veto (shadow log only), LLM advisor, and depth gate; manual `sizeUsdt` capped to available USDT equity server-side.
+* **`governor.ts`**: Manual triggers bypass dedup window.
+* **`brain-router.ts`**: Returns explicit 400 when executor never ran (`AUTO_EXECUTE` off, auto-trader disabled, kill switch) or when pipeline skips.
+
+* **Ops**: Set `auto_executor_config.brain_shadow_mode = true` for user 1 (was `false` with `brain_gate_enabled=true`, causing 134+ `brain_veto` skips in 6h). `pm2 reload janus-bot` to clear config cache. Brain still evaluates/logs episodes; Governor-approved signals execute without Brain veto.

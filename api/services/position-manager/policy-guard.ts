@@ -5,6 +5,7 @@ import type {
 } from "./types";
 import { PositionAction as PA } from "./types";
 import { positionStore } from "./position-store";
+import { computeMarginUsdt } from "../paper-currency";
 import { isSlImprovement } from "./execution-manager";
 
 // ─── Policy Guard ────────────────────────────────────────────────────────────
@@ -46,7 +47,12 @@ export function policyGuard(
       };
     }
 
-    const positionRisk = position.margin / portfolio.totalEquityUsdt;
+    const marginUsdt = computeMarginUsdt(
+      position.quantity,
+      position.entryPrice,
+      position.leverage
+    );
+    const positionRisk = marginUsdt / portfolio.totalEquityUsdt;
     if (positionRisk > 0.40) {
       return {
         approved: false,

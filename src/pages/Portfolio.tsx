@@ -51,10 +51,9 @@ const PositionRow = ({
     : parseFloat(position.realizedPnl || "0");
   const isProfit = pnl >= 0;
   const margin = parseFloat(position.margin || "0");
-  const roe = margin > 0 ? (pnl / margin) * 100 : parseFloat(position.roe || "0");
-
   const marginInr = marginCurrency === "INR" ? margin : margin * usdtInrRate;
   const marginUsdt = marginCurrency === "INR" ? margin / usdtInrRate : margin;
+  const roe = marginUsdt > 0 ? (pnl / marginUsdt) * 100 : parseFloat(position.roe || "0");
 
   const maintMarginVal = position.maintenanceMargin ? parseFloat(position.maintenanceMargin) : null;
   const maintMarginInr = maintMarginVal !== null

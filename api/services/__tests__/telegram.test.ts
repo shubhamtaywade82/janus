@@ -62,6 +62,29 @@ describe("sendTelegramMessage circuit breaker", () => {
     warnSpy.mockRestore();
   });
 
+  it("opens circuit on AbortSignal timeout and skips subsequent sends", async () => {
+    const timeoutError = new DOMException("The operation was aborted due to timeout", "TimeoutError");
+    const mockFetch = vi.fn().mockRejectedValue(timeoutError);
+    vi.stubGlobal("fetch", mockFetch);
+
+    const mod = await import("../telegram?t=" + Date.now());
+    mod.__resetTelegramStateForTests();
+
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await mod.sendTelegramMessage({ botToken: "tok", chatId: "123", text: "msg1" });
+    expect(mod.isTelegramPaused()).toBe(true);
+    expect(errorSpy).not.toHaveBeenCalled();
+
+    await mod.sendTelegramMessage({ botToken: "tok", chatId: "123", text: "msg2" });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    expect(warnSpy).toHaveBeenCalledOnce();
+
+    warnSpy.mockRestore();
+    errorSpy.mockRestore();
+  });
+
   it("closes circuit after a successful send", async () => {
     const networkError = Object.assign(new TypeError("fetch failed"), {
       cause: { code: "UND_ERR_CONNECT_TIMEOUT" },

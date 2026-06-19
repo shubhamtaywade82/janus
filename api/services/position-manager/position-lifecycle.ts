@@ -21,7 +21,12 @@ import { eq, and, desc, gte as _gte } from "drizzle-orm";
 import { userPositionsCache, markPriceCache } from "../coindcx-ws";
 import { latestTickerCache } from "../streaming";
 import { getPaperWallet } from "../paper-wallet";
-import { walletToUsdt } from "../paper-currency";
+import {
+  walletToUsdt,
+  computeMarginUsdt,
+  paperMarginStoredToWalletSync,
+} from "../paper-currency";
+import { getUsdtInrRate } from "../coindcx";
 import { registerPositionForTrailing, syncTrailingStopLoss, isPositionTracked, unregisterPosition } from "../trailing-stop";
 import type { StrategyType } from "../strategy-config";
 // ─── Position Lifecycle Manager ──────────────────────────────────────────────
@@ -118,6 +123,8 @@ export class PositionLifecycleManager {
     // Build merged set keyed by exchangeOrderId / DB id
     const managed = new Map<string, ManagedPosition>();
 
+    const usdtInrRate = await getUsdtInrRate().catch(() => 89);
+
     // First pass: DB positions as baseline
     for (const dbPos of dbPositions) {
       const binanceSym = dbPos.symbol.replace("B-", "").replace("_", "");
@@ -131,11 +138,19 @@ export class PositionLifecycleManager {
 
       const entryPrice = parseFloat(dbPos.entryPrice);
       const quantity = parseFloat(dbPos.size);
-      const margin = parseFloat(dbPos.margin);
+      const marginUsdt = computeMarginUsdt(quantity, entryPrice, dbPos.leverage);
+      const marginStored = parseFloat(dbPos.margin);
+      const marginCurrency = (dbPos.marginCurrency ?? "USDT") as "USDT" | "INR";
+      const margin = paperMarginStoredToWalletSync(
+        marginStored,
+        marginCurrency,
+        marginUsdt,
+        usdtInrRate
+      );
       const isLong = dbPos.side === "long";
       const unrealizedPnl =
         (isLong ? 1 : -1) * (markPriceRaw - entryPrice) * quantity;
-      const roe = margin > 0 ? (unrealizedPnl / margin) * 100 : 0;
+      const roe = marginUsdt > 0 ? (unrealizedPnl / marginUsdt) * 100 : 0;
       const sl = dbPos.stopLoss ? parseFloat(dbPos.stopLoss) : null;
       const tp = dbPos.takeProfit ? parseFloat(dbPos.takeProfit) : null;
       const liqPrice = dbPos.liquidationPrice ? parseFloat(dbPos.liquidationPrice) : null;
@@ -209,9 +224,14 @@ export class PositionLifecycleManager {
           (isLong ? 1 : -1) *
           (newMarkPrice - existing.entryPrice) *
           existing.quantity;
+        const marginUsdt = computeMarginUsdt(
+          existing.quantity,
+          existing.entryPrice,
+          existing.leverage
+        );
         const roe =
-          existing.margin > 0
-            ? (unrealizedPnl / existing.margin) * 100
+          marginUsdt > 0
+            ? (unrealizedPnl / marginUsdt) * 100
             : 0;
         managed.set(key, {
           ...existing,

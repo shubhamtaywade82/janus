@@ -10,6 +10,7 @@ import {
   estimateFee,
 } from "../services/position-manager/transaction-ledger";
 import { registerPositionForTrailing } from "../services/trailing-stop";
+import { usdtToWallet } from "../services/paper-currency";
 
 Decimal.set({ precision: 30, rounding: Decimal.ROUND_HALF_UP });
 
@@ -64,7 +65,7 @@ export const executionWorker = new Worker(
           const price = new Decimal(executionPrice);
           const leverage = new Decimal(order.leverage);
           const notional = qty.mul(price);
-          const margin = notional.div(leverage);
+          const marginUsdt = notional.div(leverage);
 
           // Fetch user executor config to get the paper currency if it's paper mode
           const [config] = await tx
@@ -75,6 +76,15 @@ export const executionWorker = new Worker(
 
           const currency = config?.paperCurrency ?? "INR";
           const isPaper = true; // simulated engine matching is for paper trading
+
+          const marginUsdtNum = marginUsdt.toNumber();
+          const marginStored =
+            currency === "INR"
+              ? await usdtToWallet(marginUsdtNum, "INR")
+              : marginUsdtNum;
+          const feeUsdt = estimateFee(notional.toNumber());
+          const feeStored =
+            currency === "INR" ? await usdtToWallet(feeUsdt, "INR") : feeUsdt;
 
           // Create the open position record
           const [position] = await tx
@@ -87,7 +97,7 @@ export const executionWorker = new Worker(
               currentPrice: price.toFixed(8),
               size: qty.toFixed(8),
               leverage: order.leverage,
-              margin: margin.toFixed(8),
+              margin: marginStored.toFixed(8),
               marginCurrency: currency,
               stopLoss: order.stopLoss ? String(order.stopLoss) : null,
               takeProfit: order.takeProfit ? String(order.takeProfit) : null,
@@ -102,12 +112,11 @@ export const executionWorker = new Worker(
             .returning();
 
           // Settle transaction ledger
-          const feeVal = estimateFee(notional.toNumber());
           await WalletLedgerService.chargeFee(
             order.userId,
             "paper",
             currency,
-            feeVal.toFixed(8),
+            feeStored.toFixed(8),
             position.id
           );
 
@@ -123,9 +132,9 @@ export const executionWorker = new Worker(
             price: price.toNumber(),
             avgEntryPrice: price.toNumber(),
             realizedPnl: 0,
-            fee: feeVal,
+            fee: feeUsdt,
             marginBefore: 0,
-            marginAfter: margin.toNumber(),
+            marginAfter: marginUsdtNum,
             metadata: {
               isPaper,
               leverage: order.leverage,

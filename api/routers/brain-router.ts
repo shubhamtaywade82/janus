@@ -9,6 +9,7 @@ import { desc } from "drizzle-orm";
 import { globalKillSwitch } from "../services/kill-switch";
 import { proposeTradeAsSignal } from "../brain/signal-bridge";
 import { env } from "../lib/env";
+import { globalAutoExecutor } from "../services/auto-executor";
 import { SUPPORTED_SYMBOLS } from "../../contracts/constants";
 
 const VALID_SYMBOLS = new Set<string>(SUPPORTED_SYMBOLS);
@@ -122,6 +123,11 @@ brainRouter.post("/trigger-signal", async (c) => {
     globalKillSwitch.reset();
 
     // Route through the shared bridge (same path the autonomous brain driver uses).
+    const sizeUsdt = body.sizeUsdt ? parseFloat(String(body.sizeUsdt)) : undefined;
+    if (sizeUsdt !== undefined && (!Number.isFinite(sizeUsdt) || sizeUsdt <= 0)) {
+      return c.json({ error: "sizeUsdt must be a positive number" }, 400);
+    }
+
     const { signalId, decision: firstDecision } = await proposeTradeAsSignal({
       symbol,
       direction,
@@ -129,7 +135,7 @@ brainRouter.post("/trigger-signal", async (c) => {
       threshold: Number(threshold),
       source: "manual-trigger",
       rsi: body.rsi ?? 50,
-      sizeUsdt: body.sizeUsdt ? parseFloat(String(body.sizeUsdt)) : undefined,
+      sizeUsdt,
       leverage: body.leverage ? parseFloat(String(body.leverage)) : undefined,
       stopLossPct: body.stopLossPct ? parseFloat(String(body.stopLossPct)) / 100 : undefined,
       takeProfitPct: body.takeProfitPct ? parseFloat(String(body.takeProfitPct)) / 100 : undefined,
@@ -137,9 +143,16 @@ brainRouter.post("/trigger-signal", async (c) => {
       extraMetadata: body.metadata || {},
     });
 
-    const isPaper = env.tradingMode === "paper";
+    if (!firstDecision) {
+      const config = await globalAutoExecutor.getActiveConfig();
+      let reason = "Executor did not process the signal";
+      if (!env.autoExecute) reason = "AUTO_EXECUTE is disabled — set AUTO_EXECUTE=true in .env and restart";
+      else if (!config?.enabled) reason = "Auto-trader is disabled — enable it in the Auto Trader panel";
+      else if (!globalKillSwitch.canTrade()) reason = "Kill switch is active";
+      return c.json({ error: reason, signalId }, 400);
+    }
 
-    if (firstDecision && firstDecision.action === "skip") {
+    if (firstDecision.action === "skip") {
       return c.json({
         error: firstDecision.reason,
       }, 400);

@@ -18,7 +18,7 @@ import { tradingEvents, initCoinDCXPrivateWs } from "../services/coindcx-ws";
 import { startExitMonitor, stopExitMonitor, getFeeBreakevenMap } from "../services/exit-manager";
 import { globalRiskEngine, getOrCreateSession, updateSession } from "../services/risk-engine";
 import { unregisterPosition } from "../services/trailing-stop";
-import { releasePaperPositionMargin } from "../services/paper-currency";
+import { releasePaperPositionMargin, resolvePaperPositionMargin } from "../services/paper-currency";
 import { autoExecutorConfig } from "@db/schema";
 import { encrypt, decryptCreds } from "../lib/crypto";
 import { fetchPortfolioData, executeOrder } from "../services/trading-service";
@@ -72,9 +72,16 @@ export const tradingRouter = createRouter({
           .where(eq(autoExecutorConfig.userId, ctx.user.id))
           .limit(1);
         const paperCurrency = (cfg?.paperCurrency as "USDT" | "INR") ?? "INR";
+        const { marginUsdt } = await resolvePaperPositionMargin({
+          marginStored: parseFloat(pos.margin),
+          marginCurrency: paperCurrency,
+          size: parseFloat(pos.size),
+          entryPrice: parseFloat(pos.entryPrice),
+          leverage: pos.leverage,
+        });
         await releasePaperPositionMargin(
           ctx.user.id,
-          parseFloat(pos.margin),
+          marginUsdt,
           parseFloat(input.realizedPnl),
           pos.id,
           paperCurrency

@@ -42,6 +42,7 @@ import {
   lockPaperPositionMargin,
   releasePaperPositionMargin,
   walletToUsdt,
+  resolvePaperPositionMargin,
 } from "./paper-currency";
 import { env, coinDCXEnvCreds } from "../lib/env";
 import { decryptCreds } from "../lib/crypto";
@@ -592,6 +593,16 @@ export class AutoExecutor {
   }
 
   private async evaluateBrainAuthority(signal: Signal, _config: AutoExecutorConfig): Promise<{ action: "skip" | "approve"; reason: string; gate: string; llmDecision?: ExecutorDecision["llmDecision"]; brainResult?: any } | null> {
+    const sigMetadata = signal.metadata as Record<string, any> | null;
+    if (sigMetadata?.source === "manual-trigger") {
+      const brainPromise = brainOrchestrator.evaluate(signal, 1).catch((err) => {
+        console.warn("[Auto-Executor] Brain shadow evaluation failed:", err.message);
+        return null;
+      });
+      (signal as any)._brainPromise = brainPromise;
+      return null;
+    }
+
     const brainConfig = await brainOrchestrator.getConfig(1);
     const brainHasAuthority = brainConfig.gateEnabled && !brainConfig.shadowMode;
 
@@ -625,7 +636,8 @@ export class AutoExecutor {
   private async evaluateLlmAdvisor(signal: Signal, config: AutoExecutorConfig, context: any): Promise<{ action: "skip" | "approve"; reason: string; gate: string; llmDecision?: ExecutorDecision["llmDecision"]; sizeMult?: number; stopLossPct?: number; takeProfitPct?: number } | null> {
     const sigMetadata = signal.metadata as Record<string, any> | null;
     const isBrainDriven = sigMetadata?.source === "brain-driver";
-    if (!config.useLlmAdvisor || isBrainDriven) return null;
+    const isManualTrigger = sigMetadata?.source === "manual-trigger";
+    if (!config.useLlmAdvisor || isBrainDriven || isManualTrigger) return null;
 
     const { symbol, side, openCount, session } = context;
     const regimeData = latestRegimeCache.get("BTCUSDT");
@@ -827,6 +839,13 @@ private async calculateSizing(params: {
   let notional = 0;
   if (isManualOverride) {
     notional = parseFloat(String(sigMetadata!.sizeUsdt));
+    if (!Number.isFinite(notional) || notional <= 0) {
+      return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: "manual sizeUsdt must be > 0", skipGate: "sizing" };
+    }
+    if (notional > availEquityUsdt) {
+      console.warn(`[auto-executor] manual sizeUsdt $${notional.toFixed(2)} capped to available equity $${availEquityUsdt.toFixed(2)} USDT`);
+      notional = availEquityUsdt;
+    }
   } else {
     // Base capital allocation model
     const baseNotional = availEquityUsdt * baseAllocPct * convictionMult;
@@ -843,7 +862,7 @@ private async calculateSizing(params: {
     notional = Math.min(notional, availEquityUsdt * maxAllocPct); // Hard cap on total notional
   }
 
-  if (brainHasAuthority && brainResult?.adjustedSizeUsdt) {
+  if (!isManualOverride && brainHasAuthority && brainResult?.adjustedSizeUsdt) {
     notional = brainResult.adjustedSizeUsdt;
   }
 
@@ -903,7 +922,7 @@ private async calculateSizing(params: {
   }
 
   const book = marketStateManager.get(params.signal.symbol)?.orderBook;
-  if (book) {
+  if (book && !isManualOverride) {
     const levels = side === "long" ? book.asks : book.bids;
     const totalDepth = levels.reduce((sum, [, qty]) => sum + qty, 0);
     if (totalDepth > 0 && size > totalDepth * 0.05) {
@@ -1226,9 +1245,16 @@ private async executePosition(params: {
     if (position.isPaper) {
       const cfg = await this.getConfig();
       const paperCurrency = (position.marginCurrency as "USDT" | "INR") ?? (cfg?.paperCurrency as "USDT" | "INR") ?? "INR";
+      const { marginUsdt } = await resolvePaperPositionMargin({
+        marginStored: parseFloat(position.margin),
+        marginCurrency: paperCurrency,
+        size: parseFloat(position.size),
+        entryPrice: parseFloat(position.entryPrice),
+        leverage: position.leverage,
+      });
       await releasePaperPositionMargin(
         position.userId,
-        parseFloat(position.margin),
+        marginUsdt,
         realizedPnl,
         position.id,
         paperCurrency

@@ -26,6 +26,7 @@ import {
   depositToAccount,
   getDepositTotals,
 } from "./trading-account";
+import { walletToUsdt } from "./paper-currency";
 
 // In-memory account-id cache keyed by "userId:currency"
 const accountIdCache = new Map<string, number>();
@@ -58,6 +59,10 @@ export async function getPaperWallet(
 
   const metrics = computeDerivedMetrics(account);
   const { totalDeposited, depositCount } = await getDepositTotals(account.id);
+  const walletCurrency = account.currency as "USDT" | "INR";
+  const equityUsdt = await walletToUsdt(metrics.equity, walletCurrency);
+  const balanceUsdt = await walletToUsdt(parseFloat(account.availableBalance), walletCurrency);
+  const freeMarginUsdt = await walletToUsdt(metrics.freeMargin, walletCurrency);
 
   return {
     userId,
@@ -70,6 +75,9 @@ export async function getPaperWallet(
     realizedPnl: parseFloat(account.realizedPnl),
     unrealizedPnl: parseFloat(account.unrealizedPnl),
     equity: metrics.equity,
+    equityUsdt,
+    balanceUsdt,
+    freeMarginUsdt,
     usedMargin: metrics.usedMargin,
     freeMargin: metrics.freeMargin,
     marginUtilization: metrics.marginUtilization,

@@ -5,7 +5,7 @@
 // to avoid spam.
 
 import { positionManagerBus } from "./position-manager/event-bus";
-import { sendTelegramMessage } from "./telegram";
+import { sendTelegramMessage, isTelegramPaused } from "./telegram";
 import { getDb } from "../queries/connection";
 import { users, positions } from "@db/schema";
 import { positionTransactions } from "@db/position-manager-schema";
@@ -342,6 +342,7 @@ function buildErrorMessage(context: string, error: Error): string {
 // ─── Send helper ─────────────────────────────────────────────────────────────
 
 async function notify(text: string): Promise<void> {
+  if (isTelegramPaused()) return;
   const creds = await getTelegramCreds();
   if (!creds) return;
   await sendTelegramMessage({ botToken: creds.botToken, chatId: creds.chatId, text, parseMode: "HTML" });

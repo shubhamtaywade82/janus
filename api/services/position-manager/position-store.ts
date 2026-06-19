@@ -1,5 +1,6 @@
 import type { ManagedPosition, PositionLifecycleState, PositionSide } from "./types";
 import { positionManagerBus } from "./event-bus";
+import { computeMarginUsdt } from "../paper-currency";
 
 // ─── In-Memory Hot Position Store ───────────────────────────────────────────
 // Avoids DB reads on every assessment cycle.
@@ -135,7 +136,11 @@ class PositionStore {
   totalMarginUsed(isPaper?: boolean): number {
     return this.getOpen()
       .filter((p) => (isPaper === undefined ? true : p.isPaper === isPaper))
-      .reduce((sum, p) => sum + p.margin, 0);
+      .reduce(
+        (sum, p) =>
+          sum + computeMarginUsdt(p.quantity, p.entryPrice, p.leverage),
+        0
+      );
   }
 
   // Correlation check: how many positions on the same side (broad market exposure)

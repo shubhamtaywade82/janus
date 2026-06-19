@@ -67,15 +67,19 @@ export class Governor {
       return { approved: false, gate: "stale_signal", reason: `stale signal (${Math.round(signalAgeMs / 1000)}s old)` };
     }
 
-    // Gate 1c: dedup
-    const dedupKey = `${symbol}:${signal.direction}`;
-    const lastExec = recentExecutions.get(dedupKey) ?? 0;
-    if (Date.now() - lastExec < dedupWindowMs) {
-      return {
-        approved: false,
-        gate: "dedup",
-        reason: `dedup: same ${symbol} ${signal.direction} executed ${Math.round((Date.now() - lastExec) / 1000)}s ago`,
-      };
+    const isManualTrigger = metadata?.source === "manual-trigger";
+
+    // Gate 1c: dedup (manual injection bypasses — operator explicitly re-fired)
+    if (!isManualTrigger) {
+      const dedupKey = `${symbol}:${signal.direction}`;
+      const lastExec = recentExecutions.get(dedupKey) ?? 0;
+      if (Date.now() - lastExec < dedupWindowMs) {
+        return {
+          approved: false,
+          gate: "dedup",
+          reason: `dedup: same ${symbol} ${signal.direction} executed ${Math.round((Date.now() - lastExec) / 1000)}s ago`,
+        };
+      }
     }
 
     // Gate 2: kill switch

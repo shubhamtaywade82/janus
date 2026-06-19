@@ -22,7 +22,7 @@ import { decryptCreds } from "../lib/crypto";
 import { broadcastTelegramAlert } from "./telegram";
 import { env, coinDCXEnvCreds } from "../lib/env";
 import Decimal from "decimal.js";
-import { usdtToWallet } from "./paper-currency";
+import { usdtToWallet, isLegacyInrLabelledUsdtMargin, computeMarginUsdt } from "./paper-currency";
 
 const RECONCILE_INTERVAL_MS = 5 * 60_000; // every 5 minutes
 
@@ -273,12 +273,33 @@ class PositionReconciler {
         )
         .catch(() => []);
 
-      // Sum their margins
+      // Sum their margins (stored in account wallet currency)
       let totalOpenMargin = new Decimal(0);
       for (const p of openPositions) {
-        // Margin is stored in USDT in the positions table. Convert to account currency (e.g. INR)
-        const marginUsdt = parseFloat(p.margin);
-        const marginWallet = await usdtToWallet(marginUsdt, account.currency);
+        const size = parseFloat(String(p.size));
+        const entry = parseFloat(String(p.entryPrice));
+        const lev = Number(p.leverage) || 1;
+        const marginUsdt = computeMarginUsdt(size, entry, lev);
+        let marginWallet = parseFloat(String(p.margin));
+
+        if (
+          account.currency === "INR" &&
+          p.marginCurrency === "INR" &&
+          marginWallet > 0 &&
+          isLegacyInrLabelledUsdtMargin(marginWallet, "INR", marginUsdt)
+        ) {
+          marginWallet = await usdtToWallet(marginUsdt, "INR");
+          await db
+            .update(positions)
+            .set({ margin: marginWallet.toFixed(8), updatedAt: new Date() })
+            .where(eq(positions.id, p.id))
+            .catch((err: unknown) =>
+              console.error(`[reconciler] Failed to repair margin for pos #${p.id}:`, err)
+            );
+        } else if (p.marginCurrency !== account.currency) {
+          marginWallet = await usdtToWallet(marginWallet, account.currency);
+        }
+
         totalOpenMargin = totalOpenMargin.add(marginWallet);
       }
 

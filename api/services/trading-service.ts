@@ -16,8 +16,13 @@ import { env, coinDCXEnvCreds } from "../lib/env";
 import { globalKillSwitch } from "./kill-switch";
 import { TRPCError } from "@trpc/server";
 import { MIN_SYSTEM_LEVERAGE, MAX_SYSTEM_LEVERAGE } from "../../contracts/constants";
+import {
+  computeMarginUsdt,
+  paperMarginStoredToWalletSync,
+  paperMarginStoredToUsdtSync,
+} from "./paper-currency";
 
-export function mapPaperPosition(p: any, markets: any[] = []) {
+export function mapPaperPosition(p: any, markets: any[] = [], usdtInrRate = 99) {
   const symbol = p.symbol.startsWith("B-")
     ? p.symbol.slice(2).replace("_USDT", "USDT").replace("_", "")
     : p.symbol;
@@ -37,9 +42,23 @@ export function mapPaperPosition(p: any, markets: any[] = []) {
 
   const posLeverage = Number(p.leverage) || 1;
   const notional = sizeVal * lastPrice;
-  const initialMargin = notional / posLeverage;
-  const marginVal = parseFloat(p.margin) || initialMargin;
-  const roe = marginVal > 0 ? (unrealizedPnl / marginVal) * 100 : 0;
+  const initialMargin = computeMarginUsdt(sizeVal, entryPrice, posLeverage);
+  const marginCurrency = (p.marginCurrency || "USDT") as "USDT" | "INR";
+  const marginStored = parseFloat(p.margin) || initialMargin;
+  const marginVal = paperMarginStoredToWalletSync(
+    marginStored,
+    marginCurrency,
+    initialMargin,
+    usdtInrRate
+  );
+  const marginUsdt = paperMarginStoredToUsdtSync(
+    marginStored,
+    marginCurrency,
+    initialMargin,
+    usdtInrRate
+  );
+
+  const roe = marginUsdt > 0 ? (unrealizedPnl / marginUsdt) * 100 : 0;
   const priceChangePct = entryPrice > 0 ? ((lastPrice - entryPrice) / entryPrice) * 100 : 0;
 
   const liqPriceRaw = parseFloat(p.liquidationPrice || "0");
@@ -71,13 +90,13 @@ export function mapPaperPosition(p: any, markets: any[] = []) {
     stopLoss: p.stopLoss ? String(p.stopLoss) : null,
     takeProfit: p.takeProfit ? String(p.takeProfit) : null,
     marginMode: p.marginMode || "isolated",
-    marginCurrency: p.marginCurrency || "USDT",
+    marginCurrency,
     status: p.status,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
     isPaper: true as const,
     notional: String(notional),
-    initialMargin: String(initialMargin),
+    initialMargin: String(marginUsdt),
     roe: String(roe),
     priceChangePct: String(priceChangePct),
     liqDistance: String(liqDistance),
@@ -409,7 +428,7 @@ export async function fetchPortfolioData(userId: number) {
       // ── 6. Add Paper positions from DB ──────────────────────────────────
       const paperMapped = dbPositions
         .filter((p) => p.isPaper)
-        .map((p) => mapPaperPosition(p, markets));
+        .map((p) => mapPaperPosition(p, markets, usdtInrRate));
 
       const allPositions = [...mergedLive, ...paperMapped];
 

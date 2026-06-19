@@ -40,9 +40,15 @@ export function isTelegramPaused(): boolean {
 
 function isNetworkError(error: unknown): boolean {
   if (!(error instanceof Error)) return false;
+  const name = error.name;
+  const message = error.message;
   const cause = (error as { cause?: { code?: string } }).cause;
   return (
-    error.message.includes("fetch failed") ||
+    name === "TimeoutError" ||
+    name === "AbortError" ||
+    message.includes("fetch failed") ||
+    message.includes("aborted due to timeout") ||
+    message.includes("The operation was aborted") ||
     cause?.code === "UND_ERR_CONNECT_TIMEOUT" ||
     cause?.code === "ECONNREFUSED" ||
     cause?.code === "ENOTFOUND" ||
@@ -135,9 +141,9 @@ export async function sendTelegramMessage({
     return true;
   } catch (error) {
     if (isNetworkError(error)) {
-      openCircuit((error as Error).message);
+      openCircuit(error instanceof Error ? error.message : "network error");
     } else {
-      console.error("Failed to send Telegram message:", error);
+      console.error("[telegram] Send failed:", error instanceof Error ? error.message : error);
     }
     return false;
   }
