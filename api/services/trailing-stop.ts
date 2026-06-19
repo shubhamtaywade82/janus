@@ -91,58 +91,59 @@ export function calcNewTrailingStop(
   entryPrice: number
 ): number {
   let newStop = currentStop;
-  
+
+  // Collect every protective candidate, then pick the one with the MOST room
+  // (furthest from price). Ratcheting (never loosen) is enforced afterwards
+  // against currentStop. Previously this took the candidate CLOSEST to price,
+  // which hugged the market and stopped out on noise.
+  let lastAtr = 0;
+  if (klines.length >= 14) {
+    const atrArray = computeAtrArray(klines, 14);
+    lastAtr = atrArray[atrArray.length - 1] ?? 0;
+  }
+
   if (side === "long") {
-    // 1. Swing High / Low Logic (if klines are available)
+    const candidates: number[] = [];
+
+    // 1. Swing low
     if (klines.length >= 10) {
       const swings = detectSwings(klines);
-      const activeSwings = swings.filter((s) => s.type === "low");
-      if (activeSwings.length > 0) {
-        const lastSwingLow = activeSwings[activeSwings.length - 1].price;
-        // Don't shift SL down
-        newStop = Math.max(currentStop, lastSwingLow);
-      }
-    }
-    
-    // 2. Average True Range (ATR) trailing stop
-    if (klines.length >= 14) {
-      const atrArray = computeAtrArray(klines, 14);
-      const lastAtr = atrArray[atrArray.length - 1] ?? 0;
-      if (lastAtr > 0) {
-        const atrStop = currentPrice - lastAtr * 2.0;
-        newStop = Math.max(newStop, atrStop);
-      }
+      const lows = swings.filter((s) => s.type === "low");
+      if (lows.length > 0) candidates.push(lows[lows.length - 1].price);
     }
 
-    // 3. Percentage Trailing Stop (Fallback/Standard)
-    // Ratchet trailing: only updates when price moves up.
-    const pctStop = currentPrice * (1 - trailPct);
-    newStop = Math.max(newStop, pctStop);
-    
+    // 2. ATR (2x) below price
+    if (lastAtr > 0) candidates.push(currentPrice - lastAtr * 2.0);
+
+    // 3. Percentage trail
+    candidates.push(currentPrice * (1 - trailPct));
+
+    // Most room for a long = the LOWEST candidate. Then ratchet up only.
+    if (candidates.length > 0) {
+      const loosest = Math.min(...candidates);
+      newStop = Math.max(currentStop, loosest);
+    }
   } else {
-    // Short side swing points
+    const candidates: number[] = [];
+
+    // 1. Swing high
     if (klines.length >= 10) {
       const swings = detectSwings(klines);
-      const activeSwings = swings.filter((s) => s.type === "high");
-      if (activeSwings.length > 0) {
-        const lastSwingHigh = activeSwings[activeSwings.length - 1].price;
-        newStop = Math.min(currentStop, lastSwingHigh);
-      }
+      const highs = swings.filter((s) => s.type === "high");
+      if (highs.length > 0) candidates.push(highs[highs.length - 1].price);
     }
 
-    // ATR for short
-    if (klines.length >= 14) {
-      const atrArray = computeAtrArray(klines, 14);
-      const lastAtr = atrArray[atrArray.length - 1] ?? 0;
-      if (lastAtr > 0) {
-        const atrStop = currentPrice + lastAtr * 2.0;
-        newStop = Math.min(newStop, atrStop);
-      }
-    }
+    // 2. ATR (2x) above price
+    if (lastAtr > 0) candidates.push(currentPrice + lastAtr * 2.0);
 
-    // Percentage Trailing for short
-    const pctStop = currentPrice * (1 + trailPct);
-    newStop = Math.min(newStop, pctStop);
+    // 3. Percentage trail
+    candidates.push(currentPrice * (1 + trailPct));
+
+    // Most room for a short = the HIGHEST candidate. Then ratchet down only.
+    if (candidates.length > 0) {
+      const loosest = Math.max(...candidates);
+      newStop = Math.min(currentStop, loosest);
+    }
   }
 
   // 2. Fee-Aware Breakeven Logic (Wait until 2x risk is reached to lock breakeven)
