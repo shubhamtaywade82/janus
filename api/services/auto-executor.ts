@@ -212,6 +212,12 @@ export class AutoExecutor {
   private recentExecutions = new Map<string, number>();
   private readonly DEDUP_WINDOW_MS = 60_000;
 
+  /** Synchronous in-flight lock: symbol+direction currently being processed.
+   *  Prevents the gate-3 (duplicate-position) read-then-insert race when
+   *  overlapping/concurrent onSignalBatch calls evaluate the same signal
+   *  before either has committed its position to the DB. */
+  private inFlight = new Set<string>();
+
   // Cache config to avoid DB read on every signal
   private configCache: AutoExecutorConfig | null = null;
   private configCacheAt = 0;
@@ -458,6 +464,21 @@ export class AutoExecutor {
   }
 
   private async processSignal(signal: Signal, config: AutoExecutorConfig): Promise<ExecutorDecision> {
+    // Acquire the in-flight lock synchronously (before any await) so two
+    // concurrent batches cannot both clear the duplicate-position gate.
+    const flightKey = `${signal.symbol}:${signal.direction}`;
+    if (this.inFlight.has(flightKey)) {
+      return this.skip(signal, "already processing same symbol+side", "in_flight");
+    }
+    this.inFlight.add(flightKey);
+    try {
+      return await this.processSignalInner(signal, config);
+    } finally {
+      this.inFlight.delete(flightKey);
+    }
+  }
+
+  private async processSignalInner(signal: Signal, config: AutoExecutorConfig): Promise<ExecutorDecision> {
     this.state.signalsProcessed++;
 
     const context = await this.prepareExecutionContext(signal, config);
