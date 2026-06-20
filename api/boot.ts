@@ -299,6 +299,10 @@ startAutoAnalysis("intraday", true).catch((err) => {
 import { startRProfileRefresh } from "./services/r-profile-engine";
 startRProfileRefresh();
 
+// Start multi-day trend bias scheduler (fetches daily klines, computes SMA50/200)
+import { startDailyTrendScheduler } from "./services/trend-bias";
+startDailyTrendScheduler();
+
 // Init LLM advisor (loads keys from DB + env-level Ollama config)
 import { globalLlmAdvisor } from "./services/llm-advisor";
 globalLlmAdvisor.init().catch((err) => {
@@ -333,6 +337,7 @@ startBrainScheduler();
 
 // Start liquidation proximity monitor (alerts + auto-reduce when within 5%/2% of liq price)
 import { startLiquidationMonitor, stopLiquidationMonitor } from "./services/liquidation-monitor";
+import { startDailyTrendScheduler, stopDailyTrendScheduler } from "./services/trend-bias";
 startLiquidationMonitor(10_000);
 
 // Start key rotation monitor (daily Telegram reminder when exchange API credentials are stale)
@@ -363,6 +368,7 @@ async function shutdown(signal: string, exitCode = 0): Promise<void> {
   stopTelegramCommandBot();
   stopPositionTelegramNotifier();
   stopLiquidationMonitor();
+  stopDailyTrendScheduler();
   keyRotationMonitor.stop();
   positionLifecycleManager.stop?.();
   await executionWorker.close().catch((err) => console.error("[boot] Failed to close executionWorker:", err));

@@ -112,6 +112,13 @@ export interface MarketContext {
   kronosDirectionSignal?: number | null;
   kronosVolatilityForecast?: number | null;
   kronosConfidence?: number | null;
+  // Multi-day trend bias (from daily klines — NOT 1-minute data)
+  dailyTrend: "STRONG_BULLISH" | "BULLISH" | "NEUTRAL" | "BEARISH" | "STRONG_BEARISH" | null;
+  dailyTrendConfidence: number | null;
+  sma50Daily: number | null;
+  sma200Daily: number | null;
+  priceVsSma50DailyPct: number | null;
+  priceVsSma200DailyPct: number | null;
 }
 
 /** Output from BiasEvaluator */

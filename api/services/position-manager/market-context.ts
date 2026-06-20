@@ -5,6 +5,7 @@ import { signals, marketData } from "@db/schema";
 import { eq, desc, and, gte } from "drizzle-orm";
 import type { MarketContext, MarketTrend, MarketStructure, VolatilityRegime, VolumeProfile, FundingBias } from "./types";
 import { getKronosSignal } from "../kronos-client";
+import { getDailyTrend } from "../trend-bias";
 
 // ─── Market Context Builder ──────────────────────────────────────────────────
 // Aggregates multi-timeframe data into a single MarketContext snapshot.
@@ -209,6 +210,27 @@ export async function buildMarketContext(binanceSymbol: string): Promise<MarketC
     // Non-fatal
   }
 
+  // ── Multi-Day Trend Bias (daily klines) ──────────────────────────────────
+  let dailyTrend: MarketContext["dailyTrend"] = null;
+  let dailyTrendConfidence: number | null = null;
+  let sma50Daily: number | null = null;
+  let sma200Daily: number | null = null;
+  let priceVsSma50DailyPct: number | null = null;
+  let priceVsSma200DailyPct: number | null = null;
+  try {
+    const trendBias = await getDailyTrend(binanceSymbol);
+    if (trendBias) {
+      dailyTrend = trendBias.bias;
+      dailyTrendConfidence = trendBias.confidence;
+      sma50Daily = trendBias.sma50;
+      sma200Daily = trendBias.sma200;
+      priceVsSma50DailyPct = trendBias.priceVsSma50Pct;
+      priceVsSma200DailyPct = trendBias.priceVsSma200Pct;
+    }
+  } catch {
+    // Non-fatal: daily trend is supplementary, not required
+  }
+
   return {
     symbol: binanceSymbol,
     timestamp: now,
@@ -234,5 +256,11 @@ export async function buildMarketContext(binanceSymbol: string): Promise<MarketC
     kronosDirectionSignal,
     kronosVolatilityForecast,
     kronosConfidence,
+    dailyTrend,
+    dailyTrendConfidence,
+    sma50Daily,
+    sma200Daily,
+    priceVsSma50DailyPct,
+    priceVsSma200DailyPct,
   };
 }
