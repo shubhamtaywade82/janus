@@ -803,9 +803,10 @@ private async calculateSizing(params: {
   const baseAllocPct = parseFloat(
     config.capitalAllocationPct ?? (isPaperMode ? "0.250" : "0.150")
   );
+  // Live allocation cap increased to 40% for aggressive sizing per user requirement
   const maxAllocPct = isPaperMode
     ? Math.max(baseAllocPct, 0.30)
-    : Math.min(baseAllocPct, 0.20);
+    : Math.max(baseAllocPct, 0.40);
 
   const score = parseFloat(signal.compositeScore) || 75;
   const scoreMult = Math.max(0.7, Math.min(1.0, 0.7 + 0.3 * ((score - 75) / 25)));
@@ -868,23 +869,44 @@ private async calculateSizing(params: {
       notional = availEquityUsdt;
     }
   } else {
-    // Base capital allocation model
+    // Base capital allocation model — maximized sizing, no risk ceiling
     const baseNotional = availEquityUsdt * baseAllocPct * convictionMult;
-    
-    // Risk-based ceiling (Don't risk more than 3% of total account balance on a single trade's stop loss)
-    const maxRiskUsdt = availEquityUsdt * 0.03;
-    const riskBasedCeiling = maxRiskUsdt / slPct;
     
     // Default fallback size (prevent micro-sizes in highly penalized conditions)
     const defaultMinSize = parseFloat(config.defaultSizeUsdt ?? "50");
 
     notional = Math.max(baseNotional, defaultMinSize);
-    notional = Math.min(notional, riskBasedCeiling);
     notional = Math.min(notional, availEquityUsdt * maxAllocPct); // Hard cap on total notional
   }
 
   if (!isManualOverride && brainHasAuthority && brainResult?.adjustedSizeUsdt) {
     notional = brainResult.adjustedSizeUsdt;
+  }
+
+  // ── Volatility-based position sizing ──
+  // If ATR > 5% of price, halve the position size
+  try {
+    const klines = await fetchKlines(params.signal.symbol, "1m", 30);
+    if (klines.length >= 2) {
+      const trs = klines.slice(1).map((k, i) => {
+        const prev = klines[i];
+        const high = parseFloat(k.high);
+        const low = parseFloat(k.low);
+        const prevClose = parseFloat(prev.close);
+        return Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+      });
+      const atr = trs.reduce((s, v) => s + v, 0) / trs.length;
+      const currentPrice = parseFloat(klines[klines.length - 1].close);
+      if (currentPrice > 0) {
+        const atrPct = atr / currentPrice;
+        if (atrPct > 0.05) {
+          notional *= 0.5;
+          console.log(`[auto-executor] Volatility regime EXTREME: ATR ${(atrPct * 100).toFixed(2)}% > 5% — halving size for ${params.signal.symbol}`);
+        }
+      }
+    }
+  } catch (err) {
+    console.warn(`[auto-executor] Volatility sizing check failed for ${params.signal.symbol}:`, err);
   }
 
   const strategyMaxLev = STRATEGY_CONFIGS[strategyType]?.maxLeverage ?? 5;

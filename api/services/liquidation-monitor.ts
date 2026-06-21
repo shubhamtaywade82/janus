@@ -11,10 +11,12 @@
 
 import { EventEmitter } from "events";
 import { getDb } from "../queries/connection";
-import { positions } from "@db/schema";
+import { positions, exchangeCredentials } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { marketStateManager } from "./market-state";
 import { markPriceCache } from "./coindcx-ws";
+import { createFuturesOrder } from "./coindcx";
+import { decryptCreds } from "../lib/crypto";
 
 export const liquidationMonitorEvents = new EventEmitter();
 
@@ -24,6 +26,9 @@ const alertCooldown = new Map<number, number>();
 const ALERT_COOLDOWN_MS = 5 * 60_000;
 
 let monitorInterval: ReturnType<typeof setInterval> | null = null;
+
+// Track positions already auto-reduced to prevent duplicate orders
+const autoReducedPositions = new Set<number>();
 
 async function checkPositions(): Promise<void> {
   const db = getDb();
@@ -64,6 +69,45 @@ async function checkPositions(): Promise<void> {
         liqPrice,
         distancePct: distance * 100,
       });
+
+      // Auto-reduce: place 50% market reduce order if not already reduced
+      if (!autoReducedPositions.has(pos.id)) {
+        try {
+          const dbCreds = await db
+            .select()
+            .from(exchangeCredentials)
+            .where(and(eq(exchangeCredentials.userId, pos.userId), eq(exchangeCredentials.exchange, "coindcx")))
+            .limit(1);
+          if (!dbCreds || dbCreds.length === 0) {
+            console.warn(`[liq-monitor] No credentials for user ${pos.userId}, skipping auto-reduce`);
+            continue;
+          }
+          const creds = decryptCreds(dbCreds[0]);
+          const reduceSide = pos.side === "long" ? "sell" : "buy";
+          const reduceQty = parseFloat(String(pos.size)) * 0.5;
+          const coindcxSymbol = pos.symbol.startsWith("B-") ? pos.symbol : `B-${pos.symbol.replace("USDT", "_USDT")}`;
+
+          await createFuturesOrder(creds, {
+            market: coindcxSymbol,
+            side: reduceSide,
+            order_type: "market",
+            total_quantity: reduceQty,
+            price: markPrice,
+            leverage: pos.leverage,
+          });
+          autoReducedPositions.add(pos.id);
+          console.log(`[liq-monitor] Auto-reduced pos ${pos.id} ${pos.symbol}: 50% market ${reduceSide} @ ${markPrice}`);
+          liquidationMonitorEvents.emit("auto-reduced", {
+            positionId: pos.id,
+            symbol: pos.symbol,
+            side: pos.side,
+            reduceQty,
+            markPrice,
+          });
+        } catch (err: any) {
+          console.error(`[liq-monitor] Auto-reduce failed for pos ${pos.id}:`, err.message || err);
+        }
+      }
     } else if (distance <= 0.05) {
       const lastAlert = alertCooldown.get(pos.id) ?? 0;
       if (Date.now() - lastAlert < ALERT_COOLDOWN_MS) continue;
@@ -83,6 +127,7 @@ async function checkPositions(): Promise<void> {
       });
     } else {
       alertCooldown.delete(pos.id);
+      autoReducedPositions.delete(pos.id);
     }
   }
 }

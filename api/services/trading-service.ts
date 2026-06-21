@@ -126,6 +126,7 @@ export async function fetchPortfolioData(userId: number) {
 
   let openPositions: any[] = [];
   let totalRealizedPnl = 0;
+  let totalRealizedPnlGross = 0;
   let totalMargin = 0;
   let totalUnrealizedPnl = 0;
   let recentTrades: any[] = [];
@@ -282,13 +283,17 @@ export async function fetchPortfolioData(userId: number) {
             targetPrecision: getPrecisions(symbol).targetPrecision,
           };
         });
-        totalRealizedPnl = filledOrders.reduce(
-          (sum: number, o: any) => sum + parseFloat(o.fee || "0") * -1,
+        // Sum fees from exchange orders (GROSS PnL = NET + fees)
+        const totalFees = filledOrders.reduce(
+          (sum: number, o: any) => sum + Math.abs(parseFloat(o.fee || "0")),
           0
         );
+        // totalRealizedPnl already holds NET from exchange wallet above
+        totalRealizedPnlGross = totalRealizedPnl + totalFees;
       } catch {
         recentTrades = [];
         totalRealizedPnl = 0;
+        totalRealizedPnlGross = 0;
       }
 
       let walletUsdt = 0;
@@ -437,7 +442,8 @@ export async function fetchPortfolioData(userId: number) {
         livePositionsCount: openPositions.length,
         paperPositionsCount: paperMapped.length,
         totalUnrealizedPnl: totalUnrealizedPnl.toFixed(4),
-        totalRealizedPnl: totalRealizedPnl.toFixed(4),
+        totalRealizedPnlNet: totalRealizedPnl.toFixed(4),
+        totalRealizedPnlGross: totalRealizedPnlGross.toFixed(4),
         totalMargin: totalMargin.toFixed(4),
         walletUsdt: walletUsdt.toFixed(4),
         walletCurrency,
@@ -470,14 +476,32 @@ export async function fetchPortfolioData(userId: number) {
     .orderBy(desc(trades.createdAt))
     .limit(100);
 
+  const closedPositions = await db
+    .select()
+    .from(positions)
+    .where(
+      and(
+        eq(positions.userId, userId),
+        eq(positions.status, "closed")
+      )
+    );
+
   const localUnrealizedPnl = localPositions.reduce(
     (sum, p) => sum + parseFloat(p.unrealizedPnl || "0"),
     0
   );
-  const localRealizedPnl = allTrades.reduce(
-    (sum, t) => sum + parseFloat(t.fee || "0") * -1,
+  // NET realized PnL = sum of closed positions' realized PnL (after fees)
+  const localRealizedPnlNet = closedPositions.reduce(
+    (sum, p) => sum + parseFloat(p.realizedPnl || "0"),
     0
   );
+  // Total fees paid across all trades
+  const localTotalFees = allTrades.reduce(
+    (sum, t) => sum + Math.abs(parseFloat(t.fee || "0")),
+    0
+  );
+  // GROSS realized PnL = NET + fees (what you made before fees were deducted)
+  const localRealizedPnlGross = localRealizedPnlNet + localTotalFees;
   const localMargin = localPositions.reduce(
     (sum, p) => sum + parseFloat(p.margin || "0"),
     0
@@ -522,7 +546,9 @@ export async function fetchPortfolioData(userId: number) {
     livePositionsCount: localPositions.filter(p => !p.isPaper).length,
     paperPositionsCount: localPositions.filter(p => p.isPaper).length,
     totalUnrealizedPnl: localUnrealizedPnl.toFixed(4),
-    totalRealizedPnl: localRealizedPnl.toFixed(4),
+    totalRealizedPnlNet: localRealizedPnlNet.toFixed(4),
+    totalRealizedPnlGross: localRealizedPnlGross.toFixed(4),
+    totalFees: localTotalFees.toFixed(4),
     totalMargin: localMargin.toFixed(4),
     walletUsdt: "0.0000",
     walletCurrency: "USDT",

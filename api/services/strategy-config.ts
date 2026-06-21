@@ -55,7 +55,7 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     threshold: 80,
     takerFeeRate: 0.0005,
     signalIntervalMs: 300_000,
-    maxLeverage: 3,
+    maxLeverage: 5,
     preferLimitEntry: true,
   },
   grid: {

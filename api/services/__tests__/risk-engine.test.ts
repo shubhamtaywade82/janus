@@ -11,6 +11,7 @@ function makeSession(overrides: Partial<RiskSession> = {}): RiskSession {
     consecutiveLosses: 0,
     inCooldown: false,
     cooldownUntil: null,
+    peakEquity: 1000,
     ...overrides,
   };
 }
@@ -18,6 +19,7 @@ function makeSession(overrides: Partial<RiskSession> = {}): RiskSession {
 const config = {
   maxPositionPct: 0.20,
   dailyDrawdownPct: 0.05,
+  maxDrawdownFromPeakPct: 0.25,
   maxConsecutiveLosses: 3,
   cooldownMs: 30 * 60 * 1000,
   marginHealthHaltPct: 0.85,

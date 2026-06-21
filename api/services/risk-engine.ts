@@ -1,6 +1,6 @@
 import { EventEmitter } from "events";
 import { getDb } from "../queries/connection";
-import { riskSessions } from "@db/schema";
+import { riskSessions, tradingAccounts } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 
 export const riskEvents = new EventEmitter();
@@ -9,6 +9,7 @@ riskEvents.setMaxListeners(20);
 export interface RiskConfig {
   maxPositionPct: number;       // e.g. 0.20 = 20% of wallet per trade
   dailyDrawdownPct: number;     // e.g. 0.05 = halt at -5% daily loss
+  maxDrawdownFromPeakPct: number; // e.g. 0.25 = halt at -25% from all-time peak
   maxConsecutiveLosses: number; // e.g. 3 → cooldown
   cooldownMs: number;           // e.g. 30 * 60 * 1000
   marginHealthHaltPct: number;  // e.g. 0.85 = halt when usedMargin/totalBalance > 85%
@@ -23,6 +24,7 @@ export interface RiskSession {
   consecutiveLosses: number;
   inCooldown: boolean;
   cooldownUntil: number | null;
+  peakEquity: number;           // All-time peak equity for max-drawdown-from-peak check
 }
 
 export interface TradeRequest {
@@ -74,7 +76,19 @@ export class RiskEngine {
       };
     }
 
-    // 3. Position size cap (% of free wallet)
+    // 3. Max drawdown from peak circuit breaker (25% default)
+    const currentEquity = session.startingBalance + session.realizedPnl;
+    if (session.peakEquity > 0 && currentEquity > 0) {
+      const drawdownFromPeak = (session.peakEquity - currentEquity) / session.peakEquity;
+      if (drawdownFromPeak >= this.config.maxDrawdownFromPeakPct) {
+        return {
+          approved: false,
+          reason: `max drawdown from peak hit — ${(drawdownFromPeak * 100).toFixed(2)}% from peak (limit: ${(this.config.maxDrawdownFromPeakPct * 100).toFixed(0)}%)`,
+        };
+      }
+    }
+
+    // 4. Position size cap (% of free wallet)
     const maxNotional = req.walletBalance * this.config.maxPositionPct;
     if (req.notional > maxNotional) {
       return {
@@ -84,7 +98,7 @@ export class RiskEngine {
       };
     }
 
-    // 4. Margin health — prevent over-leveraging total account
+    // 5. Margin health — prevent over-leveraging total account
     const totalBalance = req.walletBalance + req.usedMargin;
     const marginUsagePct = totalBalance > 0 ? req.usedMargin / totalBalance : 0;
     if (marginUsagePct >= this.config.marginHealthHaltPct) {
@@ -103,6 +117,12 @@ export class RiskEngine {
       realizedPnl: session.realizedPnl + result.pnl,
       tradeCount: session.tradeCount + 1,
     };
+
+    // Update peak equity if current equity exceeds previous peak
+    const currentEquity = updated.startingBalance + updated.realizedPnl;
+    if (currentEquity > updated.peakEquity) {
+      updated.peakEquity = currentEquity;
+    }
 
     if (result.pnl < 0) {
       updated.consecutiveLosses = session.consecutiveLosses + 1;
@@ -134,11 +154,12 @@ export class RiskEngine {
 }
 
 export const DEFAULT_RISK_CONFIG: RiskConfig = {
-  maxPositionPct: 0.50,
-  dailyDrawdownPct: 0.05,
+  maxPositionPct: 0.80,
+  dailyDrawdownPct: 0.10,
+  maxDrawdownFromPeakPct: 0.25,
   maxConsecutiveLosses: 3,
   cooldownMs: 30 * 60 * 1000,
-  marginHealthHaltPct: 0.85,
+  marginHealthHaltPct: 0.95,
 };
 
 // ─── PostgreSQL-backed Risk Session Store ───
@@ -157,6 +178,20 @@ export const riskSessionStore = {
 
     if (rows.length > 0) {
       const row = rows[0];
+      // Load all-time peak equity from tradingAccounts if available
+      let peakEquity = parseFloat(row.startingEquity);
+      try {
+        const accRows = await db
+          .select({ peakEquity: tradingAccounts.peakEquity })
+          .from(tradingAccounts)
+          .where(and(eq(tradingAccounts.userId, userId), eq(tradingAccounts.mode, "live")))
+          .limit(1);
+        if (accRows.length > 0 && accRows[0].peakEquity) {
+          peakEquity = parseFloat(accRows[0].peakEquity);
+        }
+      } catch {
+        // tradingAccounts may not have a row; fall back to starting equity
+      }
       return {
         userId: row.userId,
         date: row.tradingDay,
@@ -166,10 +201,25 @@ export const riskSessionStore = {
         consecutiveLosses: row.consecutiveLosses,
         inCooldown: row.cooldownUntil ? Date.now() < new Date(row.cooldownUntil).getTime() : false,
         cooldownUntil: row.cooldownUntil ? new Date(row.cooldownUntil).getTime() : null,
+        peakEquity,
       };
     }
 
     // Create fresh session
+    let peakEquity = walletBalance;
+    try {
+      const accRows = await db
+        .select({ peakEquity: tradingAccounts.peakEquity })
+        .from(tradingAccounts)
+        .where(and(eq(tradingAccounts.userId, userId), eq(tradingAccounts.mode, "live")))
+        .limit(1);
+      if (accRows.length > 0 && accRows[0].peakEquity) {
+        peakEquity = parseFloat(accRows[0].peakEquity);
+      }
+    } catch {
+      // tradingAccounts may not have a row; fall back to starting equity
+    }
+
     const fresh: RiskSession = {
       userId,
       date: today,
@@ -179,6 +229,7 @@ export const riskSessionStore = {
       consecutiveLosses: 0,
       inCooldown: false,
       cooldownUntil: null,
+      peakEquity,
     };
 
     await db.insert(riskSessions).values({
@@ -213,6 +264,23 @@ export const riskSessionStore = {
         updatedAt: new Date(),
       })
       .where(and(eq(riskSessions.userId, session.userId), eq(riskSessions.tradingDay, session.date)));
+
+    // Persist peak equity to tradingAccounts if it has increased
+    try {
+      const currentEquity = session.startingBalance + session.realizedPnl;
+      if (currentEquity > session.peakEquity) {
+        await db
+          .update(tradingAccounts)
+          .set({
+            peakEquity: currentEquity.toFixed(8),
+            drawdown: "0",
+            updatedAt: new Date(),
+          })
+          .where(and(eq(tradingAccounts.userId, session.userId), eq(tradingAccounts.mode, "live")));
+      }
+    } catch {
+      // tradingAccounts row may not exist; ignore
+    }
   },
 };
 

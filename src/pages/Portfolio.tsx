@@ -510,7 +510,7 @@ export default function Portfolio() {
     || ((portfolio?.totalEquity || 0) - parseFloat(portfolio?.totalUnrealizedPnl || "0"));
   const totalEquityUsdt = walletBase + liveTotalUnrealizedPnl;
 
-  const totalPnl = liveTotalUnrealizedPnl + parseFloat(portfolio?.totalRealizedPnl || "0");
+  const totalPnl = liveTotalUnrealizedPnl + parseFloat(portfolio?.totalRealizedPnlNet || "0");
   const isProfit = totalPnl >= 0;
 
   // Risk warning toast — fire once when threshold crossed

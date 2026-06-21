@@ -396,6 +396,8 @@ export class MarketStateManager {
 
       if (stdDevPct < 0.02) {
         state.metrics.volatilityRegime = "LOW";
+      } else if (stdDevPct > 0.25) {
+        state.metrics.volatilityRegime = "EXTREME";
       } else if (stdDevPct > 0.15) {
         state.metrics.volatilityRegime = "HIGH";
       } else {
