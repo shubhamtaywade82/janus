@@ -16,6 +16,7 @@ export const TRAIL_PCT: Record<StrategyType, number> = {
   grid:           0.025,  // 2.5% (was 1.0%)
   swing:          0.050,  // 5.0% (was 2.0%)
   ml_sizing:      0.025,  // 2.5% (was 1.5%)
+  h6_momentum:    0.030,  // 3.0% (calibrated to paper alpha=3.0)
 };
 
 const TAKER_FEE = 0.0005;

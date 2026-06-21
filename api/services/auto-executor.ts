@@ -874,8 +874,10 @@ private async calculateSizing(params: {
       notional = availEquityUsdt;
     }
   } else {
-    // Base capital allocation model — maximized sizing, no risk ceiling
-    const baseNotional = availEquityUsdt * baseAllocPct * convictionMult;
+    // 70/30 Asymmetric allocation (ponytail: simple sizing multiplier)
+    const isLongSide = String(side).toLowerCase() === "long";
+    const directionMultiplier = isLongSide ? 1.4 : 0.6;
+    const baseNotional = availEquityUsdt * baseAllocPct * convictionMult * directionMultiplier;
     
     // Default fallback size (prevent micro-sizes in highly penalized conditions)
     const defaultMinSize = parseFloat(config.defaultSizeUsdt ?? "50");

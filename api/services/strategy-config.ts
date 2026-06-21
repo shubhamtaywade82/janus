@@ -6,7 +6,8 @@ export type StrategyType =
   | "momentum_reversal"
   | "bb_reversion"
   | "ml_sizing"
-  | "scalping_micro";
+  | "scalping_micro"
+  | "h6_momentum";
 
 export interface StrategyWeights {
   micro: number;
@@ -142,5 +143,17 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     tp1ActivationThresholdPct: 0.20,
     minAdverseMovePct: 0.001,
     preferLimitEntry: false,
+  },
+  h6_momentum: {
+    type: "h6_momentum",
+    weights: { micro: 0.10, intra: 0.30, swing: 0.60 },
+    threshold: 70,
+    takerFeeRate: 0.0005,
+    signalIntervalMs: 21_600_000, // 6 Hours
+    maxLeverage: 10,
+    minPostBreakevenSlPct: 0.0050, // 0.5% min width after breakeven
+    tp1ActivationThresholdPct: 0.25, // Activate trailing at 25% of target
+    minAdverseMovePct: 0.0020, // 0.2% adverse filter
+    preferLimitEntry: true,
   },
 };
