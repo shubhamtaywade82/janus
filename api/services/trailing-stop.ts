@@ -1,6 +1,6 @@
 import { tradingEvents, markPriceCache } from "./coindcx-ws";
 import { latestTickerCache, marketEvents } from "./streaming";
-import { type StrategyType } from "./strategy-config";
+import { type StrategyType, STRATEGY_CONFIGS } from "./strategy-config";
 import { getDb } from "../queries/connection";
 import { positions } from "@db/schema";
 import { eq, and } from "drizzle-orm";
@@ -33,6 +33,9 @@ export interface TrackedPosition {
 
 const trackedPositions = new Map<number, TrackedPosition>();
 let trailingTimer: ReturnType<typeof setInterval> | null = null;
+
+// In-memory Kline buffer per symbol (keeps last 100 1m klines)
+const klineBufferCache = new Map<string, Kline[]>();
 
 // In-memory Kline buffer per symbol (keeps last 100 1m klines)
 const klineBufferCache = new Map<string, Kline[]>();
@@ -80,7 +83,27 @@ tradingEvents.on("position-closed", (posId: number, symbol: string) => {
   }
 });
 
-// ─── Core Calculations ───
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function pctDelta(from: number, to: number): number {
+  if (!isFinite(from) || from === 0) return 0;
+  return (to - from) / from;
+}
+
+function farthestFromPrice(
+  fromPrice: number,
+  candidates: number[],
+  side: "long" | "short"
+): number | null {
+  if (candidates.length === 0) return null;
+  // Long SL wants lowest candidate (most room below price).
+  // Short SL wants highest candidate (most room above price).
+  return side === "long"
+    ? Math.min(...candidates)
+    : Math.max(...candidates);
+}
+
+// ─── Core Calculations ──────────────────────────────────────────────────────
 
 export function calcNewTrailingStop(
   side: "long" | "short",
@@ -88,9 +111,33 @@ export function calcNewTrailingStop(
   currentPrice: number,
   trailPct: number,
   klines: Kline[],
-  entryPrice: number
+  entryPrice: number,
+  strategyCfg: {
+    minPostBreakevenSlPct: number;
+    tp1ActivationThresholdPct: number;
+    minAdverseMovePct: number;
+  }
 ): number {
   let newStop = currentStop;
+
+  // Breakeven anchor logic is only meaningful when already on the profit side of entry.
+  const isProfitable = side === "long" ? currentPrice >= entryPrice : currentPrice <= entryPrice;
+  const isBreakevenOrBetter =
+    isProfitable &&
+    ((side === "long" && currentStop >= entryPrice) ||
+      (side === "short" && currentStop <= entryPrice));
+
+  // Noise floor: require a meaningful move before tightening the stop.
+  // If we're not yet profitable, keep the stop at least minAdverseMovePct away.
+  const minNoiseFloor = side === "long"
+    ? entryPrice * (1 - strategyCfg.minAdverseMovePct)
+    : entryPrice * (1 + strategyCfg.minAdverseMovePct);
+  if (!isProfitable) {
+    // Lock out any tightening during the initial risk window.
+    return side === "long"
+      ? Math.min(currentStop, minNoiseFloor)
+      : Math.max(currentStop, minNoiseFloor);
+  }
 
   // Collect every protective candidate, then pick the one with the MOST room
   // (furthest from price). Ratcheting (never loosen) is enforced afterwards
@@ -102,9 +149,9 @@ export function calcNewTrailingStop(
     lastAtr = atrArray[atrArray.length - 1] ?? 0;
   }
 
-  if (side === "long") {
-    const candidates: number[] = [];
+  const candidates: number[] = [];
 
+  if (side === "long") {
     // 1. Swing low
     if (klines.length >= 10) {
       const swings = detectSwings(klines);
@@ -119,13 +166,11 @@ export function calcNewTrailingStop(
     candidates.push(currentPrice * (1 - trailPct));
 
     // Most room for a long = the LOWEST candidate. Then ratchet up only.
-    if (candidates.length > 0) {
-      const loosest = Math.min(...candidates);
+    const loosest = farthestFromPrice(currentPrice, candidates, "long");
+    if (loosest != null) {
       newStop = Math.max(currentStop, loosest);
     }
   } else {
-    const candidates: number[] = [];
-
     // 1. Swing high
     if (klines.length >= 10) {
       const swings = detectSwings(klines);
@@ -140,8 +185,8 @@ export function calcNewTrailingStop(
     candidates.push(currentPrice * (1 + trailPct));
 
     // Most room for a short = the HIGHEST candidate. Then ratchet down only.
-    if (candidates.length > 0) {
-      const loosest = Math.max(...candidates);
+    const loosest = farthestFromPrice(currentPrice, candidates, "short");
+    if (loosest != null) {
       newStop = Math.min(currentStop, loosest);
     }
   }
@@ -149,14 +194,23 @@ export function calcNewTrailingStop(
   // 2. Fee-Aware Breakeven Logic (Wait until 2x risk is reached to lock breakeven)
   const initialRiskLevel = side === "long" ? entryPrice * (1 - trailPct) : entryPrice * (1 + trailPct);
   const initialRisk = Math.abs(entryPrice - initialRiskLevel);
-  
-  if (side === "long" && currentPrice >= entryPrice + (initialRisk * 2)) {
+
+  if (side === "long" && currentPrice >= entryPrice + initialRisk * 2) {
     const breakeven = entryPrice * (1 + TAKER_FEE * 2);
-    newStop = Math.max(newStop, breakeven);
-  } else if (side === "short" && currentPrice <= entryPrice - (initialRisk * 2)) {
+    // Once breakeven is on the table, enforce a minimum post-breakeven SL width
+    // so the stop cannot tighten to within 2-3 ticks of the entry.
+    const minSlAfterBreakeven = entryPrice * (1 + strategyCfg.minPostBreakevenSlPct);
+    const effectiveBreakeven = Math.max(breakeven, minSlAfterBreakeven);
+    newStop = Math.max(newStop, effectiveBreakeven);
+  } else if (side === "short" && currentPrice <= entryPrice - initialRisk * 2) {
     const breakeven = entryPrice * (1 - TAKER_FEE * 2);
-    newStop = Math.min(newStop, breakeven);
+    // Once breakeven is on the table, enforce a minimum post-breakeven SL width
+    // so the stop cannot tighten to within 2-3 ticks of the entry.
+    const minSlAfterBreakeven = entryPrice * (1 - strategyCfg.minPostBreakevenSlPct);
+    const effectiveBreakeven = Math.min(breakeven, minSlAfterBreakeven);
+    newStop = Math.min(newStop, effectiveBreakeven);
   }
+
   return newStop;
 }
 
