@@ -270,6 +270,7 @@ export class PositionLifecycleManager {
             strategyType: mp.strategyType as StrategyType,
             userId: mp.userId,
             size: mp.quantity,
+            takeProfit: mp.takeProfit,
           });
         } else {
           // Position already tracked — sync DB stop-loss if it has improved

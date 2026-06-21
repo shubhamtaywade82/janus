@@ -29,6 +29,7 @@ export interface TrackedPosition {
   strategyType: StrategyType;
   userId: number;
   size: number;
+  takeProfit?: number | null;
 }
 
 const trackedPositions = new Map<number, TrackedPosition>();
@@ -87,17 +88,17 @@ function pctDelta(from: number, to: number): number {
   return (to - from) / from;
 }
 
-function farthestFromPrice(
+function tightestStopCandidate(
   fromPrice: number,
   candidates: number[],
   side: "long" | "short"
 ): number | null {
   if (candidates.length === 0) return null;
-  // Long SL wants lowest candidate (most room below price).
-  // Short SL wants highest candidate (most room above price).
+  // Long SL wants highest candidate (tightest stop below price).
+  // Short SL wants lowest candidate (tightest stop above price).
   return side === "long"
-    ? Math.min(...candidates)
-    : Math.max(...candidates);
+    ? Math.max(...candidates)
+    : Math.min(...candidates);
 }
 
 // ─── Core Calculations ──────────────────────────────────────────────────────
@@ -113,13 +114,26 @@ export function calcNewTrailingStop(
     minPostBreakevenSlPct: number;
     tp1ActivationThresholdPct: number;
     minAdverseMovePct: number;
-  }
+  },
+  takeProfit?: number | null
 ): number {
   const cfg = strategyCfg || {
     minPostBreakevenSlPct: 0.0015,
     tp1ActivationThresholdPct: 0.25,
     minAdverseMovePct: 0.001,
   };
+
+  // Wait until price moves in profit by at least the activation threshold
+  const tp = takeProfit ?? (side === "long" ? entryPrice * (1 + trailPct * 2) : entryPrice * (1 - trailPct * 2));
+  const totalTargetProfit = Math.abs(tp - entryPrice);
+  const currentProfit = side === "long" ? currentPrice - entryPrice : entryPrice - currentPrice;
+  const activationThreshold = totalTargetProfit * cfg.tp1ActivationThresholdPct;
+
+  if (currentProfit < activationThreshold) {
+    // Price has not reached the activation threshold yet — do not trail
+    return currentStop;
+  }
+
   let newStop = currentStop;
 
   // Breakeven anchor logic is only meaningful when already on the profit side of entry.
@@ -167,10 +181,10 @@ export function calcNewTrailingStop(
     // 3. Percentage trail
     candidates.push(currentPrice * (1 - trailPct));
 
-    // Most room for a long = the LOWEST candidate. Then ratchet up only.
-    const loosest = farthestFromPrice(currentPrice, candidates, "long");
-    if (loosest != null) {
-      newStop = Math.max(currentStop, loosest);
+    // Tightest candidate for a long = the HIGHEST candidate. Then ratchet up only.
+    const tightest = tightestStopCandidate(currentPrice, candidates, "long");
+    if (tightest != null) {
+      newStop = Math.max(currentStop, tightest);
     }
   } else {
     // 1. Swing high
@@ -186,10 +200,10 @@ export function calcNewTrailingStop(
     // 3. Percentage trail
     candidates.push(currentPrice * (1 + trailPct));
 
-    // Most room for a short = the HIGHEST candidate. Then ratchet down only.
-    const loosest = farthestFromPrice(currentPrice, candidates, "short");
-    if (loosest != null) {
-      newStop = Math.min(currentStop, loosest);
+    // Tightest candidate for a short = the LOWEST candidate. Then ratchet down only.
+    const tightest = tightestStopCandidate(currentPrice, candidates, "short");
+    if (tightest != null) {
+      newStop = Math.min(currentStop, tightest);
     }
   }
 
@@ -317,7 +331,7 @@ function ensureTrailingEngine() {
           // Ratchet stop
           const klines = klineBufferCache.get(pos.symbol) || [];
           const strategyCfg = STRATEGY_CONFIGS[pos.strategyType] || STRATEGY_CONFIGS.scalping;
-          const newStop = calcNewTrailingStop(pos.side, pos.stopLoss, currentPrice, trailPct, klines, pos.entryPrice, strategyCfg);
+          const newStop = calcNewTrailingStop(pos.side, pos.stopLoss, currentPrice, trailPct, klines, pos.entryPrice, strategyCfg, pos.takeProfit);
           
           if (Math.abs(newStop - pos.stopLoss) > 1e-8) {
             pos.stopLoss = newStop;
