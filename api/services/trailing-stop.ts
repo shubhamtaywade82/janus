@@ -2,7 +2,7 @@ import { tradingEvents, markPriceCache } from "./coindcx-ws";
 import { latestTickerCache, marketEvents } from "./streaming";
 import { type StrategyType, STRATEGY_CONFIGS } from "./strategy-config";
 import { getDb } from "../queries/connection";
-import { positions } from "@db/schema";
+import { positions, autoExecutorConfig } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { detectSwings, computeAtrArray, type Kline } from "./price-action";
 
@@ -299,6 +299,18 @@ function ensureTrailingEngine() {
               },
             });
             trackedPositions.delete(posId);
+            continue;
+          }
+
+          // Check if trailing stop is enabled in user config
+          const userCfg = await db.select({ trailingStopEnabled: autoExecutorConfig.trailingStopEnabled })
+            .from(autoExecutorConfig)
+            .where(eq(autoExecutorConfig.userId, pos.userId))
+            .limit(1)
+            .catch(() => []);
+          const isTrailingEnabled = userCfg[0]?.trailingStopEnabled ?? true;
+
+          if (!isTrailingEnabled) {
             continue;
           }
 

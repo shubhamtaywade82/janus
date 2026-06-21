@@ -832,6 +832,11 @@ private async calculateSizing(params: {
   let slPct = advisorAdvice?.stopLossPct ?? (sigMetadata?.stopLossPct ? parseFloat(String(sigMetadata.stopLossPct)) : parseFloat(config.stopLossPct ?? "0.015"));
   let tp1Pct = advisorAdvice?.takeProfitPct ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
 
+  if (config.trailingStopEnabled === false) {
+    const rr = parseFloat(config.riskRewardRatio ?? "2.00");
+    tp1Pct = slPct * rr;
+  }
+
   if (brainHasAuthority && brainResult) {
     if (brainResult.adjustedSlPct !== undefined) slPct = brainResult.adjustedSlPct / 100;
     if (brainResult.adjustedTpPct !== undefined) tp1Pct = brainResult.adjustedTpPct / 100;
@@ -886,7 +891,8 @@ private async calculateSizing(params: {
   // ── Volatility-based position sizing ──
   // If ATR > 5% of price, halve the position size
   try {
-    const klines = await fetchKlines(params.signal.symbol, "1m", 30);
+    const cleanSym = params.signal.symbol.replace(/^B-/, "").replace("_", "");
+    const klines = await fetchKlines(cleanSym, "1m", 30);
     if (klines.length >= 2) {
       const trs = klines.slice(1).map((k, i) => {
         const prev = klines[i];

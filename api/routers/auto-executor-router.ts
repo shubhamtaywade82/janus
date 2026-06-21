@@ -54,6 +54,8 @@ export const autoExecutorRouter = createRouter({
         brainDriverEnabled: z.boolean().optional(),
         brainGateEnabled: z.boolean().optional(),
         brainShadowMode: z.boolean().optional(),
+        trailingStopEnabled: z.boolean().optional(),
+        riskRewardRatio: z.string().optional(),
       })
     )
     .mutation(async ({ input, ctx }) => {

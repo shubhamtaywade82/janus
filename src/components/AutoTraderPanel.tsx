@@ -74,6 +74,8 @@ export function AutoTraderPanel(_props: { userId?: number }) {
     maxTotalPositions: 3,
     paperStartingBalance: "100000",
     paperCurrency: "INR" as "USDT" | "INR",
+    trailingStopEnabled: true,
+    riskRewardRatio: "2.00",
   });
 
   // Sync form from DB config
@@ -93,6 +95,8 @@ export function AutoTraderPanel(_props: { userId?: number }) {
         maxTotalPositions: config.maxTotalPositions ?? 3,
         paperStartingBalance: config.paperStartingBalance ?? "100000",
         paperCurrency: (config.paperCurrency as "USDT" | "INR") ?? "INR",
+        trailingStopEnabled: config.trailingStopEnabled ?? true,
+        riskRewardRatio: config.riskRewardRatio ?? "2.00",
       });
       setSynced(true);
     }
@@ -409,6 +413,61 @@ export function AutoTraderPanel(_props: { userId?: number }) {
                 className="w-full bg-[#18181b] border border-[#27272a] rounded px-2 py-1 text-[10px] text-[#f4f4f5] outline-none focus:border-j-up"
               />
             </div>
+          </div>
+
+          {/* Trailing Stop & Risk Reward Ratio */}
+          <div className="border-t border-[#27272a] pt-2.5 space-y-2">
+            <div className="flex items-center justify-between text-[9px] text-[#71717a]">
+              <span>Trailing Stops</span>
+              <button
+                type="button"
+                onClick={() => setForm((f) => ({ ...f, trailingStopEnabled: !f.trailingStopEnabled }))}
+                className={cn(
+                  "px-2 py-0.5 rounded text-[8px] font-semibold border transition-all",
+                  form.trailingStopEnabled
+                    ? "bg-j-up/10 text-j-up border-j-up/30"
+                    : "bg-[#18181b] text-[#52525b] border-[#27272a] hover:text-[#f4f4f5]"
+                )}
+              >
+                {form.trailingStopEnabled ? "ENABLED" : "DISABLED"}
+              </button>
+            </div>
+            
+            {!form.trailingStopEnabled && (
+              <div className="space-y-1.5 bg-[#18181b]/30 p-2 rounded border border-[#27272a]/50">
+                <div className="flex items-center justify-between text-[9px] text-[#71717a]">
+                  <span>Target Risk-Reward (R:R)</span>
+                  <span className="text-j-up tabular-nums font-semibold">{parseFloat(form.riskRewardRatio).toFixed(1)}:1</span>
+                </div>
+                <div className="flex gap-1">
+                  {["1.00", "1.50", "2.00", "3.00", "4.00", "5.00"].map((rr) => (
+                    <button
+                      key={rr}
+                      type="button"
+                      onClick={() => setForm((f) => ({ ...f, riskRewardRatio: rr }))}
+                      className={cn(
+                        "flex-1 py-0.5 rounded text-[8px] border transition-colors",
+                        form.riskRewardRatio === rr
+                          ? "bg-j-up/10 text-j-up border-j-up/30"
+                          : "bg-[#18181b] text-[#52525b] border-[#27272a] hover:text-[#f4f4f5]"
+                      )}
+                    >
+                      {parseFloat(rr).toFixed(0)}:1
+                    </button>
+                  ))}
+                  <input
+                    type="number"
+                    step="0.1"
+                    min="0.5"
+                    max="20"
+                    value={form.riskRewardRatio}
+                    onChange={(e) => setForm((f) => ({ ...f, riskRewardRatio: e.target.value }))}
+                    className="w-12 bg-[#18181b] border border-[#27272a] rounded px-1.5 py-0.5 text-[9px] text-center text-[#f4f4f5] outline-none"
+                    placeholder="Custom"
+                  />
+                </div>
+              </div>
+            )}
           </div>
 
           {/* LLM advisor */}
