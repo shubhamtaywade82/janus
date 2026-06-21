@@ -72,6 +72,13 @@ Different parts of the system use different formats. Always handle conversion pr
 
 Whenever you introduce a new feature, fix a bug, or change system behaviors, log it here.
 
+### [2026-06-21] Trailing Activation Gate, Short Breakeven SL, and H6 Momentum Strategy
+* **Trailing Stop-Loss Gate**: Added a dynamic activation gate using `tp1ActivationThresholdPct` in [trailing-stop.ts](file:///home/nemesis/project/trading-workspace/janus/api/services/trailing-stop.ts) to prevent stops from tightening on noise immediately after entry.
+* **Short Breakeven Fix**: Standardized short position breakeven calculation in [ai-advisor.ts](file:///home/nemesis/project/trading-workspace/janus/api/services/position-manager/ai-advisor.ts) to lock stop loss below entry price. Moved the trailing engine breakeven trigger to 1:1 Risk-to-Reward (1R).
+* **Asymmetric 70/30 Capital Sizing**: Implemented a 1.4× long / 0.6× short multiplier in [auto-executor.ts](file:///home/nemesis/project/trading-workspace/janus/api/services/auto-executor.ts) to capture digital asset upward drift.
+* **6-Hour Momentum Configuration**: Added `h6_momentum` strategy type, limits, and configurations to [strategy-config.ts](file:///home/nemesis/project/trading-workspace/janus/api/services/strategy-config.ts) and [trailing-stop.ts](file:///home/nemesis/project/trading-workspace/janus/api/services/trailing-stop.ts).
+* **Schema Correction**: Restored `uq_positions_open` unique partial index in [schema.ts](file:///home/nemesis/project/trading-workspace/janus/db/schema.ts) to align with DB migrations and fix auth-enforcement tests.
+
 ### [2026-06-21] Active Surveillance Dashboard Layout
 * **Surveillance Layout Page**: Created `src/pages/Surveillance.tsx` featuring high-density cyberpunk-style charts, dynamic simulator controls (Bullish vs Bearish reversals), custom SVG candle grids, Monte Carlo simulation paths, and the Confluence speedometer gauge.
 * **Routing & Navigation Integration**: Registered `/surveillance` route inside `src/App.tsx` and added the Surveillance navigation item to the layout sidebar menu in `src/components/Layout.tsx` using the `Activity` icon.
