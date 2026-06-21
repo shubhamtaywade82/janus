@@ -207,18 +207,18 @@ export function calcNewTrailingStop(
     }
   }
 
-  // 2. Fee-Aware Breakeven Logic (Wait until 2x risk is reached to lock breakeven)
+  // 2. Fee-Aware Breakeven Logic (Wait until 1x risk is reached to lock breakeven)
   const initialRiskLevel = side === "long" ? entryPrice * (1 - trailPct) : entryPrice * (1 + trailPct);
   const initialRisk = Math.abs(entryPrice - initialRiskLevel);
 
-  if (side === "long" && currentPrice >= entryPrice + initialRisk * 2) {
+  if (side === "long" && currentPrice >= entryPrice + initialRisk) {
     const breakeven = entryPrice * (1 + TAKER_FEE * 2);
     // Once breakeven is on the table, enforce a minimum post-breakeven SL width
     // so the stop cannot tighten to within 2-3 ticks of the entry.
     const minSlAfterBreakeven = entryPrice * (1 + cfg.minPostBreakevenSlPct);
     const effectiveBreakeven = Math.max(breakeven, minSlAfterBreakeven);
     newStop = Math.max(newStop, effectiveBreakeven);
-  } else if (side === "short" && currentPrice <= entryPrice - initialRisk * 2) {
+  } else if (side === "short" && currentPrice <= entryPrice - initialRisk) {
     const breakeven = entryPrice * (1 - TAKER_FEE * 2);
     // Once breakeven is on the table, enforce a minimum post-breakeven SL width
     // so the stop cannot tighten to within 2-3 ticks of the entry.

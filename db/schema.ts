@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   pgEnum,
@@ -11,6 +12,7 @@ import {
   boolean,
   index,
   unique,
+  uniqueIndex,
 } from "drizzle-orm/pg-core";
 
 // ─── Enums (PostgreSQL custom types) ───
@@ -176,6 +178,9 @@ export const positions = pgTable(
   (table) => ({
     userIdStatusIdx: index("idx_positions_user_status").on(table.userId, table.status),
     symbolIdx: index("idx_positions_symbol").on(table.symbol),
+    uqPositionsOpen: uniqueIndex("uq_positions_open")
+      .on(table.userId, table.symbol, table.side)
+      .where(sql`status = 'open'`),
   })
 );
 

@@ -23,6 +23,7 @@ import {
 import { cn } from "@/lib/utils";
 import SettingsModal from "./SettingsModal";
 import AlertsModal from "./AlertsModal";
+import SearchModal from "./SearchModal";
 import { playAlertChime } from "@/lib/alert-sound";
 
 const navItems = [
@@ -50,6 +51,18 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
     }
     return true;
   });
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setIsSearchOpen((open) => !open);
+      }
+    };
+    document.addEventListener("keydown", down);
+    return () => document.removeEventListener("keydown", down);
+  }, []);
 
   const toggleSidebar = () => {
     setIsCollapsed((prev) => {
@@ -287,6 +300,7 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
           </button>
 
           <button
+            onClick={() => setIsSearchOpen(true)}
             className={cn(
               "rounded-lg flex items-center text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#18181b] transition-all relative group",
               isCollapsed ? "w-10 h-10 justify-center" : "w-full px-3 py-2 gap-3"
@@ -353,6 +367,9 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
         setIsAlertsOpen(false);
         setActiveAlertsCount(0);
       }} />
+
+      {/* Global Command Search Modal */}
+      <SearchModal isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
 
       {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden">
