@@ -29,6 +29,7 @@ const navItems = [
   { path: "/", label: "Dashboard", icon: TrendingUp },
   { path: "/signals", label: "Signals", icon: Signal },
   { path: "/adaptive-st", label: "Adaptive ST", icon: LineChart },
+  { path: "/surveillance", label: "Surveillance", icon: Activity },
   { path: "/ai-analysis", label: "AI Analysis", icon: Brain },
   { path: "/brain", label: "Brain", icon: Zap },
   { path: "/portfolio", label: "Portfolio", icon: Wallet },

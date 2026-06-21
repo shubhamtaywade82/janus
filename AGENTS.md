@@ -72,6 +72,11 @@ Different parts of the system use different formats. Always handle conversion pr
 
 Whenever you introduce a new feature, fix a bug, or change system behaviors, log it here.
 
+### [2026-06-21] Active Surveillance Dashboard Layout
+* **Surveillance Layout Page**: Created `src/pages/Surveillance.tsx` featuring high-density cyberpunk-style charts, dynamic simulator controls (Bullish vs Bearish reversals), custom SVG candle grids, Monte Carlo simulation paths, and the Confluence speedometer gauge.
+* **Routing & Navigation Integration**: Registered `/surveillance` route inside `src/App.tsx` and added the Surveillance navigation item to the layout sidebar menu in `src/components/Layout.tsx` using the `Activity` icon.
+* **Build Verification**: Verified typescript compilation via `npx tsc --noEmit` inside WSL to guarantee type-safety.
+
 ### [2026-06-06] AI Brain Infrastructure & Foundation (Phase A + B)
 * **Risk Session Persistence**: Replaced in-memory `Map<number, RiskSession>` with PostgreSQL-backed `riskSessionStore`. `risk_sessions` table survives restarts, preserving cooldown, drawdown, and consecutive-loss state. Updated all call sites in `auto-executor.ts`, `trading-router.ts`, and `brain-governor.ts` to `await` the async store.
 * **Exit Manager Safety Fix**: Removed Binance price fallback from `exit-manager.ts`. CoinDCX mark price is now the **only** price used for SL/TP/trailing decisions. Missing mark price logs a warning and skips evaluation rather than falling back to a different exchange.
