@@ -22,6 +22,22 @@ export interface StrategyConfig {
   signalIntervalMs: number;
   maxLeverage: number;
   /**
+   * Minimum stop-loss width once breakeven is reached.
+   * Expressed as a fraction of entry price (e.g. 0.003 = 0.3%).
+   * Prevents the trade from being stopped out by spread noise immediately after breakeven.
+   */
+  minPostBreakevenSlPct: number;
+  /**
+   * Minimum fraction of TP1 target that must be reached before activation of
+   * breakeven / aggressive trailing. Used by `trailing-stop.ts`.
+   */
+  tp1ActivationThresholdPct: number;
+  /**
+   * Minimum required adverse move % before entering an early stop-out.
+   * Provides a noise floor; actual SL will be the looser of this or computed trail.
+   */
+  minAdverseMovePct: number;
+  /**
    * When true, entries are placed as marketable limit orders (at best ask/bid) with a
    * short timeout before falling back to a market order, instead of crossing the spread
    * immediately. Disabled for strategies where fill speed matters more than a few bps
@@ -38,6 +54,9 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 5_000,
     maxLeverage: 10,
+    minPostBreakevenSlPct: 0.0015,
+    tp1ActivationThresholdPct: 0.25,
+    minAdverseMovePct: 0.001,
     preferLimitEntry: false,
   },
   intraday: {
@@ -47,6 +66,9 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 30_000,
     maxLeverage: 15,
+    minPostBreakevenSlPct: 0.0025,
+    tp1ActivationThresholdPct: 0.30,
+    minAdverseMovePct: 0.0015,
     preferLimitEntry: true,
   },
   swing: {
@@ -56,6 +78,9 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 300_000,
     maxLeverage: 5,
+    minPostBreakevenSlPct: 0.005,
+    tp1ActivationThresholdPct: 0.40,
+    minAdverseMovePct: 0.003,
     preferLimitEntry: true,
   },
   grid: {
@@ -65,6 +90,9 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 15_000,
     maxLeverage: 5,
+    minPostBreakevenSlPct: 0.004,
+    tp1ActivationThresholdPct: 0.35,
+    minAdverseMovePct: 0.002,
     preferLimitEntry: true,
   },
   momentum_reversal: {
@@ -74,6 +102,9 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 30_000,
     maxLeverage: 5,
+    minPostBreakevenSlPct: 0.0035,
+    tp1ActivationThresholdPct: 0.35,
+    minAdverseMovePct: 0.002,
     preferLimitEntry: false,
   },
   bb_reversion: {
@@ -83,6 +114,9 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 10_000,
     maxLeverage: 8,
+    minPostBreakevenSlPct: 0.003,
+    tp1ActivationThresholdPct: 0.30,
+    minAdverseMovePct: 0.0015,
     preferLimitEntry: true,
   },
   ml_sizing: {
@@ -92,6 +126,9 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 60_000,
     maxLeverage: 5,
+    minPostBreakevenSlPct: 0.0035,
+    tp1ActivationThresholdPct: 0.35,
+    minAdverseMovePct: 0.002,
     preferLimitEntry: true,
   },
   scalping_micro: {
@@ -101,7 +138,9 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     takerFeeRate: 0.0005,
     signalIntervalMs: 2_000,
     maxLeverage: 10,
+    minPostBreakevenSlPct: 0.0015,
+    tp1ActivationThresholdPct: 0.20,
+    minAdverseMovePct: 0.001,
     preferLimitEntry: false,
   },
 };
-
