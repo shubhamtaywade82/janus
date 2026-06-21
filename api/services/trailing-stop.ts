@@ -37,9 +37,6 @@ let trailingTimer: ReturnType<typeof setInterval> | null = null;
 // In-memory Kline buffer per symbol (keeps last 100 1m klines)
 const klineBufferCache = new Map<string, Kline[]>();
 
-// In-memory Kline buffer per symbol (keeps last 100 1m klines)
-const klineBufferCache = new Map<string, Kline[]>();
-
 // Listen to global kline updates to build the buffer
 marketEvents.on("kline-update", (symbol: string, kline: any) => {
   if (!klineBufferCache.has(symbol)) klineBufferCache.set(symbol, []);
@@ -112,12 +109,17 @@ export function calcNewTrailingStop(
   trailPct: number,
   klines: Kline[],
   entryPrice: number,
-  strategyCfg: {
+  strategyCfg?: {
     minPostBreakevenSlPct: number;
     tp1ActivationThresholdPct: number;
     minAdverseMovePct: number;
   }
 ): number {
+  const cfg = strategyCfg || {
+    minPostBreakevenSlPct: 0.0015,
+    tp1ActivationThresholdPct: 0.25,
+    minAdverseMovePct: 0.001,
+  };
   let newStop = currentStop;
 
   // Breakeven anchor logic is only meaningful when already on the profit side of entry.
@@ -130,8 +132,8 @@ export function calcNewTrailingStop(
   // Noise floor: require a meaningful move before tightening the stop.
   // If we're not yet profitable, keep the stop at least minAdverseMovePct away.
   const minNoiseFloor = side === "long"
-    ? entryPrice * (1 - strategyCfg.minAdverseMovePct)
-    : entryPrice * (1 + strategyCfg.minAdverseMovePct);
+    ? entryPrice * (1 - cfg.minAdverseMovePct)
+    : entryPrice * (1 + cfg.minAdverseMovePct);
   if (!isProfitable) {
     // Lock out any tightening during the initial risk window.
     return side === "long"
@@ -199,14 +201,14 @@ export function calcNewTrailingStop(
     const breakeven = entryPrice * (1 + TAKER_FEE * 2);
     // Once breakeven is on the table, enforce a minimum post-breakeven SL width
     // so the stop cannot tighten to within 2-3 ticks of the entry.
-    const minSlAfterBreakeven = entryPrice * (1 + strategyCfg.minPostBreakevenSlPct);
+    const minSlAfterBreakeven = entryPrice * (1 + cfg.minPostBreakevenSlPct);
     const effectiveBreakeven = Math.max(breakeven, minSlAfterBreakeven);
     newStop = Math.max(newStop, effectiveBreakeven);
   } else if (side === "short" && currentPrice <= entryPrice - initialRisk * 2) {
     const breakeven = entryPrice * (1 - TAKER_FEE * 2);
     // Once breakeven is on the table, enforce a minimum post-breakeven SL width
     // so the stop cannot tighten to within 2-3 ticks of the entry.
-    const minSlAfterBreakeven = entryPrice * (1 - strategyCfg.minPostBreakevenSlPct);
+    const minSlAfterBreakeven = entryPrice * (1 - cfg.minPostBreakevenSlPct);
     const effectiveBreakeven = Math.min(breakeven, minSlAfterBreakeven);
     newStop = Math.min(newStop, effectiveBreakeven);
   }
@@ -302,7 +304,8 @@ function ensureTrailingEngine() {
 
           // Ratchet stop
           const klines = klineBufferCache.get(pos.symbol) || [];
-          const newStop = calcNewTrailingStop(pos.side, pos.stopLoss, currentPrice, trailPct, klines, pos.entryPrice);
+          const strategyCfg = STRATEGY_CONFIGS[pos.strategyType] || STRATEGY_CONFIGS.scalping;
+          const newStop = calcNewTrailingStop(pos.side, pos.stopLoss, currentPrice, trailPct, klines, pos.entryPrice, strategyCfg);
           
           if (Math.abs(newStop - pos.stopLoss) > 1e-8) {
             pos.stopLoss = newStop;
