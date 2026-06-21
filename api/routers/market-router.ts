@@ -19,7 +19,7 @@ import {
   type BinanceKline,
 } from "../services/binance";
 import { getDb } from "../queries/connection";
-import { marketData, orderBookSnapshots, recentTicks, marketRegimes } from "@db/schema";
+import { marketData, orderBookSnapshots, recentTicks, marketRegimes, liquidityZones } from "@db/schema";
 import { desc, eq, and } from "drizzle-orm";
 
 // ─── Interval → milliseconds ───
@@ -78,7 +78,7 @@ export const marketRouter = createRouter({
       z.object({
         symbol: z.string().default("BTCUSDT"),
         interval: z.string().default("1m"),
-        limit: z.number().min(500).max(1000).default(500),
+        limit: z.number().min(1).max(1000).default(500),
         endTime: z.number().optional(),   // ms timestamp — fetch candles before this time
       })
     )
@@ -538,5 +538,21 @@ export const marketRouter = createRouter({
         .where(eq(marketRegimes.symbol, input.symbol))
         .orderBy(desc(marketRegimes.timestamp))
         .limit(input.limit);
+    }),
+
+  liquidityZones: authedQuery
+    .input(z.object({ symbol: z.string().optional() }).optional())
+    .query(async ({ input }) => {
+      const db = getDb();
+      if (input?.symbol) {
+        return db
+          .select()
+          .from(liquidityZones)
+          .where(and(eq(liquidityZones.isSwept, false), eq(liquidityZones.symbol, input.symbol)));
+      }
+      return db
+        .select()
+        .from(liquidityZones)
+        .where(eq(liquidityZones.isSwept, false));
     }),
 });

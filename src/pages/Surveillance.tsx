@@ -1,9 +1,9 @@
 import React, { useState } from "react";
+import { trpc } from "@/providers/trpc";
 import { 
   TrendingUp, 
   Activity, 
   Layers, 
-  Zap, 
   Cpu, 
   Crosshair, 
   Gauge, 
@@ -21,27 +21,147 @@ interface WatchlistItem {
 }
 
 export default function Surveillance() {
-  // Simulator State: "long" or "short"
+  // Simulator State: fallback direction if there is no live signal in the DB
   const [tradeDirection, setTradeDirection] = useState<"long" | "short">("long");
   // Watchlist Items
   const [selectedSymbol, setSelectedSymbol] = useState("BTC/USDT");
+
+  // Query active liquidity zones from DB
+  const { data: dbZones } = trpc.market.liquidityZones.useQuery({}, {
+    refetchInterval: 10_000,
+  });
+
+  // Mapped symbols for database queries and klines
+  const cleanSelectedSymbol = `B-${selectedSymbol.replace("/", "_")}`;
+  const querySymbol = selectedSymbol.replace("/", ""); // "BTCUSDT", "ETHUSDT", etc.
+
+  // Fetch real-time klines for 1H and 15M
+  const { data: realKlines1h } = trpc.market.klines.useQuery(
+    { symbol: querySymbol, interval: "1h" },
+    { refetchInterval: 10_000, staleTime: 10_000 }
+  );
+
+  const { data: realKlines15m } = trpc.market.klines.useQuery(
+    { symbol: querySymbol, interval: "15m" },
+    { refetchInterval: 10_000, staleTime: 10_000 }
+  );
+
+  // Local state to hold real-time streaming candles
+  const [klines1h, setKlines1h] = useState<any[]>([]);
+  const [klines15m, setKlines15m] = useState<any[]>([]);
+
+  // Reset when symbol changes
+  React.useEffect(() => {
+    setKlines1h([]);
+    setKlines15m([]);
+  }, [selectedSymbol]);
+
+  // Sync initial query load
+  React.useEffect(() => {
+    if (realKlines1h) setKlines1h(realKlines1h);
+  }, [realKlines1h]);
+
+  React.useEffect(() => {
+    if (realKlines15m) setKlines15m(realKlines15m);
+  }, [realKlines15m]);
+
+  // Subscribe to real-time ticker stream via WebSocket to update active forming candles
+  const symbolInput = React.useMemo(() => ({ symbol: querySymbol }), [querySymbol]);
+  const tickerCallbackRef = React.useRef<(data: any) => void>(() => {});
+  
+  React.useEffect(() => {
+    tickerCallbackRef.current = (data: any) => {
+      const price = parseFloat(data.lastPrice);
+      if (isNaN(price) || price <= 0) return;
+
+      // Update active 1H candle
+      setKlines1h((prev) => {
+        if (prev.length === 0) return prev;
+        const copy = [...prev];
+        const last = { ...copy[copy.length - 1] };
+        last.close = String(price);
+        last.high = String(Math.max(parseFloat(last.high), price));
+        last.low = String(Math.min(parseFloat(last.low), price));
+        copy[copy.length - 1] = last;
+        return copy;
+      });
+
+      // Update active 15M candle
+      setKlines15m((prev) => {
+        if (prev.length === 0) return prev;
+        const copy = [...prev];
+        const last = { ...copy[copy.length - 1] };
+        last.close = String(price);
+        last.high = String(Math.max(parseFloat(last.high), price));
+        last.low = String(Math.min(parseFloat(last.low), price));
+        copy[copy.length - 1] = last;
+        return copy;
+      });
+    };
+  }, []);
+
+  const tickerStreamOpts = React.useRef({
+    onData: (data: any) => tickerCallbackRef.current(data),
+  });
+
+  trpc.market.tickerStream.useSubscription(
+    symbolInput,
+    tickerStreamOpts.current
+  );
+
+  // Fetch latest confluence signal from DB
+  const { data: latestSignalData } = trpc.signal.latest.useQuery(
+    { symbol: cleanSelectedSymbol },
+    { refetchInterval: 10_000 }
+  );
+
+  const latestSignal = latestSignalData?.[0];
+
+  // Resolve active direction from database signal, falling back to manual toggle
+  const activeDirection = latestSignal 
+    ? (latestSignal.direction === "long" ? "long" : latestSignal.direction === "short" ? "short" : tradeDirection)
+    : tradeDirection;
+
+  // Resolve confluence metrics
+  const microScore = latestSignal ? Math.round(parseFloat(latestSignal.microScore)) : (activeDirection === "long" ? 70 : 35);
+  const intradayScore = latestSignal ? Math.round(parseFloat(latestSignal.intraScore)) : (activeDirection === "long" ? 95 : 45);
+  const swingScore = latestSignal ? Math.round(parseFloat(latestSignal.swingScore)) : (activeDirection === "long" ? 100 : 20);
+  const compositeScore = latestSignal ? parseFloat(latestSignal.compositeScore) : (activeDirection === "long" ? 88.75 : 33.33);
+  const isGated = latestSignal ? latestSignal.isGated : (activeDirection === "short");
+
+  // Find HLP/EQH and LLP/EQL zones for the selected symbol
+  const currentZones = dbZones?.filter((z) => z.symbol === cleanSelectedSymbol) || [];
+  const hlpZone = currentZones.find((z) => z.zoneType === "SWING_HIGH" || z.zoneType === "EQH");
+  const llpZone = currentZones.find((z) => z.zoneType === "SWING_LOW" || z.zoneType === "EQL");
+
+  // Dynamic fallback prices depending on selected symbol
+  const getSymbolDefaultPrices = (sym: string) => {
+    if (sym.startsWith("ETH")) return { hlp: 3800, llp: 3400 };
+    if (sym.startsWith("SOL")) return { hlp: 170, llp: 145 };
+    return { hlp: 69420, llp: 64800 }; // Default BTCUSDT
+  };
+
+  const defaults = getSymbolDefaultPrices(selectedSymbol);
+  const hlpPrice = hlpZone ? parseFloat(hlpZone.priceLevel) : defaults.hlp;
+  const llpPrice = llpZone ? parseFloat(llpZone.priceLevel) : defaults.llp;
+
+  const currentPrice = klines15m?.[klines15m.length - 1] 
+    ? parseFloat(klines15m[klines15m.length - 1].close)
+    : (klines1h?.[klines1h.length - 1] 
+        ? parseFloat(klines1h[klines1h.length - 1].close) 
+        : (activeDirection === "long" ? llpPrice : hlpPrice));
+
+  const stopLoss = activeDirection === "long" ? llpPrice * 0.999 : hlpPrice * 1.001;
+  const liquidation = activeDirection === "long" ? llpPrice * 0.95 : hlpPrice * 1.04;
 
   const watchlist: WatchlistItem[] = [
     {
       symbol: "BTC/USDT",
       timeframe: "1h",
-      context: tradeDirection === "long" ? "ACTIVE" : "SHORT",
-      contextStatus: tradeDirection === "long" ? "ACTIVE" : "SHORT",
-      description: "Active Hard Timeframe & 1H & Timeframe Tracks",
+      context: activeDirection === "long" && selectedSymbol === "BTC/USDT" ? "ACTIVE" : "SHORT",
+      contextStatus: activeDirection === "long" && selectedSymbol === "BTC/USDT" ? "ACTIVE" : "SHORT",
+      description: hlpZone && selectedSymbol === "BTC/USDT" ? `Active HLP sweep at $${hlpPrice.toLocaleString()}` : "Active Hard Timeframe & 1H & Timeframe Tracks",
       active: selectedSymbol === "BTC/USDT",
-    },
-    {
-      symbol: "BTC/USDT",
-      timeframe: "1h",
-      context: "HLP",
-      contextStatus: "HLP",
-      description: "Active Timeframe [cite: HLP]",
-      active: false,
     },
     {
       symbol: "ETH/USDT",
@@ -61,55 +181,69 @@ export default function Surveillance() {
     },
   ];
 
-  // Prices and details based on direction
-  const btcPrice = tradeDirection === "long" ? 64800 : 69420;
-  const targetPrice = tradeDirection === "long" ? 69420 : 64800;
-  const stopLoss = tradeDirection === "long" ? 64750 : 69500;
-  const liquidation = tradeDirection === "long" ? 61500 : 72200;
+
 
   // Render SVG Candlesticks for 1H Multi-Timeframe Matrix Context
   const render1HCandles = () => {
-    // Generate simple candles for visualization
-    const candles = tradeDirection === "long" 
+    // Generate fallback candles if real data is not loaded yet
+    const dummyCandles = activeDirection === "long" 
       ? [
-          { o: 63000, h: 63800, l: 62800, c: 63500 },
-          { o: 63500, h: 64200, l: 63200, c: 64000 },
-          { o: 64000, h: 65100, l: 63900, c: 64900 },
-          { o: 64900, h: 65000, l: 63200, c: 63500 },
-          { o: 63500, h: 63800, l: 61800, c: 62200 },
-          { o: 62200, h: 63000, l: 61200, c: 61500 },
-          { o: 61500, h: 63500, l: 61400, c: 62800 },
-          { o: 62800, h: 63200, l: 61000, c: 61200 },
-          { o: 61200, h: 61800, l: 60100, c: 60500 },
-          { o: 60500, h: 61800, l: 59800, c: 61400 },
-          { o: 61400, h: 62200, l: 60800, c: 62000 },
+          { o: llpPrice * 0.98, h: llpPrice * 0.99, l: llpPrice * 0.97, c: llpPrice * 0.985 },
+          { o: llpPrice * 0.985, h: llpPrice * 1.00, l: llpPrice * 0.98, c: llpPrice * 0.995 },
+          { o: llpPrice * 0.995, h: llpPrice * 1.01, l: llpPrice * 0.99, c: llpPrice * 1.005 },
+          { o: llpPrice * 1.005, h: llpPrice * 1.01, l: llpPrice * 0.98, c: llpPrice * 0.985 },
+          { o: llpPrice * 0.985, h: llpPrice * 0.99, l: llpPrice * 0.96, c: llpPrice * 0.965 },
+          { o: llpPrice * 0.965, h: llpPrice * 0.97, l: llpPrice * 0.95, c: llpPrice * 0.955 },
+          { o: llpPrice * 0.955, h: llpPrice * 0.98, l: llpPrice * 0.95, c: llpPrice * 0.975 },
+          { o: llpPrice * 0.975, h: llpPrice * 0.98, l: llpPrice * 0.94, c: llpPrice * 0.945 },
+          { o: llpPrice * 0.945, h: llpPrice * 0.95, l: llpPrice * 0.93, c: llpPrice * 0.935 },
+          { o: llpPrice * 0.935, h: llpPrice * 0.96, l: llpPrice * 0.93, c: llpPrice * 0.95 },
+          { o: llpPrice * 0.95, h: llpPrice * 0.96, l: llpPrice * 0.94, c: llpPrice * 0.955 },
         ]
       : [
-          { o: 65000, h: 65800, l: 64800, c: 65500 },
-          { o: 65500, h: 66800, l: 65200, c: 66200 },
-          { o: 66200, h: 67200, l: 65900, c: 67000 },
-          { o: 67000, h: 68500, l: 66800, c: 68200 },
-          { o: 68200, h: 69200, l: 67900, c: 68900 },
-          { o: 68900, h: 69800, l: 68200, c: 69400 },
-          { o: 69400, h: 70200, l: 68800, c: 69100 },
-          { o: 69100, h: 69500, l: 67800, c: 68200 },
-          { o: 68200, h: 68500, l: 66200, c: 66800 },
-          { o: 66800, h: 67500, l: 65400, c: 65900 },
-          { o: 65900, h: 66200, l: 64500, c: 64800 },
+          { o: hlpPrice * 0.95, h: hlpPrice * 0.96, l: hlpPrice * 0.94, c: hlpPrice * 0.955 },
+          { o: hlpPrice * 0.955, h: hlpPrice * 0.975, l: hlpPrice * 0.95, c: hlpPrice * 0.97 },
+          { o: hlpPrice * 0.97, h: hlpPrice * 0.98, l: hlpPrice * 0.96, c: hlpPrice * 0.975 },
+          { o: hlpPrice * 0.975, h: hlpPrice * 0.995, l: hlpPrice * 0.97, c: hlpPrice * 0.99 },
+          { o: hlpPrice * 0.99, h: hlpPrice * 1.005, l: hlpPrice * 0.985, c: hlpPrice * 1.00 },
+          { o: hlpPrice * 1.00, h: hlpPrice * 1.015, l: hlpPrice * 0.99, c: hlpPrice * 1.01 },
+          { o: hlpPrice * 1.01, h: hlpPrice * 1.02, l: hlpPrice * 1.00, c: hlpPrice * 1.005 },
+          { o: hlpPrice * 1.005, h: hlpPrice * 1.01, l: hlpPrice * 0.985, c: hlpPrice * 0.99 },
+          { o: hlpPrice * 0.99, h: hlpPrice * 0.995, l: hlpPrice * 0.96, c: hlpPrice * 0.97 },
+          { o: hlpPrice * 0.97, h: hlpPrice * 0.98, l: hlpPrice * 0.95, c: hlpPrice * 0.955 },
+          { o: hlpPrice * 0.955, h: hlpPrice * 0.96, l: hlpPrice * 0.935, c: hlpPrice * 0.94 },
         ];
 
+    const parsedKlines = klines1h?.map(k => ({
+      o: parseFloat(k.open),
+      h: parseFloat(k.high),
+      l: parseFloat(k.low),
+      c: parseFloat(k.close),
+    })).slice(-11) || [];
+
+    const candles = parsedKlines.length > 0 ? parsedKlines : dummyCandles;
+
     // Coordinate conversion helper
-    const minVal = 58000;
-    const maxVal = 71000;
+    const candleLows = candles.map((c) => c.l);
+    const candleHighs = candles.map((c) => c.h);
+    const minCandle = Math.min(...candleLows, llpPrice);
+    const maxCandle = Math.max(...candleHighs, hlpPrice);
+    
+    const minVal = minCandle - (maxCandle - minCandle) * 0.1 || 58000;
+    const maxVal = maxCandle + (maxCandle - minCandle) * 0.1 || 71000;
     const height = 280;
     const scaleY = (val: number) => height - ((val - minVal) / (maxVal - minVal)) * height;
+
+    // Generate grid levels dynamically
+    const step = (maxVal - minVal) / 5;
+    const gridLevels = Array.from({ length: 6 }, (_, i) => minVal + step * i);
 
     return (
       <svg className="w-full h-[320px] bg-[#0c0d10]" viewBox="0 0 500 320">
         {/* Grid lines */}
-        {[60000, 62000, 64000, 66000, 68000, 70000].map((level) => (
+        {gridLevels.map((level, idx) => (
           <line
-            key={level}
+            key={idx}
             x1="10"
             y1={scaleY(level)}
             x2="450"
@@ -123,38 +257,38 @@ export default function Surveillance() {
         {/* Equal Highs Zone */}
         <rect
           x="15"
-          y={scaleY(70200)}
+          y={scaleY(hlpPrice + (maxVal - minVal) * 0.05)}
           width="420"
-          height={scaleY(68600) - scaleY(70200)}
+          height={Math.max(10, scaleY(hlpPrice - (maxVal - minVal) * 0.05) - scaleY(hlpPrice + (maxVal - minVal) * 0.05))}
           fill="#d97706"
           fillOpacity="0.12"
           stroke="#d97706"
           strokeWidth="1"
           strokeDasharray="2 2"
         />
-        <text x="30" y={scaleY(69850)} fill="#d97706" className="text-[9px] font-bold font-mono">
-          [cite: DB] HISTORICAL EQUAL HIGHS (HLP) $69,420
+        <text x="30" y={scaleY(hlpPrice + (maxVal - minVal) * 0.03)} fill="#d97706" className="text-[9px] font-bold font-mono">
+          [cite: DB] {hlpZone ? hlpZone.zoneType.replace("_", " ") : "HISTORICAL EQUAL HIGHS"} (HLP) ${Math.round(hlpPrice).toLocaleString()}
         </text>
-        <line x1="15" y1={scaleY(69420)} x2="435" y2={scaleY(69420)} stroke="#d97706" strokeWidth="1.5" />
-        <text x="350" y={scaleY(69420) - 4} fill="#d97706" className="text-[10px] font-bold font-mono">$69,420</text>
+        <line x1="15" y1={scaleY(hlpPrice)} x2="435" y2={scaleY(hlpPrice)} stroke="#d97706" strokeWidth="1.5" />
+        <text x="350" y={scaleY(hlpPrice) - 4} fill="#d97706" className="text-[10px] font-bold font-mono">${Math.round(hlpPrice).toLocaleString()}</text>
 
         {/* Swing Low Zone */}
         <rect
           x="15"
-          y={scaleY(65200)}
+          y={scaleY(llpPrice + (maxVal - minVal) * 0.05)}
           width="420"
-          height={scaleY(63600) - scaleY(65200)}
+          height={Math.max(10, scaleY(llpPrice - (maxVal - minVal) * 0.05) - scaleY(llpPrice + (maxVal - minVal) * 0.05))}
           fill="#d97706"
           fillOpacity="0.12"
           stroke="#d97706"
           strokeWidth="1"
           strokeDasharray="2 2"
         />
-        <text x="30" y={scaleY(64600)} fill="#d97706" className="text-[9px] font-bold font-mono">
-          [cite: DB] SWING LOW (LLP) $64,800
+        <text x="30" y={scaleY(llpPrice - (maxVal - minVal) * 0.01)} fill="#d97706" className="text-[9px] font-bold font-mono">
+          [cite: DB] {llpZone ? llpZone.zoneType.replace("_", " ") : "SWING LOW"} (LLP) ${Math.round(llpPrice).toLocaleString()}
         </text>
-        <line x1="15" y1={scaleY(64800)} x2="435" y2={scaleY(64800)} stroke="#f43f5e" strokeWidth="1.5" />
-        <text x="400" y={scaleY(64800) - 4} fill="#f43f5e" className="text-[10px] font-bold font-mono">SLO</text>
+        <line x1="15" y1={scaleY(llpPrice)} x2="435" y2={scaleY(llpPrice)} stroke="#f43f5e" strokeWidth="1.5" />
+        <text x="400" y={scaleY(llpPrice) - 4} fill="#f43f5e" className="text-[10px] font-bold font-mono">SLO</text>
 
         {/* Candlesticks */}
         {candles.map((c, idx) => {
@@ -230,7 +364,7 @@ export default function Surveillance() {
         </text>
 
         {/* Bottom arrow annotation */}
-        {tradeDirection === "long" ? (
+        {activeDirection === "long" ? (
           <>
             <path d="M 180 250 L 210 235" stroke="#ffffff" strokeWidth="0.8" fill="none" />
             <polygon points="210,235 204,234 207,239" fill="#ffffff" />
@@ -256,14 +390,13 @@ export default function Surveillance() {
 
         {/* Price labels right axis */}
         <g transform="translate(452, 0)">
-          <text x="5" y={scaleY(70000)} fill="#71717a" className="text-[8px] font-mono">$70,000</text>
-          <text x="5" y={scaleY(69420)} fill="#d97706" className="text-[8px] font-mono font-bold">$69,420</text>
-          <text x="5" y={scaleY(68000)} fill="#71717a" className="text-[8px] font-mono">$68,000</text>
-          <text x="5" y={scaleY(66000)} fill="#71717a" className="text-[8px] font-mono">$66,000</text>
-          <text x="5" y={scaleY(64800)} fill="#f43f5e" className="text-[8px] font-mono font-bold">$64,800</text>
-          <text x="5" y={scaleY(64000)} fill="#71717a" className="text-[8px] font-mono">$64,000</text>
-          <text x="5" y={scaleY(62000)} fill="#71717a" className="text-[8px] font-mono">$62,000</text>
-          <text x="5" y={scaleY(60000)} fill="#71717a" className="text-[8px] font-mono">$60,000</text>
+          {gridLevels.map((level, idx) => (
+            <text key={idx} x="5" y={scaleY(level) + 3} fill="#71717a" className="text-[8px] font-mono">
+              ${Math.round(level).toLocaleString()}
+            </text>
+          ))}
+          <text x="5" y={scaleY(hlpPrice) + 3} fill="#d97706" className="text-[8px] font-mono font-bold">${Math.round(hlpPrice).toLocaleString()}</text>
+          <text x="5" y={scaleY(llpPrice) + 3} fill="#f43f5e" className="text-[8px] font-mono font-bold">${Math.round(llpPrice).toLocaleString()}</text>
         </g>
       </svg>
     );
@@ -271,51 +404,66 @@ export default function Surveillance() {
 
   // Render SVG Candlesticks for 15M Detailed Liquidity Raid Analysis
   const render15MCandles = () => {
-    // Generate simple candles for visualization
-    const candles = tradeDirection === "long" 
+    const dummyCandles = activeDirection === "long" 
       ? [
-          { o: 65400, h: 65600, l: 65000, c: 65100 },
-          { o: 65100, h: 65300, l: 64700, c: 64850 },
-          { o: 64850, h: 65100, l: 64400, c: 64500 },
-          { o: 64500, h: 64700, l: 63900, c: 64100 },
-          { o: 64100, h: 64300, l: 63500, c: 63650 },
-          { o: 63650, h: 64800, l: 63400, c: 64500 },
-          { o: 64500, h: 65400, l: 64300, c: 65200 },
+          { o: llpPrice * 1.010, h: llpPrice * 1.015, l: llpPrice * 1.005, c: llpPrice * 1.007 },
+          { o: llpPrice * 1.007, h: llpPrice * 1.012, l: llpPrice * 1.001, c: llpPrice * 1.003 },
+          { o: llpPrice * 1.003, h: llpPrice * 1.008, l: llpPrice * 0.995, c: llpPrice * 0.997 },
+          { o: llpPrice * 0.997, h: llpPrice * 1.002, l: llpPrice * 0.988, c: llpPrice * 0.992 },
+          { o: llpPrice * 0.992, h: llpPrice * 0.996, l: llpPrice * 0.982, c: llpPrice * 0.985 },
+          { o: llpPrice * 0.985, h: llpPrice * 1.008, l: llpPrice * 0.980, c: llpPrice * 1.002 },
+          { o: llpPrice * 1.002, h: llpPrice * 1.014, l: llpPrice * 0.998, c: llpPrice * 1.011 },
         ]
       : [
-          { o: 63600, h: 63800, l: 63200, c: 63500 },
-          { o: 63500, h: 64200, l: 63400, c: 64100 },
-          { o: 64100, h: 64800, l: 63950, c: 64700 },
-          { o: 64700, h: 65300, l: 64500, c: 65200 },
-          { o: 65200, h: 66000, l: 65050, c: 65900 },
-          { o: 65900, h: 65950, l: 64800, c: 65000 },
-          { o: 65000, h: 65200, l: 64300, c: 64420 },
+          { o: hlpPrice * 0.990, h: hlpPrice * 0.995, l: hlpPrice * 0.985, c: hlpPrice * 0.992 },
+          { o: hlpPrice * 0.992, h: hlpPrice * 1.002, l: hlpPrice * 0.989, c: hlpPrice * 1.001 },
+          { o: hlpPrice * 1.001, h: hlpPrice * 1.011, l: hlpPrice * 0.998, c: hlpPrice * 1.009 },
+          { o: hlpPrice * 1.009, h: hlpPrice * 1.018, l: hlpPrice * 1.005, c: hlpPrice * 1.016 },
+          { o: hlpPrice * 1.016, h: hlpPrice * 1.028, l: hlpPrice * 1.012, c: hlpPrice * 1.026 },
+          { o: hlpPrice * 1.026, h: hlpPrice * 1.028, l: hlpPrice * 1.010, c: hlpPrice * 1.012 },
+          { o: hlpPrice * 1.012, h: hlpPrice * 1.015, l: hlpPrice * 1.002, c: hlpPrice * 1.004 },
         ];
 
+    const parsedKlines = klines15m?.map(k => ({
+      o: parseFloat(k.open),
+      h: parseFloat(k.high),
+      l: parseFloat(k.low),
+      c: parseFloat(k.close),
+    })).slice(-7) || [];
+
+    const candles = parsedKlines.length > 0 ? parsedKlines : dummyCandles;
+
     // Coordinate conversion helper
-    const minVal = 63000;
-    const maxVal = 66200;
+    const candleLows = candles.map((c) => c.l);
+    const candleHighs = candles.map((c) => c.h);
+    const minCandle = Math.min(...candleLows);
+    const maxCandle = Math.max(...candleHighs);
+
+    const minVal = minCandle - (maxCandle - minCandle) * 0.1 || 63000;
+    const maxVal = maxCandle + (maxCandle - minCandle) * 0.1 || 66200;
     const height = 130;
     const scaleY = (val: number) => height - ((val - minVal) / (maxVal - minVal)) * height;
+
+    const huntTargetPrice = activeDirection === "long" ? llpPrice : hlpPrice;
 
     return (
       <svg className="w-full h-[150px] bg-[#0c0d10]" viewBox="0 0 350 150">
         {/* Level Line */}
         <line
           x1="10"
-          y1={scaleY(tradeDirection === "long" ? 64800 : 64420)}
+          y1={scaleY(huntTargetPrice)}
           x2="310"
-          y2={scaleY(tradeDirection === "long" ? 64800 : 64420)}
+          y2={scaleY(huntTargetPrice)}
           stroke="#d97706"
           strokeWidth="1"
         />
-        <text x="312" y={scaleY(tradeDirection === "long" ? 64800 : 64420) + 3} fill="#d97706" className="text-[8px] font-bold font-mono">
-          {tradeDirection === "long" ? "SLO" : "HLP"}
+        <text x="312" y={scaleY(huntTargetPrice) + 3} fill="#d97706" className="text-[8px] font-bold font-mono">
+          {activeDirection === "long" ? "SLO" : "HLP"}
         </text>
         
         {/* Level annotation */}
-        <text x="15" y={scaleY(tradeDirection === "long" ? 64800 : 64420) - 4} fill="#d97706" className="text-[8px] font-mono">
-          [cite: Hunt Target: ${tradeDirection === "long" ? "64,800 SLO" : "69,420 HLP"}]
+        <text x="15" y={scaleY(huntTargetPrice) - 4} fill="#d97706" className="text-[8px] font-mono">
+          [cite: Hunt Target: ${Math.round(huntTargetPrice).toLocaleString()} {activeDirection === "long" ? "SLO" : "HLP"}]
         </text>
 
         {/* Candlesticks */}
@@ -349,7 +497,7 @@ export default function Surveillance() {
         })}
 
         {/* Reversal Arrows */}
-        {tradeDirection === "long" ? (
+        {activeDirection === "long" ? (
           <>
             {/* Down arrow */}
             <path d="M 120 40 L 150 70" stroke="#ffffff" strokeWidth="1" strokeDasharray="1 1" fill="none" />
@@ -387,10 +535,10 @@ export default function Surveillance() {
 
         {/* Right scale */}
         <g transform="translate(315, 0)">
-          <text x="2" y={scaleY(66000)} fill="#71717a" className="text-[7.5px] font-mono">$66,000</text>
-          <text x="2" y={scaleY(65000)} fill="#71717a" className="text-[7.5px] font-mono">$65,000</text>
-          <text x="2" y={scaleY(64000)} fill="#71717a" className="text-[7.5px] font-mono">$64,000</text>
-          <text x="2" y={scaleY(63000)} fill="#71717a" className="text-[7.5px] font-mono">$63,000</text>
+          <text x="2" y={scaleY(maxVal)} fill="#71717a" className="text-[7.5px] font-mono">${Math.round(maxVal).toLocaleString()}</text>
+          <text x="2" y={scaleY(minVal + (maxVal - minVal) * 0.66)} fill="#71717a" className="text-[7.5px] font-mono">${Math.round(minVal + (maxVal - minVal) * 0.66).toLocaleString()}</text>
+          <text x="2" y={scaleY(minVal + (maxVal - minVal) * 0.33)} fill="#71717a" className="text-[7.5px] font-mono">${Math.round(minVal + (maxVal - minVal) * 0.33).toLocaleString()}</text>
+          <text x="2" y={scaleY(minVal)} fill="#71717a" className="text-[7.5px] font-mono">${Math.round(minVal).toLocaleString()}</text>
         </g>
       </svg>
     );
@@ -409,17 +557,17 @@ export default function Surveillance() {
           // Generate a curve path
           const offsetSeed = (idx - 15) / 15; // -1.0 to 1.0
           const startY = height / 2 + 10;
-          const midY = tradeDirection === "long" 
-            ? height / 2 + 15 + offsetSeed * 12 
-            : height / 2 + 5 + offsetSeed * 12;
-          const endY = tradeDirection === "long"
-            ? height / 2 - 25 + offsetSeed * 25 + (idx % 2 === 0 ? 5 : -5)
-            : height / 2 + 45 + offsetSeed * 25 + (idx % 2 === 0 ? 5 : -5);
+          const midY = activeDirection === "long" 
+            ? height - 10 + offsetSeed * 15 
+            : 15 + offsetSeed * 15;
+          const endY = activeDirection === "long"
+            ? 15 + (idx % 2 === 0 ? 5 : -5) + offsetSeed * 25
+            : height - 10 + (idx % 2 === 0 ? 5 : -5) + offsetSeed * 25;
 
-          const pathD = `M 10 ${startY} Q ${width * 0.4} ${midY} ${width} ${endY}`;
+          const pathD = `M 10 ${startY} Q ${width * 0.45} ${midY} ${width} ${endY}`;
           
           // Color coding for paths: green-yellow-cyan for UP, red-orange-pink for DOWN
-          const strokeColor = tradeDirection === "long"
+          const strokeColor = activeDirection === "long"
             ? `hsl(${100 + idx * 2}, 75%, ${40 + (idx % 4) * 8}%)`
             : `hsl(${10 + idx * 2}, 80%, ${45 + (idx % 4) * 8}%)`;
 
@@ -443,7 +591,7 @@ export default function Surveillance() {
           Convergence: REVERSAL SIGNAL]
         </text>
 
-        {tradeDirection === "long" ? (
+        {activeDirection === "long" ? (
           <text x="10" y="105" fill="#0ecb81" className="text-[8.5px] font-mono font-bold">
             REVERSAL INTENT: STRONG (UP)
           </text>
@@ -458,10 +606,9 @@ export default function Surveillance() {
 
   // Render Confluence Speedometer Arc Gauge
   const renderConfluenceGauge = () => {
-    const score = 88.75;
+    const score = Math.max(0, Math.min(100, compositeScore));
     // Radial calculation: Arc from -180deg to 0deg (left to right)
     // Radius = 50, Center = (70, 65)
-    // Needle angle: -180 + (88.75 / 100) * 180 = -180 + 159.75 = -20.25deg
     const angleRad = ((-180 + (score / 100) * 180) * Math.PI) / 180;
     const needleX = 70 + Math.cos(angleRad) * 45;
     const needleY = 65 + Math.sin(angleRad) * 45;
@@ -480,14 +627,14 @@ export default function Surveillance() {
         <path
           d={`M 20 65 A 50 50 0 0 1 ${70 + Math.cos(angleRad) * 50} ${65 + Math.sin(angleRad) * 50}`}
           fill="none"
-          stroke={tradeDirection === "long" ? "#0ecb81" : "#d97706"}
+          stroke={activeDirection === "long" ? "#0ecb81" : "#d97706"}
           strokeWidth="10"
           strokeLinecap="round"
         />
 
         {/* Go indicator text */}
-        <text x="110" y="25" fill={tradeDirection === "long" ? "#0ecb81" : "#f6465d"} className="text-[9px] font-mono font-black">
-          {tradeDirection === "long" ? "go" : "gated"}
+        <text x="110" y="25" fill={activeDirection === "long" ? "#0ecb81" : "#f6465d"} className="text-[9px] font-mono font-black">
+          {!isGated ? "go" : "gated"}
         </text>
 
         {/* Needle */}
@@ -507,7 +654,7 @@ export default function Surveillance() {
           CONFLUENCE-75
         </text>
         <text x="70" y="88" fill="#ffffff" className="text-[8.5px] font-mono font-bold" textAnchor="middle">
-          {tradeDirection === "long" ? "GATEWAY" : "SHORT"}
+          {activeDirection === "long" ? "GATEWAY" : "SHORT"}
         </text>
       </svg>
     );
@@ -532,7 +679,7 @@ export default function Surveillance() {
           <button
             onClick={() => setTradeDirection("long")}
             className={`px-3 py-1 rounded text-[10px] font-bold transition-all flex items-center gap-1.5 border ${
-              tradeDirection === "long"
+              activeDirection === "long"
                 ? "bg-j-up/20 text-j-up border-j-up shadow-[0_0_10px_rgba(14,203,129,0.15)]"
                 : "bg-transparent text-zinc-500 border-zinc-800 hover:text-zinc-300"
             }`}
@@ -544,7 +691,7 @@ export default function Surveillance() {
           <button
             onClick={() => setTradeDirection("short")}
             className={`px-3 py-1 rounded text-[10px] font-bold transition-all flex items-center gap-1.5 border ${
-              tradeDirection === "short"
+              activeDirection === "short"
                 ? "bg-j-down/20 text-j-down border-j-down shadow-[0_0_10px_rgba(246,70,93,0.15)]"
                 : "bg-transparent text-zinc-500 border-zinc-800 hover:text-zinc-300"
             }`}
@@ -600,13 +747,13 @@ export default function Surveillance() {
                   
                   {/* Context Badge */}
                   <span className={`text-[8.5px] px-1.5 py-0.5 rounded font-black ${
-                    item.contextStatus === "ACTIVE" 
+                    item.symbol === selectedSymbol && activeDirection === "long"
                       ? "bg-j-up/10 text-j-up border border-j-up/20"
-                      : item.contextStatus === "SHORT"
+                      : item.symbol === selectedSymbol && activeDirection === "short"
                       ? "bg-j-down/10 text-j-down border border-j-down/20"
                       : "bg-[#1e2029] text-[#a1a1aa]"
                   }`}>
-                    {item.context}
+                    {item.symbol === selectedSymbol ? (activeDirection === "long" ? "ACTIVE" : "SHORT") : item.context}
                   </span>
                 </div>
                 
@@ -615,13 +762,13 @@ export default function Surveillance() {
                 </div>
 
                 {/* Big Context display overlay inside the selected active container */}
-                {item.active && item.symbol === "BTC/USDT" && (
+                {item.active && (
                   <div className="mt-3 py-2 px-3 bg-black/40 rounded border border-white/[0.04] flex flex-col items-center justify-center">
                     <span className="text-[9px] text-zinc-500 uppercase tracking-widest font-bold">Context:</span>
                     <span className={`text-xl font-black tracking-widest ${
-                      tradeDirection === "long" ? "text-j-up" : "text-j-down"
+                      activeDirection === "long" ? "text-j-up" : "text-j-down"
                     }`}>
-                      {tradeDirection === "long" ? "ACTIVE" : "SHORT"}
+                      {activeDirection === "long" ? "ACTIVE" : "SHORT"}
                     </span>
                   </div>
                 )}
@@ -724,27 +871,27 @@ export default function Surveillance() {
                   <div className="flex-1 flex flex-col gap-1.5 text-[9px] leading-tight text-zinc-300">
                     <div>
                       <span className="text-zinc-500">Micro (S<sub>Micro</sub>):</span>{" "}
-                      <span className="text-j-up font-bold">70</span>{" "}
+                      <span className="text-j-up font-bold">{microScore}</span>{" "}
                       <span className="text-[#71717a] font-mono">(Volume sweep confirmed via L2)</span>
                     </div>
                     <div>
                       <span className="text-zinc-500">Intraday (S<sub>Intraday</sub>):</span>{" "}
-                      <span className="text-j-up font-bold">95</span>{" "}
+                      <span className="text-j-up font-bold">{intradayScore}</span>{" "}
                       <span className="text-[#71717a] font-mono">(Kronos path bunching, high confidence)</span>
                     </div>
                     <div>
                       <span className="text-zinc-500">Swing (S<sub>Swing</sub>):</span>{" "}
-                      <span className="text-j-up font-bold">100</span>{" "}
+                      <span className="text-j-up font-bold">{swingScore}</span>{" "}
                       <span className="text-[#71717a] font-mono">(Historical level sweep, verified via DB)</span>
                     </div>
                     
                     <div className="mt-1.5 pt-1.5 border-t border-white/[0.04] flex justify-between items-center">
                       <div>
                         <span className="text-zinc-400 font-bold uppercase text-[8.5px]">Composite Score:</span>{" "}
-                        <span className="text-[#0ecb81] font-bold text-[11px]">88.75</span>
+                        <span className="text-[#0ecb81] font-bold text-[11px]">{compositeScore.toFixed(2)}</span>
                       </div>
                       <span className="text-j-up font-bold text-[8px] bg-j-up/10 px-1 py-0.2 border border-j-up/25 rounded">
-                        [cite: AUTHORIZED]
+                        {isGated ? "[cite: GATED]" : "[cite: AUTHORIZED]"}
                       </span>
                     </div>
                   </div>
@@ -759,19 +906,19 @@ export default function Surveillance() {
                     <span>•</span>
                     <span>LEVERAGE: <span className="text-white font-bold">5X</span></span>
                     <span>•</span>
-                    <span>STOP: <span className="text-[#f43f5e] font-bold">${stopLoss.toLocaleString()}</span></span>
+                    <span>STOP: <span className="text-[#f43f5e] font-bold">${stopLoss.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span></span>
                     <span className="text-[8px] text-[#71717a] font-mono">[cite: 1 TI above Wick]</span>
                     <span>•</span>
-                    <span>LIQUIDATION: <span className="text-zinc-300">${liquidation.toLocaleString()}</span></span>
+                    <span>LIQUIDATION: <span className="text-zinc-300">${liquidation.toLocaleString(undefined, { maximumFractionDigits: 2 })}</span></span>
                     <span className="text-[8px] text-[#71717a] font-mono">[cite: 2x Buffer Invariant]</span>
                   </div>
                   
                   <div className={`text-[10px] font-black tracking-wider uppercase mt-1 flex items-center gap-1.5 ${
-                    tradeDirection === "long" ? "text-[#0ecb81]" : "text-[#f6465d]"
+                    activeDirection === "long" ? "text-[#0ecb81]" : "text-[#f6465d]"
                   }`}>
                     <span className="w-2 h-2 rounded-full bg-current animate-ping" />
                     <span>
-                      EXECUTING {tradeDirection === "long" ? "LONG" : "SHORT"} ENTRY PAYLOAD -{">"} COINDCX-B-BTC_USDT
+                      EXECUTING {activeDirection === "long" ? "LONG" : "SHORT"} ENTRY PAYLOAD -{">"} COINDCX-{cleanSelectedSymbol}
                     </span>
                   </div>
                 </div>
@@ -791,8 +938,8 @@ export default function Surveillance() {
           <span className="font-bold text-zinc-300">Active Watchlist Overview</span>
           
           <div className="flex items-center gap-1">
-            <span className={`w-2 h-2 rounded-full ${tradeDirection === "long" ? "bg-j-up" : "bg-j-down"}`} />
-            <span className="text-zinc-400">BTC/USDT 1H [cite: {tradeDirection === "long" ? "HLP" : "SHORT"}]</span>
+            <span className={`w-2 h-2 rounded-full ${activeDirection === "long" ? "bg-j-up" : "bg-j-down"}`} />
+            <span className="text-zinc-400">BTC/USDT 1H [cite: {activeDirection === "long" ? "HLP" : "SHORT"}]</span>
           </div>
 
           <div className="h-3 w-px bg-white/[0.06]" />

@@ -169,6 +169,13 @@
       "when": 1782003641561,
       "tag": "0023_oval_reaper",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1782012383343,
+      "tag": "0024_smiling_silver_fox",
+      "breakpoints": true
     }
   ]
 }

@@ -873,3 +873,17 @@ export const orders = pgTable("orders", {
 export type Order = typeof orders.$inferSelect;
 export type InsertOrder = typeof orders.$inferInsert;
 
+export const liquidityZones = pgTable("liquidity_zones", {
+  id: serial("id").primaryKey(),
+  symbol: varchar("symbol", { length: 20 }).notNull(), // e.g. "B-BTC_USDT"
+  timeframe: varchar("timeframe", { length: 5 }).notNull(), // "15m" | "1h"
+  priceLevel: decimal("price_level", { precision: 28, scale: 8 }).notNull(),
+  zoneType: varchar("zone_type", { length: 20 }).notNull(), // "SWING_HIGH" | "SWING_LOW" | "EQH" | "EQL"
+  touches: integer("touches").default(1).notNull(),
+  isSwept: boolean("is_swept").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type LiquidityZone = typeof liquidityZones.$inferSelect;
+
