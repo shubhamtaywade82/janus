@@ -97,7 +97,7 @@ export async function runAnalysisForSymbol(binanceSymbol: string) {
     if (strategy !== "alpha_protocol") {
       const alphaSignalData = await evaluateSymbolSignalAsync(pair.coindcx, "alpha_protocol", currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraMetrics);
       // If Alpha Protocol finds a strong setup, it overrides the base regime strategy for this tick
-      if (alphaSignalData.direction !== "neutral" && alphaSignalData.score >= 75) {
+      if (alphaSignalData.direction !== "neutral" && Number(alphaSignalData.compositeScore) >= 75) {
         signalData = alphaSignalData;
       }
     }

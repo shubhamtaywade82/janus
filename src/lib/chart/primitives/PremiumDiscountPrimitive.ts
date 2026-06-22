@@ -2,10 +2,10 @@ import type { ISeriesPrimitive, SeriesAttachedParameter, Time } from "lightweigh
 import type { CanvasRenderingTarget2D } from "fancy-canvas";
 import type { PremiumDiscountZone, SwingPoint } from "../pa-types";
 
-const PREMIUM_FILL  = "rgba(239, 68, 68, 0.05)";  // light red
-const DISCOUNT_FILL = "rgba(34, 197, 94, 0.05)"; // light green
-const LINE_COLOR    = "rgba(113, 113, 122, 0.40)"; // zinc-400-like
-const EQ_LINE_COLOR = "rgba(234, 179, 8, 0.50)";  // yellow-500-like
+const PREMIUM_FILL  = "rgba(239, 68, 68, 0.15)";  // light red (more visible)
+const DISCOUNT_FILL = "rgba(34, 197, 94, 0.15)"; // light green (more visible)
+const LINE_COLOR    = "rgba(113, 113, 122, 0.60)"; // zinc-400-like
+const EQ_LINE_COLOR = "rgba(234, 179, 8, 0.70)";  // yellow-500-like
 
 export class PremiumDiscountPrimitive implements ISeriesPrimitive<Time> {
   private _param: SeriesAttachedParameter<Time> | null = null;
@@ -51,10 +51,22 @@ export class PremiumDiscountPrimitive implements ISeriesPrimitive<Time> {
                 const lastItem = data.length > 0 ? data[data.length - 1] : null;
                 const lastX = lastItem ? toX(lastItem.time) : null;
 
-                // Find start time of the zone from the swing high/low times
+                // Find start time of the zone from the swing high/low times (float-safe)
                 let startX: number | null = null;
-                const matchHigh = self._swings.find(s => s.price === self._zone!.swingHigh && s.type === "high");
-                const matchLow  = self._swings.find(s => s.price === self._zone!.swingLow && s.type === "low");
+                const highSwings = self._swings.filter(s => s.type === "high");
+                const lowSwings  = self._swings.filter(s => s.type === "low");
+
+                const matchHigh = highSwings.length > 0
+                  ? highSwings.reduce((best, cur) => 
+                      Math.abs(cur.price - self._zone!.swingHigh) < Math.abs(best.price - self._zone!.swingHigh) ? cur : best
+                    )
+                  : null;
+
+                const matchLow = lowSwings.length > 0
+                  ? lowSwings.reduce((best, cur) => 
+                      Math.abs(cur.price - self._zone!.swingLow) < Math.abs(best.price - self._zone!.swingLow) ? cur : best
+                    )
+                  : null;
 
                 if (matchHigh && matchLow) {
                   const minTime = Math.min(matchHigh.time, matchLow.time);
