@@ -70,7 +70,7 @@ export interface MarketMetrics {
   liquidityAdded: number;
   absorptionScore: number;
   sweepScore: number;
-  volatilityRegime: "LOW" | "NORMAL" | "HIGH";
+  volatilityRegime: "LOW" | "NORMAL" | "HIGH" | "EXTREME";
 }
 
 export interface InstrumentState {

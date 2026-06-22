@@ -57,7 +57,7 @@ export async function ensureProtection(
       
       if (userConfig && userConfig.trailingStopEnabled === false) {
         const rr = parseFloat(userConfig.riskRewardRatio ?? "2.00");
-        tp = position.side === "long" || position.side === "LONG"
+        tp = position.side === "LONG"
           ? position.entryPrice * (1 + slDistancePct * rr)
           : position.entryPrice * (1 - slDistancePct * rr);
       } else {

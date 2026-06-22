@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import { useState, useEffect, useMemo } from "react";
 import { useNavigate } from "react-router";
 import { 
   CommandDialog, 
@@ -19,11 +19,8 @@ import {
   Shield, 
   ScrollText, 
   Activity,
-  ArrowRight,
-  TrendingDown,
   Coins,
   ChevronLeft,
-  Search,
   ShoppingCart
 } from "lucide-react";
 import { toast } from "sonner";
@@ -47,7 +44,6 @@ export default function SearchModal({ isOpen, onClose }: SearchModalProps) {
   const [qty, setQty] = useState<string>("0.1");
 
   // Fetch live mark/ticker price for strike calculation
-  const cleanSelectedSymbol = `B-${underlying}_USDT`;
   const querySymbol = `${underlying}USDT`;
   
   const { data: klines } = trpc.market.klines.useQuery(

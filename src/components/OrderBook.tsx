@@ -80,7 +80,7 @@ export const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLi
   const totalVol = totalBidVolume + totalAskVolume;
   const bidPct = totalVol > 0 ? (totalBidVolume / totalVol) * 100 : 50;
 
-  const getEventForPrice = (priceStr: string, isBid: boolean) => {
+  const getEventForPrice = (priceStr: string, _isBid: boolean) => {
     const price = parseFloat(priceStr);
     if (isNaN(price)) return null;
 

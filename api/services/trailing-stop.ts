@@ -9,7 +9,6 @@ import { detectSwings, computeAtrArray, type Kline } from "./price-action";
 // Default trail % per strategy type
 export const TRAIL_PCT: Record<StrategyType, number> = {
   scalping_micro: 0.005,  // 0.5% (was 0.3%)
-  scalping:       0.010,  // 1.0% (was 0.5%)
   bb_reversion:   0.015,  // 1.5% (was 0.7%)
   momentum_reversal: 0.020, // 2.0% (was 0.8%)
   intraday:       0.025,  // 2.5% (was 1.0%)
@@ -84,13 +83,7 @@ tradingEvents.on("position-closed", (posId: number, symbol: string) => {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function pctDelta(from: number, to: number): number {
-  if (!isFinite(from) || from === 0) return 0;
-  return (to - from) / from;
-}
-
 function tightestStopCandidate(
-  fromPrice: number,
   candidates: number[],
   side: "long" | "short"
 ): number | null {
@@ -137,12 +130,7 @@ export function calcNewTrailingStop(
 
   let newStop = currentStop;
 
-  // Breakeven anchor logic is only meaningful when already on the profit side of entry.
   const isProfitable = side === "long" ? currentPrice >= entryPrice : currentPrice <= entryPrice;
-  const isBreakevenOrBetter =
-    isProfitable &&
-    ((side === "long" && currentStop >= entryPrice) ||
-      (side === "short" && currentStop <= entryPrice));
 
   // Noise floor: require a meaningful move before tightening the stop.
   // If we're not yet profitable, keep the stop at least minAdverseMovePct away.
@@ -183,7 +171,7 @@ export function calcNewTrailingStop(
     candidates.push(currentPrice * (1 - trailPct));
 
     // Tightest candidate for a long = the HIGHEST candidate. Then ratchet up only.
-    const tightest = tightestStopCandidate(currentPrice, candidates, "long");
+    const tightest = tightestStopCandidate(candidates, "long");
     if (tightest != null) {
       newStop = Math.max(currentStop, tightest);
     }
@@ -202,7 +190,7 @@ export function calcNewTrailingStop(
     candidates.push(currentPrice * (1 + trailPct));
 
     // Tightest candidate for a short = the LOWEST candidate. Then ratchet down only.
-    const tightest = tightestStopCandidate(currentPrice, candidates, "short");
+    const tightest = tightestStopCandidate(candidates, "short");
     if (tightest != null) {
       newStop = Math.min(currentStop, tightest);
     }
@@ -331,7 +319,7 @@ function ensureTrailingEngine() {
 
           // Ratchet stop
           const klines = klineBufferCache.get(pos.symbol) || [];
-          const strategyCfg = STRATEGY_CONFIGS[pos.strategyType] || STRATEGY_CONFIGS.scalping;
+          const strategyCfg = STRATEGY_CONFIGS[pos.strategyType] || STRATEGY_CONFIGS.intraday;
           const newStop = calcNewTrailingStop(pos.side, pos.stopLoss, currentPrice, trailPct, klines, pos.entryPrice, strategyCfg, pos.takeProfit);
           
           if (Math.abs(newStop - pos.stopLoss) > 1e-8) {

@@ -300,7 +300,7 @@ import { startRProfileRefresh } from "./services/r-profile-engine";
 startRProfileRefresh();
 
 // Start multi-day trend bias scheduler (fetches daily klines, computes SMA50/200)
-import { startDailyTrendScheduler } from "./services/trend-bias";
+import { startDailyTrendScheduler, stopDailyTrendScheduler } from "./services/trend-bias";
 startDailyTrendScheduler();
 
 // Init LLM advisor (loads keys from DB + env-level Ollama config)
@@ -337,7 +337,6 @@ startBrainScheduler();
 
 // Start liquidation proximity monitor (alerts + auto-reduce when within 5%/2% of liq price)
 import { startLiquidationMonitor, stopLiquidationMonitor } from "./services/liquidation-monitor";
-import { startDailyTrendScheduler, stopDailyTrendScheduler } from "./services/trend-bias";
 startLiquidationMonitor(10_000);
 
 // Start key rotation monitor (daily Telegram reminder when exchange API credentials are stale)

@@ -145,11 +145,6 @@ export default function Surveillance() {
   const hlpPrice = hlpZone ? parseFloat(hlpZone.priceLevel) : defaults.hlp;
   const llpPrice = llpZone ? parseFloat(llpZone.priceLevel) : defaults.llp;
 
-  const currentPrice = klines15m?.[klines15m.length - 1] 
-    ? parseFloat(klines15m[klines15m.length - 1].close)
-    : (klines1h?.[klines1h.length - 1] 
-        ? parseFloat(klines1h[klines1h.length - 1].close) 
-        : (activeDirection === "long" ? llpPrice : hlpPrice));
 
   const stopLoss = activeDirection === "long" ? llpPrice * 0.999 : hlpPrice * 1.001;
   const liquidation = activeDirection === "long" ? llpPrice * 0.95 : hlpPrice * 1.04;

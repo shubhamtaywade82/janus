@@ -1,6 +1,6 @@
 import { getDb } from "../queries/connection";
 import { marketData } from "@db/schema";
-import { eq, and, gte, desc } from "drizzle-orm";
+import { eq, and } from "drizzle-orm";
 import { fetchKlines } from "./binance";
 import { SUPPORTED_SYMBOLS } from "../../contracts/constants";
 

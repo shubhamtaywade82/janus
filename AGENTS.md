@@ -72,6 +72,11 @@ Different parts of the system use different formats. Always handle conversion pr
 
 Whenever you introduce a new feature, fix a bug, or change system behaviors, log it here.
 
+### [2026-06-21] Scalping Removal & Typecheck Cleanup
+* **Removed Scalping Setting**: Completely deprecated the `"scalping"` strategy from TypeScript configurations (`StrategyType` list, schemas, default tracking configurations, and `strategyTypeSchema` zod enum in [bot-router.ts](file:///home/nemesis/project/trading-workspace/janus/api/routers/bot-router.ts)). Added `"h6_momentum"` to Zod schemas to align with active momentum strategies.
+* **Compilation and Database Enum Alignment**: Added `"h6_momentum"` to the database schema enum `strategyTypeEnum` in [schema.ts](file:///home/nemesis/project/trading-workspace/janus/db/schema.ts) to fix position insertion type mismatch errors.
+* **Typecheck and Unused Variables Resolution**: Fixed duplicate `startDailyTrendScheduler` boot imports, corrected `PositionSide` check casing (`"LONG"`), added missing properties to `DEFAULT_CONFIG` static object in [auto-executor.ts](file:///home/nemesis/project/trading-workspace/janus/api/services/auto-executor.ts), and scrubbed unused local imports/variables to guarantee a zero-error compile state.
+
 ### [2026-06-21] Trailing Activation Gate, Short Breakeven SL, and H6 Momentum Strategy
 * **Trailing Stop-Loss Gate**: Added a dynamic activation gate using `tp1ActivationThresholdPct` in [trailing-stop.ts](file:///home/nemesis/project/trading-workspace/janus/api/services/trailing-stop.ts) to prevent stops from tightening on noise immediately after entry.
 * **Short Breakeven Fix**: Standardized short position breakeven calculation in [ai-advisor.ts](file:///home/nemesis/project/trading-workspace/janus/api/services/position-manager/ai-advisor.ts) to lock stop loss below entry price. Moved the trailing engine breakeven trigger to 1:1 Risk-to-Reward (1R).

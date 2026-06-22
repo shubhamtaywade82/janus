@@ -287,6 +287,8 @@ export class AutoExecutor {
     maxTotalPositions: 3,
     paperStartingBalance: "100000",
     paperCurrency: "INR",
+    trailingStopEnabled: true,
+    riskRewardRatio: "2.00",
     brainDriverEnabled: false,
     brainGateEnabled: false,
     brainShadowMode: true,

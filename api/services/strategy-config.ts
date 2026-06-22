@@ -1,5 +1,4 @@
 export type StrategyType =
-  | "scalping"
   | "intraday"
   | "swing"
   | "grid"
@@ -48,18 +47,6 @@ export interface StrategyConfig {
 }
 
 export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
-  scalping: {
-    type: "scalping",
-    weights: { micro: 0.55, intra: 0.35, swing: 0.10 },
-    threshold: 70,
-    takerFeeRate: 0.0005,
-    signalIntervalMs: 5_000,
-    maxLeverage: 10,
-    minPostBreakevenSlPct: 0.0015,
-    tp1ActivationThresholdPct: 0.25,
-    minAdverseMovePct: 0.001,
-    preferLimitEntry: false,
-  },
   intraday: {
     type: "intraday",
     weights: { micro: 0.20, intra: 0.60, swing: 0.20 },
