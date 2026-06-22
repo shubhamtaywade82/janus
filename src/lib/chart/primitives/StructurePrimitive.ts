@@ -60,6 +60,10 @@ export class StructurePrimitive implements ISeriesPrimitive<Time> {
               }
 
               // ─── Liquidity levels ───
+              const data = series.data();
+              const lastItem = data.length > 0 ? data[data.length - 1] : null;
+              const lastX = lastItem ? toX(lastItem.time) : null;
+
               for (const liq of self._liquidity) {
                 const y = toY(liq.price);
                 if (y === null || liq.times.length === 0) continue;
@@ -69,7 +73,14 @@ export class StructurePrimitive implements ISeriesPrimitive<Time> {
                 if (x1 === null) continue;
 
                 const endTime = liq.swept && liq.sweptTime ? liq.sweptTime : null;
-                const x2 = endTime !== null ? (toX(endTime) ?? ctx.canvas.width / hpr) : ctx.canvas.width / hpr;
+                
+                let x2 = null;
+                if (endTime !== null) {
+                  x2 = toX(endTime);
+                } else if (lastX !== null) {
+                  x2 = lastX;
+                }
+                const endX = x2 !== null ? x2 : ctx.canvas.width / hpr;
 
                 const color = liq.swept ? "rgba(113,113,122,0.30)" : "rgba(239,68,68,0.60)";
                 ctx.strokeStyle = color;
@@ -77,7 +88,7 @@ export class StructurePrimitive implements ISeriesPrimitive<Time> {
                 ctx.setLineDash([6 * hpr, 4 * hpr]);
                 ctx.beginPath();
                 ctx.moveTo(Math.round(x1 * hpr), Math.round(y * vpr));
-                ctx.lineTo(Math.round(x2 * hpr), Math.round(y * vpr));
+                ctx.lineTo(Math.round(endX * hpr), Math.round(y * vpr));
                 ctx.stroke();
                 ctx.setLineDash([]);
 
@@ -86,7 +97,7 @@ export class StructurePrimitive implements ISeriesPrimitive<Time> {
                 ctx.font         = `${Math.max(8, Math.round(8 * Math.min(hpr, vpr)))}px monospace`;
                 ctx.textBaseline = "bottom";
                 ctx.textAlign    = "left";
-                ctx.fillText(label, Math.round(x2 * hpr) + 3, Math.round(y * vpr) - 2);
+                ctx.fillText(label, Math.round(endX * hpr) + 3, Math.round(y * vpr) - 2);
                 ctx.textAlign = "left";
               }
 

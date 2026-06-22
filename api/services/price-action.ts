@@ -241,16 +241,31 @@ export function detectFVGs(klines: Kline[]): FairValueGap[] {
       const bottom  = c1.high;
       const top     = c3.low;
       const gapSize = top - bottom;
+      
+      let filled = false;
+      let fillPercent = 0;
+      let endTime = klines[klines.length - 1].time; // default to last candle
       let maxPen = 0;
+
       for (let m = i + 1; m < klines.length; m++) {
-        if (klines[m].low < top) {
-          const pen = top - Math.max(klines[m].low, bottom);
+        if (klines[m].low <= bottom) {
+          filled = true;
+          fillPercent = 100;
+          endTime = klines[m].time;
+          break;
+        } else if (klines[m].low < top) {
+          const pen = top - klines[m].low;
           if (pen > maxPen) maxPen = pen;
         }
       }
-      const fillPercent = gapSize > 0 ? Math.min(100, (maxPen / gapSize) * 100) : 0;
-      fvgs.push({ startTime: c1.time, endTime: c3.time, top, bottom, midpoint: (top + bottom) / 2,
-        type: "bullish", filled: fillPercent >= 50, fillPercent });
+
+      if (!filled) {
+        fillPercent = gapSize > 0 ? Math.min(100, (maxPen / gapSize) * 100) : 0;
+        if (fillPercent >= 100) filled = true;
+      }
+
+      fvgs.push({ startTime: c1.time, endTime, top, bottom, midpoint: (top + bottom) / 2,
+        type: "bullish", filled, fillPercent });
     }
 
     // Bearish FVG: gap above c3.high, below c1.low
@@ -258,16 +273,31 @@ export function detectFVGs(klines: Kline[]): FairValueGap[] {
       const bottom  = c3.high;
       const top     = c1.low;
       const gapSize = top - bottom;
+      
+      let filled = false;
+      let fillPercent = 0;
+      let endTime = klines[klines.length - 1].time; // default to last candle
       let maxPen = 0;
+
       for (let m = i + 1; m < klines.length; m++) {
-        if (klines[m].high > bottom) {
-          const pen = Math.min(klines[m].high, top) - bottom;
+        if (klines[m].high >= top) {
+          filled = true;
+          fillPercent = 100;
+          endTime = klines[m].time;
+          break;
+        } else if (klines[m].high > bottom) {
+          const pen = klines[m].high - bottom;
           if (pen > maxPen) maxPen = pen;
         }
       }
-      const fillPercent = gapSize > 0 ? Math.min(100, (maxPen / gapSize) * 100) : 0;
-      fvgs.push({ startTime: c1.time, endTime: c3.time, top, bottom, midpoint: (top + bottom) / 2,
-        type: "bearish", filled: fillPercent >= 50, fillPercent });
+
+      if (!filled) {
+        fillPercent = gapSize > 0 ? Math.min(100, (maxPen / gapSize) * 100) : 0;
+        if (fillPercent >= 100) filled = true;
+      }
+
+      fvgs.push({ startTime: c1.time, endTime, top, bottom, midpoint: (top + bottom) / 2,
+        type: "bearish", filled, fillPercent });
     }
   }
 
@@ -307,7 +337,8 @@ interface StructureTracker {
   structureReady: boolean;
   lastBullishBosLevel: number | null;
   lastBearishBosLevel: number | null;
-  lastChochLevel: number | null;
+  lastBullishChochTime: number | null;
+  lastBearishChochTime: number | null;
 }
 
 function hasInitialStructure(swings: SwingPoint[]): boolean {
@@ -329,7 +360,7 @@ function registerConfirmedSwing(tracker: StructureTracker, swing: SwingPoint): v
         tracker.lastBullishBosLevel = null;
       } else {
         tracker.lastLH = swing;
-        tracker.lastChochLevel = null;
+        tracker.lastBullishChochTime = null;
       }
     }
     tracker.prevHighSwing = swing;
@@ -338,7 +369,7 @@ function registerConfirmedSwing(tracker: StructureTracker, swing: SwingPoint): v
       swing.label = swing.price > tracker.prevLowSwing.price ? "HL" : "LL";
       if (swing.label === "HL") {
         tracker.lastHL = swing;
-        tracker.lastChochLevel = null;
+        tracker.lastBearishChochTime = null;
       } else {
         tracker.priorLL = tracker.lastLL;
         tracker.lastLL = swing;
@@ -394,9 +425,9 @@ function evaluateStructureBreak(
 
   if (tracker.trend === "bullish") {
     if (tracker.lastHL && close < tracker.lastHL.price) {
-      if (tracker.lastChochLevel !== tracker.lastHL.price) {
+      if (tracker.lastBearishChochTime !== tracker.lastHL.time) {
         pushStructureBreak(breaks, time, close, "CHoCH", "bearish", tracker.lastHL);
-        tracker.lastChochLevel = tracker.lastHL.price;
+        tracker.lastBearishChochTime = tracker.lastHL.time;
       }
       tracker.trend = "bearish";
       return true;
@@ -412,9 +443,9 @@ function evaluateStructureBreak(
 
   if (tracker.trend === "bearish") {
     if (tracker.lastLH && close > tracker.lastLH.price) {
-      if (tracker.lastChochLevel !== tracker.lastLH.price) {
+      if (tracker.lastBullishChochTime !== tracker.lastLH.time) {
         pushStructureBreak(breaks, time, close, "CHoCH", "bullish", tracker.lastLH);
-        tracker.lastChochLevel = tracker.lastLH.price;
+        tracker.lastBullishChochTime = tracker.lastLH.time;
       }
       tracker.trend = "bullish";
       return true;
@@ -469,7 +500,8 @@ export function detectStructure(klines: Kline[], swings: SwingPoint[], lookback 
     structureReady: false,
     lastBullishBosLevel: null,
     lastBearishBosLevel: null,
-    lastChochLevel: null,
+    lastBullishChochTime: null,
+    lastBearishChochTime: null,
   };
 
   let swingCursor = 0;

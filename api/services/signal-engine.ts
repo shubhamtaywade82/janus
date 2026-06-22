@@ -91,7 +91,16 @@ export async function runAnalysisForSymbol(binanceSymbol: string) {
       if (knnSnapshot) signalEvents.emit("knn-snapshot", { symbol: binanceSymbol, snapshot: knnSnapshot });
     }
 
-    const signalData = await evaluateSymbolSignalAsync(pair.coindcx, strategy, currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraMetrics);
+    let signalData = await evaluateSymbolSignalAsync(pair.coindcx, strategy, currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraMetrics);
+
+    // Evaluate Alpha Protocol in parallel
+    if (strategy !== "alpha_protocol") {
+      const alphaSignalData = await evaluateSymbolSignalAsync(pair.coindcx, "alpha_protocol", currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraMetrics);
+      // If Alpha Protocol finds a strong setup, it overrides the base regime strategy for this tick
+      if (alphaSignalData.direction !== "neutral" && alphaSignalData.score >= 75) {
+        signalData = alphaSignalData;
+      }
+    }
 
     if (knnSnapshot) {
       signalData.metadata = { ...(signalData.metadata as object), knn: knnSnapshot };

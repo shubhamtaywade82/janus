@@ -22,6 +22,7 @@ import { LiquiditySweepPrimitive, type SweepMarker } from "@/lib/chart/primitive
 import { VolumeProfilePrimitive } from "@/lib/chart/primitives/VolumeProfilePrimitive";
 import { OrderBookDepthPrimitive } from "@/lib/chart/primitives/OrderBookDepthPrimitive";
 import { LastPriceLinePrimitive } from "@/lib/chart/primitives/LastPriceLinePrimitive";
+import { PremiumDiscountPrimitive } from "@/lib/chart/primitives/PremiumDiscountPrimitive";
 
 import type { OverlayToggles } from "@/components/ChartOverlayPanel";
 import type { IndicatorConfig } from "@/components/IndicatorPanel";
@@ -232,6 +233,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
   const obPrimRef = useRef<OrderBlockPrimitive | null>(null);
   const fvgPrimRef = useRef<FVGPrimitive | null>(null);
   const strPrimRef = useRef<StructurePrimitive | null>(null);
+  const pdPrimRef = useRef<PremiumDiscountPrimitive | null>(null);
   const sessionPrimRef = useRef<SessionShadingPrimitive | null>(null);
   const tooltipPrimRef = useRef<CrosshairTooltipPrimitive | null>(null);
   const sweepPrimRef = useRef<LiquiditySweepPrimitive | null>(null);
@@ -632,6 +634,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
       obPrimRef.current = null;
       fvgPrimRef.current = null;
       strPrimRef.current = null;
+      pdPrimRef.current = null;
       markersPluginRef.current = null;
       obvSeriesRef.current = null;
       priceLineSeriesRef.current = null;
@@ -660,6 +663,11 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
       const sweepPrim = new LiquiditySweepPrimitive();
       candlestickSeriesRef.current.attachPrimitive(sweepPrim);
       obPrimRef.current = obPrim;
+      
+      const pdPrim = new PremiumDiscountPrimitive();
+      candlestickSeriesRef.current.attachPrimitive(pdPrim);
+      pdPrimRef.current = pdPrim;
+
       fvgPrimRef.current = fvgPrim;
       strPrimRef.current = strPrim;
       sessionPrimRef.current = sessionPrim;
@@ -678,6 +686,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
       obPrimRef.current = null;
       fvgPrimRef.current = null;
       strPrimRef.current = null;
+      pdPrimRef.current = null;
       sessionPrimRef.current = null;
       tooltipPrimRef.current = null;
       sweepPrimRef.current = null;
@@ -1013,6 +1022,14 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
       tog?.liquidity && pa?.liquidity ? pa.liquidity : [],
       tog?.swings && pa?.swings ? pa.swings : []
     );
+
+    // Premium / Discount
+    if (pdPrimRef.current) {
+      pdPrimRef.current.setZone(
+        tog?.premiumDiscount && pa?.premiumDiscount ? pa.premiumDiscount : null,
+        pa?.swings ?? []
+      );
+    }
 
     // Swing markers + displacement markers — create plugin lazily on first use
     if (!markersPluginRef.current && candlestickSeriesRef.current) {
