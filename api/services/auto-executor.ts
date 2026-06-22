@@ -830,6 +830,25 @@ private async calculateSizing(params: {
     console.warn(`[auto-executor] Failed to fetch Kronos signal for sizing:`, err);
   }
 
+  // ── 0. Fetch ATR for Alpha Protocol sizing ──
+  let atr = 0;
+  try {
+    const cleanSym = params.signal.symbol.replace(/^B-/, "").replace("_", "");
+    const klines = await fetchKlines(cleanSym, "1m", 30);
+    if (klines.length >= 2) {
+      const trs = klines.slice(1).map((k, i) => {
+        const prev = klines[i];
+        const high = parseFloat(k.high);
+        const low = parseFloat(k.low);
+        const prevClose = parseFloat(prev.close);
+        return Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+      });
+      atr = trs.reduce((s, v) => s + v, 0) / trs.length;
+    }
+  } catch (err) {
+    console.warn(`[auto-executor] Volatility sizing check failed for ${params.signal.symbol}:`, err);
+  }
+
   // ── 1. Determine Stop Loss and Take Profit Percentages first ──
   let slPct = advisorAdvice?.stopLossPct ?? (sigMetadata?.stopLossPct ? parseFloat(String(sigMetadata.stopLossPct)) : parseFloat(config.stopLossPct ?? "0.015"));
   let tp1Pct = advisorAdvice?.takeProfitPct ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
@@ -842,6 +861,14 @@ private async calculateSizing(params: {
   if (brainHasAuthority && brainResult) {
     if (brainResult.adjustedSlPct !== undefined) slPct = brainResult.adjustedSlPct / 100;
     if (brainResult.adjustedTpPct !== undefined) tp1Pct = brainResult.adjustedTpPct / 100;
+  } else if (atr > 0) {
+    // Alpha Protocol ATR-based stop loss (Multiplier = 2)
+    slPct = (2.0 * atr) / currentPrice;
+    
+    // Automatically set TP to 2R if not provided by brain
+    if (!advisorAdvice?.takeProfitPct && !sigMetadata?.takeProfitPct) {
+      tp1Pct = slPct * 2.0;
+    }
   }
 
   const minSlPct = SYMBOL_MIN_SL_PCT[params.signal.symbol as SupportedSymbol] ?? DEFAULT_MIN_SL_PCT;
@@ -876,10 +903,10 @@ private async calculateSizing(params: {
       notional = availEquityUsdt;
     }
   } else {
-    // 70/30 Asymmetric allocation (ponytail: simple sizing multiplier)
-    const isLongSide = String(side).toLowerCase() === "long";
-    const directionMultiplier = isLongSide ? 1.4 : 0.6;
-    const baseNotional = availEquityUsdt * baseAllocPct * convictionMult * directionMultiplier;
+    // Alpha Protocol: Account Risk = 1.5% of Equity
+    const riskPct = 0.015;
+    const accountRisk = availEquityUsdt * riskPct * convictionMult;
+    const baseNotional = accountRisk / slPct;
     
     // Default fallback size (prevent micro-sizes in highly penalized conditions)
     const defaultMinSize = parseFloat(config.defaultSizeUsdt ?? "50");
@@ -892,31 +919,18 @@ private async calculateSizing(params: {
     notional = brainResult.adjustedSizeUsdt;
   }
 
-  // ── Volatility-based position sizing ──
-  // If ATR > 5% of price, halve the position size
-  try {
-    const cleanSym = params.signal.symbol.replace(/^B-/, "").replace("_", "");
-    const klines = await fetchKlines(cleanSym, "1m", 30);
-    if (klines.length >= 2) {
-      const trs = klines.slice(1).map((k, i) => {
-        const prev = klines[i];
-        const high = parseFloat(k.high);
-        const low = parseFloat(k.low);
-        const prevClose = parseFloat(prev.close);
-        return Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
-      });
-      const atr = trs.reduce((s, v) => s + v, 0) / trs.length;
-      const currentPrice = parseFloat(klines[klines.length - 1].close);
-      if (currentPrice > 0) {
-        const atrPct = atr / currentPrice;
-        if (atrPct > 0.05) {
-          notional *= 0.5;
-          console.log(`[auto-executor] Volatility regime EXTREME: ATR ${(atrPct * 100).toFixed(2)}% > 5% — halving size for ${params.signal.symbol}`);
-        }
-      }
+  // ── 3. Alpha Protocol Enforcements ──
+  const rrr = tp1Pct / slPct;
+  if (rrr < 1.5) {
+    return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: `RRR ${rrr.toFixed(2)} < 1.5`, skipGate: "rrr_filter" };
+  }
+  
+  if (atr > 0) {
+    const atrPct = atr / currentPrice;
+    if (atrPct > 0.05) {
+      notional *= 0.5;
+      console.log(`[auto-executor] Volatility regime EXTREME: ATR ${(atrPct * 100).toFixed(2)}% > 5% — halving size for ${params.signal.symbol}`);
     }
-  } catch (err) {
-    console.warn(`[auto-executor] Volatility sizing check failed for ${params.signal.symbol}:`, err);
   }
 
   const strategyMaxLev = STRATEGY_CONFIGS[strategyType]?.maxLeverage ?? 5;
@@ -1213,7 +1227,7 @@ private async executePosition(params: {
           },
         });
 
-        if (!params.disableTrailing) {
+        if (!params.disableTrailing && !params.symbol.includes("XRP")) {
           registerPositionForTrailing({
             id: posId,
             symbol: params.symbol,

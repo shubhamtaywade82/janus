@@ -12,6 +12,7 @@ import {
   evaluateBBReversion,
   evaluateMLSizing,
   evaluateScalpingMicro,
+  evaluateAlphaProtocol,
 } from "../strategies";
 
 describe("Technical Indicators", () => {
@@ -151,5 +152,32 @@ describe("Strategy Rules Evaluation", () => {
     const result = evaluateScalpingMicro(100, orderBook, tradeTape, 60);
     expect(result.direction).toBe("long");
     expect(result.isGated).toBe(true);
+  });
+  it("should evaluate Alpha Protocol - Squeeze", () => {
+    const prices = Array.from({ length: 60 }, (_, i) => 100 + i * 0.1);
+    const highs = prices.map(p => p + 1);
+    const lows = prices.map(p => p - 1);
+    const orderBook = { bidDepth: 100, askDepth: 100, spread: 0.1, spreadPercent: 0.1, imbalance: 0, midPrice: 100 };
+    const tradeTape = { buyVolume: 100, sellVolume: 50, delta: 50, makerRatio: 0.5, avgTradeSize: 10, tradeCount: 15 };
+    const extraMetrics = { fundingRate: -0.005, openInterestChange: 0.1 };
+    
+    const result = evaluateAlphaProtocol(105, prices, highs, lows, orderBook, tradeTape, extraMetrics, 75);
+    expect(result.direction).toBe("long");
+    expect(result.score).toBe(85);
+    expect(result.metadata.activeTrigger).toBe("squeeze");
+  });
+
+  it("should evaluate Alpha Protocol - Breakout", () => {
+    const prices = Array.from({ length: 60 }, (_, i) => 100 + i * 0.5); // Strong uptrend
+    const highs = prices.map(p => p + 1);
+    const lows = prices.map(p => p - 1);
+    const orderBook = { bidDepth: 100, askDepth: 100, spread: 0.1, spreadPercent: 0.1, imbalance: 0, midPrice: 100 };
+    const tradeTape = { buyVolume: 100, sellVolume: 100, delta: 0, makerRatio: 0.5, avgTradeSize: 10, tradeCount: 15 };
+    
+    // Set current price high enough to break out of recent high
+    const result = evaluateAlphaProtocol(140, prices, highs, lows, orderBook, tradeTape, {}, 75);
+    expect(result.direction).toBe("long");
+    expect(result.score).toBe(80);
+    expect(result.metadata.activeTrigger).toBe("breakout");
   });
 });

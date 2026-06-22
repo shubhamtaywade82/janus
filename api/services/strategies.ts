@@ -431,3 +431,84 @@ export function evaluateScalpingMicro(
     },
   };
 }
+
+// 6. Alpha Protocol - Regime-Aware Priority Entry
+export function evaluateAlphaProtocol(
+  currentPrice: number,
+  prices: number[],
+  highs: number[],
+  lows: number[],
+  orderBook: OrderBookMetrics,
+  tradeTape: TradeTapeMetrics,
+  extraMetrics?: any,
+  threshold = 75
+): { score: number; direction: "long" | "short" | "neutral"; isGated: boolean; metadata: any } {
+  if (prices.length < 50) {
+    return { score: 50, direction: "neutral", isGated: false, metadata: {} };
+  }
+
+  let score = 50;
+  let direction: "long" | "short" | "neutral" = "neutral";
+  let activeTrigger = "none";
+
+  const rsi = calculateRSI(prices, 14);
+  const curRsi = rsi[rsi.length - 1];
+  
+  const atr = prices.length >= 30 ? (Math.max(...highs.slice(-14)) - Math.min(...lows.slice(-14))) / 14 : 0;
+  
+  // 1. Breakout & Retest
+  const recentHigh = Math.max(...highs.slice(-30, -5));
+  const recentLow = Math.min(...lows.slice(-30, -5));
+  
+  // 2. Mean Reversion
+  const bands = calculateBollingerBands(prices, 20, 2);
+  const curLower = bands.lower[bands.lower.length - 1] ?? 0;
+  const curUpper = bands.upper[bands.upper.length - 1] ?? 0;
+
+  // 3. Squeeze Setup (High OI, negative funding, upward tape)
+  const isSqueeze = (extraMetrics?.fundingRate ?? 0) < -0.001 && (extraMetrics?.openInterestChange ?? 0) > 0.05 && tradeTape.delta > 0;
+  
+  // 4. Cascade Setup (Liquidation spike, exhaustion)
+  const isCascade = (extraMetrics?.liquidityRemoved ?? 0) > 100000 && tradeTape.delta > 0 && curRsi < 30; // proxy for liquidations
+
+  if (isSqueeze) {
+    score = 85;
+    direction = "long";
+    activeTrigger = "squeeze";
+  } else if (isCascade) {
+    score = 85;
+    direction = "long";
+    activeTrigger = "cascade";
+  } else if (currentPrice > recentHigh && curRsi > 50) {
+    // Breakout logic
+    score = 80;
+    direction = "long";
+    activeTrigger = "breakout";
+  } else if (currentPrice < recentLow && curRsi < 50) {
+    score = 80;
+    direction = "short";
+    activeTrigger = "breakdown";
+  } else if (currentPrice <= curLower && curRsi < 35) {
+    // Mean reversion
+    score = 78;
+    direction = "long";
+    activeTrigger = "mean_reversion";
+  } else if (currentPrice >= curUpper && curRsi > 65) {
+    score = 78;
+    direction = "short";
+    activeTrigger = "mean_reversion";
+  }
+
+  const isGated = score >= threshold;
+  return {
+    score,
+    direction: isGated ? direction : "neutral",
+    isGated,
+    metadata: {
+      activeTrigger,
+      rsi: curRsi,
+      atr,
+      triggerReason: activeTrigger,
+    },
+  };
+}

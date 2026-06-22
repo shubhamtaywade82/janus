@@ -47,7 +47,7 @@ const Dashboard = () => {
   });
   const [leverage, setLeverage] = useState(1);
   const [orderSize, setOrderSize] = useState("");
-  const [strategyType, setStrategyType] = useState<"scalping" | "intraday" | "swing">("intraday");
+  const [strategyType, setStrategyType] = useState<"scalping" | "intraday" | "swing" | "alpha_protocol">("intraday");
   const [sidebarTab, setSidebarTab] = useState<"trade" | "auto" | "market">(() => {
     if (typeof window !== "undefined") {
       const saved = localStorage.getItem("janus_dashboard_sidebar_tab");
@@ -1011,7 +1011,7 @@ const Dashboard = () => {
             )}
           </div>
 
-          <div className={cn("flex-1 flex flex-col overflow-hidden", sidebarTab !== "auto" && "hidden")}>
+          <div className={cn("flex-1 flex flex-col overflow-y-auto scrollbar-thin", sidebarTab !== "auto" && "hidden")}>
             {/* AutoTrader Panel */}
             <div className="px-3 py-2 border-b border-white/[0.06]">
               <AutoTraderPanel userId={1} />

@@ -20,6 +20,7 @@ import { checkCorrelation } from "./correlation-guard";
 import { globalRiskEngine, type RiskSession } from "./risk-engine";
 import { knnSnapshotCache } from "./knn-supertrend";
 import { walletToUsdt } from "./paper-currency";
+import { isBtcDumping } from "./btc-anchor";
 
 export interface GovernorContext {
   signal: Signal;
@@ -55,6 +56,14 @@ export class Governor {
       : signal.symbol;
     const side = signal.direction as "long" | "short";
     const metadata = signal.metadata as Record<string, unknown> | null;
+
+    // Gate 0: BTC Market Anchor
+    if (side === "long") {
+      const btcDumping = await isBtcDumping();
+      if (btcDumping) {
+        return { approved: false, gate: "btc_anchor", reason: "BTC is dumping (>3% in 1hr) — LONG entries paused" };
+      }
+    }
 
     // Gate 1: symbol in target list
     if (!targetSymbols.includes(symbol)) {

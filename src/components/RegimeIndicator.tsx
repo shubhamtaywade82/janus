@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { Activity, TrendingUp, Zap, AlertTriangle, RefreshCw } from "lucide-react";
 
 type RegimeType = "ranging_tight" | "ranging" | "reversal" | "intraday_trend" | "swing_trend" | "high_volatility";
-type StrategyType = "scalping_micro" | "scalping" | "bb_reversion" | "momentum_reversal" | "intraday" | "swing" | "grid" | "ml_sizing";
+type StrategyType = "scalping_micro" | "scalping" | "bb_reversion" | "momentum_reversal" | "intraday" | "swing" | "grid" | "ml_sizing" | "h6_momentum" | "alpha_protocol";
 
 const REGIME_CFG: Record<RegimeType, { label: string; color: string; icon: React.ReactNode }> = {
   ranging_tight:   { label: "RANGING",   color: "text-[#a855f7] border-[#a855f7]/30 bg-[#a855f7]/10", icon: <Zap size={9} /> },
@@ -20,10 +20,12 @@ const STRATEGY_LABEL: Record<StrategyType, string> = {
   scalping:           "Scalping",
   bb_reversion:       "BB Revert",
   momentum_reversal:  "Mom. Reversal",
-  intraday:           "Intraday",
-  swing:              "Swing",
-  grid:               "Grid",
+  intraday:           "Intraday Trend",
+  swing:              "Swing Trend",
+  grid:               "Grid / Range",
   ml_sizing:          "ML Sizing",
+  h6_momentum:        "H6 Momentum",
+  alpha_protocol:     "Alpha Protocol"
 };
 
 export function RegimeIndicator({ symbol = "BTCUSDT" }: { symbol?: string }) {

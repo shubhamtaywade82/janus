@@ -37,6 +37,7 @@ export const strategyTypeEnum = pgEnum("strategy_type", [
   "ml_sizing",
   "scalping_micro",
   "h6_momentum",
+  "alpha_protocol",
 ]);
 
 // ─── Users Table (Auth) ───

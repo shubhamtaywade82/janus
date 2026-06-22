@@ -6,7 +6,8 @@ export type StrategyType =
   | "bb_reversion"
   | "ml_sizing"
   | "scalping_micro"
-  | "h6_momentum";
+  | "h6_momentum"
+  | "alpha_protocol";
 
 export interface StrategyWeights {
   micro: number;
@@ -141,6 +142,18 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     minPostBreakevenSlPct: 0.0050, // 0.5% min width after breakeven
     tp1ActivationThresholdPct: 0.25, // Activate trailing at 25% of target
     minAdverseMovePct: 0.0020, // 0.2% adverse filter
+    preferLimitEntry: true,
+  },
+  alpha_protocol: {
+    type: "alpha_protocol",
+    weights: { micro: 0.20, intra: 0.50, swing: 0.30 },
+    threshold: 75,
+    takerFeeRate: 0.0005,
+    signalIntervalMs: 30_000,
+    maxLeverage: 10,
+    minPostBreakevenSlPct: 0.003,
+    tp1ActivationThresholdPct: 0.30,
+    minAdverseMovePct: 0.002,
     preferLimitEntry: true,
   },
 };

@@ -279,7 +279,7 @@ export function AutoTraderPanel(_props: { userId?: number }) {
 
       {/* Settings panel */}
       {expanded && (
-        <div className="border-t border-[#27272a] p-3 space-y-3 bg-[#0a0a0a]">
+        <div className="border-t border-[#27272a] p-3 space-y-3 bg-[#0a0a0a] max-h-[400px] overflow-y-auto scrollbar-thin">
           {/* Target symbols */}
           <div>
             <div className="text-[9px] text-[#71717a] mb-1.5">Target symbols</div>

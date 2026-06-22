@@ -17,6 +17,7 @@ import { env } from "../lib/env";
 const strategyTypeSchema = z.enum([
   "intraday", "swing", "grid",
   "momentum_reversal", "bb_reversion", "ml_sizing", "scalping_micro", "h6_momentum",
+  "alpha_protocol",
 ]);
 
 export const botRouter = createRouter({
