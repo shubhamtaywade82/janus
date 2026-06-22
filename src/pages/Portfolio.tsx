@@ -395,11 +395,23 @@ export default function Portfolio() {
   }, []);
 
   // Respect portfolio mode: live tab shows live, paper tab shows paper
-  const allPositions = statusFilter !== "open"
-    ? (dbPositions || []).filter((p: any) => portfolioMode === "live" ? !p.isPaper : p.isPaper)
-    : portfolioMode === "live"
-      ? openLivePositions
-      : paperPositions;
+  const allPositions = useMemo(() => {
+    const rawList = statusFilter !== "open"
+      ? (dbPositions || []).filter((p: any) => portfolioMode === "live" ? !p.isPaper : p.isPaper)
+      : portfolioMode === "live"
+        ? openLivePositions
+        : paperPositions;
+
+    // Sort deterministically: newest first (createdAt descending), then fallback to symbol and id
+    return [...rawList].sort((a: any, b: any) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      if (timeB !== timeA) return timeB - timeA;
+      const symCompare = (a.symbol || "").localeCompare(b.symbol || "");
+      if (symCompare !== 0) return symCompare;
+      return (b.id || 0) - (a.id || 0);
+    });
+  }, [statusFilter, dbPositions, portfolioMode, openLivePositions, paperPositions]);
 
   // Query historical positions and trades for tax metrics (always live only)
   const { data: closedPositions } = trpc.trading.positions.useQuery(

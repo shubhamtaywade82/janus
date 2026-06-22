@@ -72,6 +72,9 @@ Different parts of the system use different formats. Always handle conversion pr
 
 Whenever you introduce a new feature, fix a bug, or change system behaviors, log it here.
 
+### [2026-06-23] Deterministic Position List Sorting
+* **UI Row Shifting Fix**: Fixed an issue where the rows in the "Open Positions" table on the Portfolio page kept changing order/swapping positions. This was caused by the database query retrieving open positions without a deterministic `orderBy` clause. Because PostgreSQL physical page indexes shift when rows are updated (e.g. when stop losses or mark prices update every few seconds), the backend output sequence fluctuated. Wrapped `allPositions` in a `useMemo` on the frontend that sorts positions deterministically by creation time (`createdAt` descending), falling back to symbol name and database ID.
+
 ### [2026-06-22] Trailing Stop Whipsaw Fix & Activation Threshold
 * **Widest Candidate Selection**: Fixed a critical bug in `trailing-stop.ts` where `tightestStopCandidate` was still being used despite comments indicating the strategy should use the candidate with the MOST room. Renamed to `widestStopCandidate` and inverted `Math.max`/`Math.min` logic so the system correctly defers to wider protective measures (like 2x ATR) instead of hugging the price and stopping out on noise.
 * **Trailing Activation Minimum**: Enforced an absolute profit threshold scaling with the strategy's `trailPct` before the trailing stop engine is allowed to begin ratcheting. For example, Scalping waits for +0.5% profit, while Swing waits for +5.0% profit. This prevents the "chop killer" effect where the spread and micro-fluctuations would trigger premature trails immediately upon entry.
