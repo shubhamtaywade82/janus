@@ -31,6 +31,7 @@ import { latestTickerCache } from "./streaming";
 import { marketStateManager } from "./market-state";
 import { markPriceCache, tradingEvents } from "./coindcx-ws";
 import { fetchKlines } from "./binance";
+import { evaluateWindow, type BinanceCandle } from "./noise-metrics";
 import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo, getOrderStatus, cancelOrder } from "./coindcx";
 import { registerPositionForTrailing, unregisterPosition } from "./trailing-stop";
 import { STRATEGY_CONFIGS } from "./strategy-config";
@@ -830,28 +831,81 @@ private async calculateSizing(params: {
     console.warn(`[auto-executor] Failed to fetch Kronos signal for sizing:`, err);
   }
 
-  // ── 0. Fetch ATR for Alpha Protocol sizing ──
+  // ── 0. Fetch Noise Metrics (ATR, KER, StdDev) ──
   let atr = 0;
-  try {
-    const cleanSym = params.signal.symbol.replace(/^B-/, "").replace("_", "");
-    const klines = await fetchKlines(cleanSym, "1m", 30);
-    if (klines.length >= 2) {
-      const trs = klines.slice(1).map((k, i) => {
-        const prev = klines[i];
-        const high = parseFloat(k.high);
-        const low = parseFloat(k.low);
-        const prevClose = parseFloat(prev.close);
-        return Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
-      });
-      atr = trs.reduce((s, v) => s + v, 0) / trs.length;
+  let slPct = 0;
+  let tp1Pct = 0;
+  
+  if (context.isPaperMode) {
+    try {
+      const cleanSym = params.signal.symbol.replace(/^B-/, "").replace("_", "");
+      let interval = "1m";
+      let lookback = 50;
+      let multiplier = 1.5;
+      
+      if (strategyType === "swing") {
+        interval = "1h";
+        lookback = 50;
+        multiplier = 3.0;
+      } else if (strategyType === "intraday" || strategyType === "alpha_protocol") {
+        interval = "5m";
+        lookback = 50;
+        multiplier = 2.0;
+      }
+      
+      const klinesRaw = await fetchKlines(cleanSym, interval as any, lookback);
+      if (klinesRaw.length > 20) {
+        const binanceCandles: BinanceCandle[] = klinesRaw.map(k => ({
+          timestamp: k.timestamp,
+          open: parseFloat(k.open),
+          high: parseFloat(k.high),
+          low: parseFloat(k.low),
+          close: parseFloat(k.close),
+          volume: parseFloat(k.volume)
+        }));
+        
+        const metrics = evaluateWindow(binanceCandles);
+        atr = metrics.atr;
+        
+        if (metrics.isNoisy) {
+          return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: `Market is pure noise (KER: ${metrics.ker.toFixed(2)} < 0.3)`, skipGate: "noise_filter" };
+        }
+        
+        // Dynamic SL via multiplier
+        slPct = (multiplier * atr) / currentPrice;
+      }
+    } catch (err) {
+      console.warn(`[auto-executor] Noise metrics calculation failed for ${params.signal.symbol}:`, err);
     }
-  } catch (err) {
-    console.warn(`[auto-executor] Volatility sizing check failed for ${params.signal.symbol}:`, err);
+  } else {
+    // Legacy Alpha Protocol simple ATR fallback for Live
+    try {
+      const cleanSym = params.signal.symbol.replace(/^B-/, "").replace("_", "");
+      const klines = await fetchKlines(cleanSym, "1m", 30);
+      if (klines.length >= 2) {
+        const trs = klines.slice(1).map((k, i) => {
+          const prev = klines[i];
+          const high = parseFloat(k.high);
+          const low = parseFloat(k.low);
+          const prevClose = parseFloat(prev.close);
+          return Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+        });
+        atr = trs.reduce((s, v) => s + v, 0) / trs.length;
+      }
+    } catch (err) {
+      console.warn(`[auto-executor] Volatility sizing check failed for ${params.signal.symbol}:`, err);
+    }
   }
 
   // ── 1. Determine Stop Loss and Take Profit Percentages first ──
-  let slPct = advisorAdvice?.stopLossPct ?? (sigMetadata?.stopLossPct ? parseFloat(String(sigMetadata.stopLossPct)) : parseFloat(config.stopLossPct ?? "0.015"));
-  let tp1Pct = advisorAdvice?.takeProfitPct ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
+  const baseSlPct = advisorAdvice?.stopLossPct ?? (sigMetadata?.stopLossPct ? parseFloat(String(sigMetadata.stopLossPct)) : parseFloat(config.stopLossPct ?? "0.015"));
+  const baseTp1Pct = advisorAdvice?.takeProfitPct ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
+  
+  if (slPct === 0) {
+    slPct = baseSlPct;
+  }
+  
+  tp1Pct = baseTp1Pct;
 
   if (config.trailingStopEnabled === false) {
     const rr = parseFloat(config.riskRewardRatio ?? "2.00");
@@ -861,14 +915,14 @@ private async calculateSizing(params: {
   if (brainHasAuthority && brainResult) {
     if (brainResult.adjustedSlPct !== undefined) slPct = brainResult.adjustedSlPct / 100;
     if (brainResult.adjustedTpPct !== undefined) tp1Pct = brainResult.adjustedTpPct / 100;
-  } else if (atr > 0) {
-    // Alpha Protocol ATR-based stop loss (Multiplier = 2)
+  } else if (!context.isPaperMode && atr > 0) {
+    // Alpha Protocol ATR-based stop loss for Live (Multiplier = 2)
     slPct = (2.0 * atr) / currentPrice;
-    
-    // Automatically set TP to 2R if not provided by brain
-    if (!advisorAdvice?.takeProfitPct && !sigMetadata?.takeProfitPct) {
-      tp1Pct = slPct * 2.0;
-    }
+  }
+  
+  // Automatically set TP to 2R if not provided by brain and not statically overridden
+  if (atr > 0 && !advisorAdvice?.takeProfitPct && !sigMetadata?.takeProfitPct) {
+    tp1Pct = slPct * 2.0;
   }
 
   const minSlPct = SYMBOL_MIN_SL_PCT[params.signal.symbol as SupportedSymbol] ?? DEFAULT_MIN_SL_PCT;

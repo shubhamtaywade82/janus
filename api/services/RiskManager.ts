@@ -75,7 +75,7 @@ export class RiskManager {
 
     if (!account || new Decimal(account.availableBalance).lt(requiredMargin)) {
       throw new Error(
-        `Risk Breach: Insufficient margin. Allocated: ${requiredMargin.toFixed(8)} ${currency} required.`
+        `Risk Breach: Insufficient margin. Required: ${requiredMargin.toFixed(8)} ${currency}. Available: ${account ? new Decimal(account.availableBalance).toFixed(8) : "0"} ${currency}.`
       );
     }
 

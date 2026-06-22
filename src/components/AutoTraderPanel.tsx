@@ -386,7 +386,7 @@ export function AutoTraderPanel(_props: { userId?: number }) {
             )}
             {form.useStrategyLeverage && (
               <div className="text-[8px] text-[#52525b] mt-1">
-                scalping_micro=10x · scalping=10x · bb_reversion=8x · intraday=15x · swing=5x (min)
+                bb_reversion=8x · intraday=15x · swing=5x · grid=5x · h6_momentum=10x
               </div>
             )}
           </div>

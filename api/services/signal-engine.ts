@@ -16,7 +16,6 @@ import {
   evaluateMomentumReversal,
   evaluateBBReversion,
   evaluateMLSizing,
-  evaluateScalpingMicro,
   evaluateAlphaProtocol
 } from "./strategies";
 import {
@@ -155,7 +154,6 @@ async function evaluateSymbolSignalAsync(coindcxSymbol: string, strategy: Strate
   else if (strategy === "momentum_reversal") res = evaluateMomentumReversal(currentPrice, prices, config.threshold);
   else if (strategy === "bb_reversion") res = evaluateBBReversion(currentPrice, prices, config.threshold);
   else if (strategy === "ml_sizing") res = evaluateMLSizing(currentPrice, prices, highs, lows, config.threshold);
-  else if (strategy === "scalping_micro") res = evaluateScalpingMicro(currentPrice, obMetrics, tapeMetrics, config.threshold);
   else if (strategy === "alpha_protocol") res = evaluateAlphaProtocol(currentPrice, prices, highs, lows, obMetrics, tapeMetrics, extraMetrics, config.threshold);
   else {
     const analysis = analyzeConfluence(coindcxSymbol, obMetrics, tapeMetrics, prices, volumes, extraMetrics, config.weights, config.threshold);

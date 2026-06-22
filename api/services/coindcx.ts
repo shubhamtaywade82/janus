@@ -200,9 +200,9 @@ export async function getMarketsDetails(): Promise<any[]> {
 
 export async function getFuturesInstrumentInfo(symbol: string): Promise<any | null> {
   const data = await getMarketsDetails();
-  // symbol like "BTCUSDT" → pair "B-BTC_USDT"
-  const coindcxPair = `B-${symbol.replace("USDT", "_USDT")}`;
-  return data.find((m: any) => m.pair === coindcxPair || m.symbol === symbol) ?? null;
+  const coindcxPair = symbol.startsWith("B-") ? symbol : `B-${symbol.replace("USDT", "_USDT")}`;
+  const rawSymbol = symbol.startsWith("B-") ? symbol.replace(/^B-/, "").replace("_", "") : symbol;
+  return data.find((m: any) => m.pair === coindcxPair || m.symbol === rawSymbol) ?? null;
 }
 
 // ─── Order Operations ───

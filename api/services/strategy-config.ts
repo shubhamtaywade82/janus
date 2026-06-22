@@ -5,7 +5,6 @@ export type StrategyType =
   | "momentum_reversal"
   | "bb_reversion"
   | "ml_sizing"
-  | "scalping_micro"
   | "h6_momentum"
   | "alpha_protocol";
 
@@ -120,18 +119,7 @@ export const STRATEGY_CONFIGS: Record<StrategyType, StrategyConfig> = {
     minAdverseMovePct: 0.002,
     preferLimitEntry: true,
   },
-  scalping_micro: {
-    type: "scalping_micro",
-    weights: { micro: 0.80, intra: 0.15, swing: 0.05 },
-    threshold: 65,
-    takerFeeRate: 0.0005,
-    signalIntervalMs: 2_000,
-    maxLeverage: 10,
-    minPostBreakevenSlPct: 0.0015,
-    tp1ActivationThresholdPct: 0.20,
-    minAdverseMovePct: 0.001,
-    preferLimitEntry: false,
-  },
+
   h6_momentum: {
     type: "h6_momentum",
     weights: { micro: 0.10, intra: 0.30, swing: 0.60 },

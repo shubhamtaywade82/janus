@@ -72,6 +72,21 @@ Different parts of the system use different formats. Always handle conversion pr
 
 Whenever you introduce a new feature, fix a bug, or change system behaviors, log it here.
 
+### [2026-06-22] Trailing Stop Whipsaw Fix & Activation Threshold
+* **Widest Candidate Selection**: Fixed a critical bug in `trailing-stop.ts` where `tightestStopCandidate` was still being used despite comments indicating the strategy should use the candidate with the MOST room. Renamed to `widestStopCandidate` and inverted `Math.max`/`Math.min` logic so the system correctly defers to wider protective measures (like 2x ATR) instead of hugging the price and stopping out on noise.
+* **Trailing Activation Minimum**: Enforced an absolute profit threshold scaling with the strategy's `trailPct` before the trailing stop engine is allowed to begin ratcheting. For example, Scalping waits for +0.5% profit, while Swing waits for +5.0% profit. This prevents the "chop killer" effect where the spread and micro-fluctuations would trigger premature trails immediately upon entry.
+
+### [2026-06-22] Scalping Micro Strategy Removal
+* **Removed from StrategyType**: Removed `scalping_micro` from the `StrategyType` union in [strategy-config.ts](file:///home/nemesis/project/trading-workspace/janus/api/services/strategy-config.ts), along with its `STRATEGY_CONFIGS` entry, `TRAIL_PCT` entry, and Zod schema in [bot-router.ts](file:///home/nemesis/project/trading-workspace/janus/api/routers/bot-router.ts).
+* **Regime Remapping**: Changed `ranging_tight` regime mapping from `scalping_micro` to `grid` in [regime-detector.ts](file:///home/nemesis/project/trading-workspace/janus/api/services/regime-detector.ts). Tight-range markets now use grid trading instead.
+* **Signal Engine**: Removed `evaluateScalpingMicro` call path from [signal-engine.ts](file:///home/nemesis/project/trading-workspace/janus/api/services/signal-engine.ts). The function itself remains in `strategies.ts` as dead code for reference.
+* **Frontend**: Removed scalping from active strategy labels in `RegimeIndicator.tsx` and `AutoTraderPanel.tsx`. Historical positions with `scalping_micro` strategy type still render as "Micro Scalp (Legacy)".
+* **DB Schema**: `scalping` and `scalping_micro` values intentionally preserved in the `strategyTypeEnum` Postgres enum in `db/schema.ts` to avoid breaking queries against historical positions.
+
+### [2026-06-22] Instrument Precision Fix & Risk Manager Clarity
+* **Short Breakeven SL Precision Fix**: Fixed `getFuturesInstrumentInfo` in `coindcx.ts` to properly map `B-` prefixed symbols (e.g., `B-DOGE_USDT` -> `DOGEUSDT`). Previously, it returned `null`, causing `basePrecision` to fall back to `2`, which incorrectly rounded Stop Loss levels (e.g., `0.08319` -> `0.08`) and caused short positions to instantly hit stop loss logic (`SL 0.08 <= entry 0.08319`).
+* **Insufficient Margin Error Clarity**: Changed `RiskManager.ts` error message from "Allocated: X required" to "Required: X. Available: Y." to prevent user confusion. The system was functioning correctly by blocking identical large batch sizes during max allocation limits, but the phrasing made it seem like a mathematical failure.
+
 ### [2026-06-22] SMC Indicators Rendering Fix & AutoTrader Settings Scroll
 * **CHoCH/BOS Duplicate Text Fix**: Replaced price-based check (`lastChochLevel`) with time-based checks (`lastBullishChochTime` and `lastBearishChochTime`) in `StructureTracker` in [price-action.ts](file:///home/nemesis/project/trading-workspace/janus/api/services/price-action.ts). This prevents repeated rendering of CHoCH/BOS text labels (e.g. "CHoCHCHoCHCHoCH") caused by minor price whipsaws around the same swing point levels.
 * **Order Block & Liquidity Right-Margin Limit**: Bounded the horizontal draw of active Order Blocks in [OrderBlockPrimitive.ts](file:///home/nemesis/project/trading-workspace/janus/src/lib/chart/primitives/OrderBlockPrimitive.ts) and active Liquidity Levels in [StructurePrimitive.ts](file:///home/nemesis/project/trading-workspace/janus/src/lib/chart/primitives/StructurePrimitive.ts) to the latest candle index (via the series' last data point) instead of allowing them to extend indefinitely to the right edge of the screen into the future chart space/axes labels.

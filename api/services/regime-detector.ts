@@ -5,7 +5,7 @@ import type { StrategyType } from "./strategy-config";
 import { getKronosSignal } from "./kronos-client";
 
 export type RegimeType =
-  | "ranging_tight"     // ADX<15, spread<0.02% → scalping_micro
+  | "ranging_tight"     // ADX<15, spread<0.02% → grid
   | "ranging"           // ADX<20, moderate spread → bb_reversion
   | "reversal"          // ADX 20-30, RSI extreme (<30 or >70) → momentum_reversal
   | "intraday_trend"    // ADX 20-30, trend building → intraday
@@ -37,7 +37,7 @@ regimeEvents.setMaxListeners(20);
 
 // ─── Regime → Strategy mapping ───
 export const REGIME_STRATEGY_MAP: Record<RegimeType, StrategyType> = {
-  ranging_tight:   "scalping_micro",  // ADX<15 + tight spread → scalp microstructure
+  ranging_tight:   "grid",            // ADX<15 + tight spread → grid trading
   ranging:         "bb_reversion",    // ADX<20 normal → mean-revert to BB middle
   reversal:        "momentum_reversal", // RSI extreme → catch exhaustion
   intraday_trend:  "intraday",         // ADX 20-30 → EMA + momentum
@@ -208,7 +208,7 @@ export async function detectRegimeForSymbol(binanceSymbol: string): Promise<Regi
     reversal:        `ADX ${adx1h.toFixed(1)} in trend + RSI ${rsi1h.toFixed(0)} extreme (Kronos bias: ${kronosBias}) — catch exhaustion`,
     intraday_trend:  `ADX ${adx1h.toFixed(1)} 20–30, EMA20 ${ema20_1h > ema50_1h ? ">" : "<"} EMA50 (Kronos bias: ${kronosBias}) — intraday momentum`,
     swing_trend:     `ADX ${adx1h.toFixed(1)} > 30, EMA50_4h ${ema50_4h > ema200_4h ? ">" : "<"} EMA200_4h (Kronos bias: ${kronosBias}) — sustained trend`,
-    high_volatility: `ATR ${atrPct1h.toFixed(2)}% > 2% — high vol, avoid micro scalping`,
+    high_volatility: `ATR ${atrPct1h.toFixed(2)}% > 2% — high vol, widening stops`,
   };
 
   return {

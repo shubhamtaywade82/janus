@@ -8,7 +8,6 @@ import { detectSwings, computeAtrArray, type Kline } from "./price-action";
 
 // Default trail % per strategy type
 export const TRAIL_PCT: Record<StrategyType, number> = {
-  scalping_micro: 0.005,  // 0.5% (was 0.3%)
   bb_reversion:   0.015,  // 1.5% (was 0.7%)
   momentum_reversal: 0.020, // 2.0% (was 0.8%)
   intraday:       0.025,  // 2.5% (was 1.0%)
@@ -16,6 +15,7 @@ export const TRAIL_PCT: Record<StrategyType, number> = {
   swing:          0.050,  // 5.0% (was 2.0%)
   ml_sizing:      0.025,  // 2.5% (was 1.5%)
   h6_momentum:    0.030,  // 3.0% (calibrated to paper alpha=3.0)
+  alpha_protocol: 0.020,
 };
 
 const TAKER_FEE = 0.0005;
@@ -83,16 +83,16 @@ tradingEvents.on("position-closed", (posId: number, symbol: string) => {
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
-function tightestStopCandidate(
+function widestStopCandidate(
   candidates: number[],
   side: "long" | "short"
 ): number | null {
   if (candidates.length === 0) return null;
-  // Long SL wants highest candidate (tightest stop below price).
-  // Short SL wants lowest candidate (tightest stop above price).
+  // Long SL wants lowest candidate (widest stop below price).
+  // Short SL wants highest candidate (widest stop above price).
   return side === "long"
-    ? Math.max(...candidates)
-    : Math.min(...candidates);
+    ? Math.min(...candidates)
+    : Math.max(...candidates);
 }
 
 // ─── Core Calculations ──────────────────────────────────────────────────────
@@ -121,7 +121,9 @@ export function calcNewTrailingStop(
   const tp = takeProfit ?? (side === "long" ? entryPrice * (1 + trailPct * 2) : entryPrice * (1 - trailPct * 2));
   const totalTargetProfit = Math.abs(tp - entryPrice);
   const currentProfit = side === "long" ? currentPrice - entryPrice : entryPrice - currentPrice;
-  const activationThreshold = totalTargetProfit * cfg.tp1ActivationThresholdPct;
+  // Enforce an absolute profit threshold before trailing starts, scaling with the strategy's trailing distance
+  const minAbsoluteThreshold = entryPrice * trailPct; 
+  const activationThreshold = Math.max(totalTargetProfit * cfg.tp1ActivationThresholdPct, minAbsoluteThreshold);
 
   if (currentProfit < activationThreshold) {
     // Price has not reached the activation threshold yet — do not trail
@@ -170,10 +172,10 @@ export function calcNewTrailingStop(
     // 3. Percentage trail
     candidates.push(currentPrice * (1 - trailPct));
 
-    // Tightest candidate for a long = the HIGHEST candidate. Then ratchet up only.
-    const tightest = tightestStopCandidate(candidates, "long");
-    if (tightest != null) {
-      newStop = Math.max(currentStop, tightest);
+    // Widest candidate for a long = the LOWEST candidate. Then ratchet up only.
+    const widest = widestStopCandidate(candidates, "long");
+    if (widest != null) {
+      newStop = Math.max(currentStop, widest);
     }
   } else {
     // 1. Swing high
@@ -189,10 +191,10 @@ export function calcNewTrailingStop(
     // 3. Percentage trail
     candidates.push(currentPrice * (1 + trailPct));
 
-    // Tightest candidate for a short = the LOWEST candidate. Then ratchet down only.
-    const tightest = tightestStopCandidate(candidates, "short");
-    if (tightest != null) {
-      newStop = Math.min(currentStop, tightest);
+    // Widest candidate for a short = the HIGHEST candidate. Then ratchet down only.
+    const widest = widestStopCandidate(candidates, "short");
+    if (widest != null) {
+      newStop = Math.min(currentStop, widest);
     }
   }
 
