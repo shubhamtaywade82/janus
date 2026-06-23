@@ -31,7 +31,7 @@ import {
 export const tradePriceTicks = pgTable(
   "trade_price_ticks",
   {
-    id: serial("id").primaryKey(),
+    id: integer("id").primaryKey(),
     tradeId: uuid("trade_id").notNull(), // matches pta_trades.id (UUID) once wired; nullable until then
     observedAt: timestamp("observed_at").notNull(),
     markPrice: decimal("mark_price", { precision: 18, scale: 8 }).notNull(),
@@ -50,7 +50,7 @@ export type TradePriceTick = typeof tradePriceTicks.$inferSelect;
 export const fundingEvents = pgTable(
   "funding_events",
   {
-    id: serial("id").primaryKey(),
+    id: integer("id").primaryKey(),
     tradeId: uuid("trade_id").notNull(),
     instrumentId: integer("instrument_id").notNull(),
     settledAt: timestamp("settled_at").notNull(),
@@ -70,7 +70,7 @@ export type FundingEvent = typeof fundingEvents.$inferSelect;
 export const systemEvents = pgTable(
   "system_events",
   {
-    id: serial("id").primaryKey(),
+    id: integer("id").primaryKey(),
     occurredAt: timestamp("occurred_at").defaultNow().notNull(),
     component: varchar("component", { length: 50 }).notNull(),
     eventType: varchar("event_type", { length: 50 }).notNull(),
