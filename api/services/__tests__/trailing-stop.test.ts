@@ -23,10 +23,13 @@ describe("calcNewTrailingStop — LONG", () => {
 });
 
 describe("calcNewTrailingStop — SHORT", () => {
-  it("moves stop down when price falls", () => {
-    // stop=101, price=98, trail=1%, entry=100 → candidate=98.98 < 101 → use 98.98
-    const s = calcNewTrailingStop("short", 101, 98, 0.01, [], 100);
-    expect(s).toBeCloseTo(98.98, 1);
+  it("keeps stop above entry via breakeven logic on deep move", () => {
+    // stop=101, price=99.3, trail=0.5%, entry=100
+    // breakeven triggers at price <= 99.5 (initialRisk = 0.5)
+    // The stop should be floored at breakeven (~100.15), never pushed below entry
+    const s = calcNewTrailingStop("short", 101, 99.3, 0.005, [], 100);
+    expect(s).toBeGreaterThan(100);
+    expect(s).toBeCloseTo(100.15, 1);
   });
 
   it("does NOT move stop up when price rises", () => {
@@ -38,7 +41,7 @@ describe("calcNewTrailingStop — SHORT", () => {
 describe("calcNewTrailingStop — SHORT breakeven at 1:1 RR", () => {
   const TAKER_FEE = 0.0005;
 
-  it("places breakeven BELOW entry (not above) with tight trail at 1:1 RR", () => {
+  it("places breakeven ABOVE entry (not below) with tight trail at 1:1 RR", () => {
     // entry=1000, trail=0.5%: initialRisk = 5. We test at 1:1 RR (price=995) to trigger breakeven
     const strategyCfg = {
       minPostBreakevenSlPct: 0.001, // 0.1% matches TAKER_FEE * 2
@@ -46,15 +49,16 @@ describe("calcNewTrailingStop — SHORT breakeven at 1:1 RR", () => {
       minAdverseMovePct: 0.001,
     };
     const stop = calcNewTrailingStop("short", 1005, 995, 0.005, [], 1000, strategyCfg);
-    expect(stop).toBeLessThan(1000); // must be below entry
-    expect(stop).toBeCloseTo(1000 * (1 - TAKER_FEE * 2), 2);
+    expect(stop).toBeGreaterThan(1000); // must be above entry
+    expect(stop).toBeCloseTo(1000 * (1 + TAKER_FEE * 2), 2);
   });
 
-  it("is a no-op when SL is already below breakeven", () => {
-    // entry=1000, trail=0.5%, SL already at 985 (well below entry)
-    const stop = calcNewTrailingStop("short", 985, 990, 0.005, [], 1000);
-    expect(stop).toBeLessThanOrEqual(985);
-    expect(stop).toBeLessThan(1000);
+  it("keeps tighter existing stop above breakeven", () => {
+    // entry=1000, trail=0.5%, SL already at 1001.5 (just above breakeven floor of 1001.5)
+    // price=990 is deep in profit, but candidate trail would lower stop to 994.95
+    // The stop should stay at the tighter existing value
+    const stop = calcNewTrailingStop("short", 1001.5, 990, 0.005, [], 1000);
+    expect(stop).toBeCloseTo(1001.5, 1);
   });
 
   it("LONG breakeven stays above entry at 1:1 RR", () => {

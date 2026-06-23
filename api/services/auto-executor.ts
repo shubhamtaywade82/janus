@@ -274,7 +274,7 @@ export class AutoExecutor {
     id: 0,
     userId: 1,
     enabled: true,
-    targetSymbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"],
+    targetSymbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"],
     defaultSizeUsdt: "50",
     defaultLeverage: 5,
     capitalAllocationPct: "0.250",   // 25% base allocation for paper (dynamic, conviction-scaled)

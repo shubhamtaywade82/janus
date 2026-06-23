@@ -308,9 +308,5 @@ export const SUPPORTED_PAIRS = [
   { binance: "BTCUSDT", coindcx: "B-BTC_USDT", name: "Bitcoin" },
   { binance: "ETHUSDT", coindcx: "B-ETH_USDT", name: "Ethereum" },
   { binance: "SOLUSDT", coindcx: "B-SOL_USDT", name: "Solana" },
-  { binance: "BNBUSDT", coindcx: "B-BNB_USDT", name: "BNB" },
   { binance: "XRPUSDT", coindcx: "B-XRP_USDT", name: "XRP" },
-  { binance: "ADAUSDT", coindcx: "B-ADA_USDT", name: "Cardano" },
-  { binance: "DOGEUSDT", coindcx: "B-DOGE_USDT", name: "Dogecoin" },
-  { binance: "AVAXUSDT", coindcx: "B-AVAX_USDT", name: "Avalanche" },
 ];

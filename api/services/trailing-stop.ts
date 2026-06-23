@@ -210,12 +210,12 @@ export function calcNewTrailingStop(
     const effectiveBreakeven = Math.max(breakeven, minSlAfterBreakeven);
     newStop = Math.max(newStop, effectiveBreakeven);
   } else if (side === "short" && currentPrice <= entryPrice - initialRisk) {
-    const breakeven = entryPrice * (1 - TAKER_FEE * 2);
+    const breakeven = entryPrice * (1 + TAKER_FEE * 2);
     // Once breakeven is on the table, enforce a minimum post-breakeven SL width
     // so the stop cannot tighten to within 2-3 ticks of the entry.
-    const minSlAfterBreakeven = entryPrice * (1 - cfg.minPostBreakevenSlPct);
-    const effectiveBreakeven = Math.min(breakeven, minSlAfterBreakeven);
-    newStop = Math.min(newStop, effectiveBreakeven);
+    const minSlAfterBreakeven = entryPrice * (1 + cfg.minPostBreakevenSlPct);
+    const effectiveBreakeven = Math.max(breakeven, minSlAfterBreakeven);
+    newStop = Math.max(newStop, effectiveBreakeven);
   }
 
   return newStop;

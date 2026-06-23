@@ -117,7 +117,7 @@ export async function executeAction(
           recommendation.newStopLoss ??
           (position.side === "LONG"
             ? position.entryPrice * (1 + TAKER_FEE * 2)
-            : position.entryPrice * (1 - TAKER_FEE * 2));
+            : position.entryPrice * (1 + TAKER_FEE * 2));
 
         if (!isSlImprovement(position.side, position.stopLoss, newSl)) {
           positionManagerBus.emit(
