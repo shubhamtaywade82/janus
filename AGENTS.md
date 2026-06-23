@@ -393,3 +393,9 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
   - `pta_slippage_by_hour` MV (unique index: symbol, utc_hour)
   - `pta_exit_attribution` MV (unique index: symbol, strategy, exit_reason)
 * **Data flow**: `signal-engine` → writes to `signals`; `auto-executor` → writes to `orders` on entry; `execution-manager` → writes to `position_transactions` on every action, and to `trades` on FULL_EXIT. Post-close MFE/MAE backfill is a future async job against `trade_price_ticks`.
+
+### [2026-06-23] PTA Workflow Fix — drizzle-kit push + raw-SQL VIEWs
+* `db:push` cannot introspect raw-SQL `VIEW`/`MATERIALIZED VIEW` objects. The derived layer (`pta_trade_summary` + 3 MVs) lives in `db/migrations/0027_pta_derived_layer.sql` and is re-applied via `npm run pta:views` after every `db:push`.
+* `npm run db:push` now includes a pre-drop of `pta_*` view/MV objects so push completes cleanly without drift errors.
+* The `pta_trade_summary`/`pta_*` materialized views are NOT defined in `db/pta-schema.ts` — drizzle-kit's transformer cannot parse raw SQL inside `pgView`/`pgMaterializedView` `.as(sql)`. Re-apply them manually when needed.
+* `npm run pta:views` applies `db/migrations/0027_pta_derived_layer.sql` directly to Postgres.
