@@ -109,8 +109,27 @@ export const signals = pgTable("signals", {
   direction: directionEnum("direction").default("neutral").notNull(),
   outcome: signalOutcomeEnum("outcome"), // set when linked position is closed
   metadata: jsonb("metadata"), // store indicator values
+  // ─── PTA extensions ───────────────────────────────────────────────────────
+  session: varchar("session", { length: 10 }), // ASIA | LONDON | US | OVERLAP
+  hoursToFunding: decimal("hours_to_funding", { precision: 5, scale: 2 }),
+  binanceMarkPrice: decimal("binance_mark_price", { precision: 18, scale: 8 }),
+  binanceIndexPrice: decimal("binance_index_price", { precision: 18, scale: 8 }),
+  binanceFundingRate: decimal("binance_funding_rate", { precision: 12, scale: 8 }),
+  binancePredictedRate: decimal("binance_predicted_rate", { precision: 12, scale: 8 }),
+  openInterestUsd: decimal("open_interest_usd", { precision: 20, scale: 2 }),
+  openInterestDelta: decimal("open_interest_delta", { precision: 20, scale: 2 }),
+  volume24hUsd: decimal("volume_24h_usd", { precision: 20, scale: 2 }),
+  atr14: decimal("atr_14", { precision: 18, scale: 8 }),
+  atrPercent: decimal("atr_percent", { precision: 8, scale: 4 }),
+  triggerDescription: text("trigger_description"),
+  triggerMetadata: jsonb("trigger_metadata").default("{}"),
+  disposition: varchar("disposition", { length: 30 }).default("PENDING"),
+  // PENDING | ORDER_PLACED | REJECTED_FILTER | REJECTED_RISK | EXPIRED | DUPLICATE
+  rejectionReason: text("rejection_reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  idxSignalsSession: index("idx_signals_session").on(table.session, table.createdAt),
+}));
 
 export type Signal = typeof signals.$inferSelect;
 
@@ -209,9 +228,30 @@ export const trades = pgTable(
     clientOrderId: varchar("client_order_id", { length: 255 }),
     executedAt: timestamp("executed_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
+    // ─── PTA extensions ──────────────────────────────────────────────────────
+    strategyType: strategyTypeEnum("strategy_type").default("intraday"),
+    stopLossPrice: decimal("stop_loss_price", { precision: 18, scale: 8 }),
+    takeProfitPrice: decimal("take_profit_price", { precision: 18, scale: 8 }),
+    trailingStopPct: decimal("trailing_stop_pct", { precision: 6, scale: 4 }),
+    grossPnlUsdt: decimal("gross_pnl_usdt", { precision: 18, scale: 8 }),
+    netPnlUsdt: decimal("net_pnl_usdt", { precision: 18, scale: 8 }),
+    totalFeesUsdt: decimal("total_fees_usdt", { precision: 18, scale: 8 }),
+    fundingPaidUsdt: decimal("funding_paid_usdt", { precision: 18, scale: 8 }).default("0"),
+    mfePrice: decimal("mfe_price", { precision: 18, scale: 8 }),
+    mfePct: decimal("mfe_pct", { precision: 8, scale: 4 }),
+    maePrice: decimal("mae_price", { precision: 18, scale: 8 }),
+    maePct: decimal("mae_pct", { precision: 8, scale: 4 }),
+    exitReason: varchar("exit_reason", { length: 30 }),
+    // TP_HIT | SL_HIT | TRAILING_STOP | MANUAL | LIQUIDATED | TIME_EXIT
+    holdingPeriodSeconds: integer("holding_period_seconds"),
+    binanceSignalPrice: decimal("binance_signal_price", { precision: 18, scale: 8 }),
+    coindcxFillPrice: decimal("coindcx_fill_price", { precision: 18, scale: 8 }),
+    slippageBps: decimal("slippage_bps", { precision: 10, scale: 4 }),
   },
   (table) => ({
     userIdPositionIdIdx: index("idx_trades_user_position").on(table.userId, table.positionId),
+    idxTradesSymbol: index("idx_trades_symbol").on(table.symbol, table.createdAt),
+    idxTradesExitReason: index("idx_trades_exit_reason").on(table.exitReason),
   })
 );
 
@@ -875,6 +915,17 @@ export const orders = pgTable("orders", {
     .defaultNow()
     .notNull()
     .$onUpdate(() => new Date()),
+  // ─── PTA extensions ────────────────────────────────────────────────────────
+  executionMode: varchar("execution_mode", { length: 20 }).default("PAPER"),
+  // PAPER | LIVE | SHADOW
+  fillModel: varchar("fill_model", { length: 30 }),
+  // MARK_PRICE | ORDERBOOK_WALK | SLIPPAGE_PENALTY | VWAP_ESTIMATE | WORST_CASE
+  simulatedSlippageBps: decimal("simulated_slippage_bps", { precision: 10, scale: 4 }),
+  binanceMarkPriceAtSend: decimal("binance_mark_price_at_send", { precision: 18, scale: 8 }),
+  orderConstructedAt: timestamp("order_constructed_at"),
+  orderSentAt: timestamp("order_sent_at"),
+  orderAckedAt: timestamp("order_acked_at"),
+  cancelReason: text("cancel_reason"),
 });
 
 export type Order = typeof orders.$inferSelect;
