@@ -197,6 +197,20 @@
       "when": 1782237346207,
       "tag": "0027_broken_leech",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1782238650961,
+      "tag": "0028_dusty_black_bolt",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1782238791212,
+      "tag": "0029_lumpy_quentin_quire",
+      "breakpoints": true
     }
   ]
 }

@@ -30,6 +30,12 @@ interface RecordTxInput {
   marginBefore?: number;
   marginAfter?: number;
   metadata?: Record<string, unknown>;
+  // ─── PTA extensions ──────────────────────────────────────────────────────
+  orderId?: number;
+  liquiditySide?: "MAKER" | "TAKER";
+  fillModel?: string;
+  simulatedSlippageBps?: number;
+  fillLatencyMs?: number;
 }
 
 /**
@@ -55,6 +61,12 @@ export async function recordPositionTransaction(input: RecordTxInput): Promise<v
       marginBefore: input.marginBefore !== undefined ? String(input.marginBefore) : undefined,
       marginAfter: input.marginAfter !== undefined ? String(input.marginAfter) : undefined,
       metadata: input.metadata ?? {},
+      // ─── PTA extensions ──────────────────────────────────────────────────────
+      orderId: input.orderId,
+      liquiditySide: input.liquiditySide,
+      fillModel: input.fillModel,
+      simulatedSlippageBps: input.simulatedSlippageBps !== undefined ? String(input.simulatedSlippageBps) : undefined,
+      fillLatencyMs: input.fillLatencyMs,
     });
   } catch (err) {
     console.error(

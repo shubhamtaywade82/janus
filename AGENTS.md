@@ -370,3 +370,26 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **`brain-router.ts`**: Returns explicit 400 when executor never ran (`AUTO_EXECUTE` off, auto-trader disabled, kill switch) or when pipeline skips.
 
 * **Ops**: Set `auto_executor_config.brain_shadow_mode = true` for user 1 (was `false` with `brain_gate_enabled=true`, causing 134+ `brain_veto` skips in 6h). `pm2 reload janus-bot` to clear config cache. Brain still evaluates/logs episodes; Governor-approved signals execute without Brain veto.
+
+---
+
+### [2026-06-23] Post-Trade Analysis (PTA) Schema — Zero-Duplication Extension
+* **Principle**: Extend existing tables rather than creating parallel tables. New tables added only for genuinely absent concepts (`trade_price_ticks`, `funding_events`, `system_events`).
+* **`signals` (db/schema.ts:100-145)**: Added `session`, `hoursToFunding`, `binanceMarkPrice`, `binanceFundingRate`, `openInterestUsd`, `openInterestDelta`, `atr14`, `atrPercent`, `triggerDescription`, `triggerMetadata` (JSONB), `disposition`, `rejectionReason`.
+* **`orders` (db/schema.ts:865)**: Added `executionMode` (`PAPER|LIVE|SHADOW`), `fillModel`, `simulatedSlippageBps`, `binanceMarkPriceAtSend`, `orderConstructedAt`, `orderSentAt`, `orderAckedAt`, `cancelReason`.
+* **`position_transactions` (db/position-manager-schema.ts:112)**: Added `orderId` (FK to orders), `liquiditySide` (`MAKER|TAKER`), `fillModel`, `simulatedSlippageBps`, `fillLatencyMs`.
+* **`trades` (db/schema.ts:232)**: Extended to PTA fact table with `strategyType`, `stopLossPrice`, `takeProfitPrice`, `trailingStopPct`, `grossPnlUsdt`, `netPnlUsdt`, `totalFeesUsdt`, `fundingPaidUsdt`, `mfePrice/pct`, `maePrice/pct`, `exitReason`, `holdingPeriodSeconds`, `binanceSignalPrice`, `coindcxFillPrice`, `slippageBps`.
+* **`db/pta-schema.ts`** (new): `trade_price_ticks` (high-frequency price sampling), `funding_events` (8h funding settlements), `system_events` (infra/operational health).
+* **`db/pta-relations.ts`** (new): Relations file for the three new PTA-only tables.
+* **`drizzle.config.ts`**: Added `./db/pta-schema.ts` to schema glob (now 48 tables total).
+* **`api/services/pta-helpers.ts`** (new): `buildSignalPtaContext()`, `getTradingSession()`, `hoursToNextFunding()`.
+* **`api/services/signal-engine.ts`**: Derives `session`, `funding context`, `open interest`, `ATR`, and `triggerDescription` on every signal fire and stores them alongside the existing `signals` insert.
+* **`api/services/auto-executor.ts`**: Populates `orders.executionMode`, `orders.fillModel`, `orders.binanceMarkPriceAtSend`, `orderConstructedAt`, `orderSentAt` on every `executePosition`.
+* **`api/services/position-manager/execution-manager.ts`**: Full-exit closes update both `position_transactions` (fill context) and `trades` (denormalized PnL summary row) in a best-effort try/catch block. Partial exits populate `liquiditySide`/`fillModel`/`fillLatencyMs`.
+* **`db/migrations/0027_pta_derived_layer.sql`** (manual migration applied):
+  - `get_trading_session(utc_hour)` PG function (`ASIA|LONDON|US`)
+  - `pta_trade_summary` VIEW — one row per closed trade joining `trades × signals × orders × positions × position_transactions`
+  - `pta_strategy_performance` MV (unique index: trade_date, symbol, strategy, session)
+  - `pta_slippage_by_hour` MV (unique index: symbol, utc_hour)
+  - `pta_exit_attribution` MV (unique index: symbol, strategy, exit_reason)
+* **Data flow**: `signal-engine` → writes to `signals`; `auto-executor` → writes to `orders` on entry; `execution-manager` → writes to `position_transactions` on every action, and to `trades` on FULL_EXIT. Post-close MFE/MAE backfill is a future async job against `trade_price_ticks`.

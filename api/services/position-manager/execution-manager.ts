@@ -8,7 +8,7 @@ import { createFuturesOrder, getFuturesInstrumentInfo } from "../coindcx";
 import { syncTrailingStopLoss } from "../trailing-stop";
 import { env } from "../../lib/env";
 import { getDb } from "../../queries/connection";
-import { positions, exchangeCredentials, autoExecutorConfig } from "@db/schema";
+import { positions, exchangeCredentials, autoExecutorConfig, trades, strategyTypeEnum } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { decryptCreds } from "../../lib/crypto";
 import {
@@ -418,6 +418,9 @@ export async function executeAction(
             nextRealized,
             isPaper: position.isPaper,
           },
+          liquiditySide: "TAKER",
+          fillModel: position.isPaper ? "SIMULATED" : "COINDCX_MARKET",
+          fillLatencyMs: 0,
         });
 
         positionManagerBus.emit("position:action-executed", position.id, action, "ok",
@@ -497,8 +500,58 @@ export async function executeAction(
             reason: recommendation.reasoning,
             exitReason: recommendation.reasoning,
             isPaper: position.isPaper,
+            exitPrice: position.markPrice,
+            entryPrice: position.entryPrice,
           },
+          // ─── PTA extensions ────────────────────────────────────────────────
+          liquiditySide: "TAKER",
+          fillModel: position.isPaper ? "SIMULATED" : "COINDCX_MARKET",
+          fillLatencyMs: 0, // exit is same-session; latency tracking can be added later
         });
+
+        // ─── PTA: write denormalized trades row ────────────────────────────
+        const heldSec =
+          typeof (position as any).openedAt === "object"
+            ? Math.floor(
+                (Date.now() - ((position as any).openedAt as Date).getTime()) / 1000
+              )
+            : position.holdingMinutes
+              ? position.holdingMinutes * 60
+              : null;
+        const grossPnl = realizedPnl;
+        const feeAmt = position.markPrice * position.quantity * 0.0004;
+        try {
+          await db
+            .insert(trades)
+            .values({
+              userId: String(userId),
+              positionId: String(position.id),
+              symbol: position.symbol,
+              side: position.side === "LONG" ? "long" : "short",
+              orderType: "MARKET",
+              price: String(position.markPrice),
+              size: String(position.quantity),
+              leverage: position.leverage,
+              fee: String(feeAmt),
+              tdsDeducted: "0",
+              total: String(position.quantity * position.markPrice),
+              status: "filled",
+              executedAt: new Date(),
+              strategyType: (position.strategyType as string) || "intraday",
+              stopLossPrice: position.stopLoss ? String(position.stopLoss) : null,
+              takeProfitPrice: position.takeProfit ? String(position.takeProfit) : null,
+              grossPnlUsdt: String(grossPnl),
+              netPnlUsdt: String(grossPnl - feeAmt),
+              totalFeesUsdt: String(feeAmt),
+              exitReason: recommendation.reasoning,
+              holdingPeriodSeconds: heldSec ?? undefined,
+              binanceSignalPrice: String(position.entryPrice),
+              coindcxFillPrice: String(position.markPrice),
+              slippageBps: "0",
+            });
+        } catch {
+          // Trades insert is best-effort — do not block position close on PTA writes
+        }
 
         positionStore.updateLifecycleState(position.id, "CLOSED");
         positionStore.remove(position.id);

@@ -106,6 +106,17 @@ export async function runAnalysisForSymbol(binanceSymbol: string) {
       signalData.metadata = { ...(signalData.metadata as object), knn: knnSnapshot };
     }
 
+    const ptaCtx = buildSignalPtaContext(binanceSymbol);
+    Object.assign(signalData, ptaCtx, {
+      triggerMetadata: {
+        macroScore: Number(signalData.compositeScore),
+        microScore: Number(signalData.microScore),
+        obSpreadPct: obMetrics?.spreadPercent ?? 0,
+        tapeDelta: tapeMetrics?.delta ?? 0,
+        makerRatio: tapeMetrics?.makerRatio ?? 0.5,
+      },
+    });
+
     const lastSignal = await db.select().from(signals).where(eq(signals.symbol, pair.coindcx)).orderBy(desc(signals.createdAt)).limit(1).catch(() => []);
     const prev = lastSignal[0];
     const candles1m = await getCandlesForTimeframe(binanceSymbol, "1m");
@@ -115,6 +126,13 @@ export async function runAnalysisForSymbol(binanceSymbol: string) {
     const isEmaCross = n >= 1 && ((ema(prices, 20)[n-1] <= ema(prices, 50)[n-1] && ema(prices, 20)[n] > ema(prices, 50)[n]) || (ema(prices, 20)[n-1] >= ema(prices, 50)[n-1] && ema(prices, 20)[n] < ema(prices, 50)[n]));
     const rsiVal = calculateRSI(prices, 14);
     const isRsiExtreme = rsiVal >= 70 || rsiVal <= 30;
+
+    const triggerDescParts: string[] = [];
+    if (tfStructure.bos) triggerDescParts.push("BOS");
+    if (tfStructure.choch) triggerDescParts.push("CHoCH");
+    if (isEmaCross) triggerDescParts.push("EMA Cross");
+    if (isRsiExtreme) triggerDescParts.push(`RSI ${rsiVal.toFixed(1)}`);
+    signalData.triggerDescription = triggerDescParts.join(" + ") || "Score change";
 
     const shouldRecord = !prev || tfStructure.bos || tfStructure.choch || isEmaCross || isRsiExtreme || signalData.direction !== prev.direction;
 

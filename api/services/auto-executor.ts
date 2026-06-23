@@ -1113,9 +1113,9 @@ private async executePosition(params: {
     await RiskManager.validateOrder(params.userId, orderParams, params.isPaper, currency);
 
     // 2. Insert order record into the database
-    const orderId = await db.transaction(async (tx) => {
+      const now = new Date();
       const result = await tx
-        .insert(orders)
+        .insert(orders as any)
         .values({
           clientOrderId,
           userId: params.userId,
@@ -1128,8 +1128,14 @@ private async executePosition(params: {
           leverage: params.leverage,
           stopLoss: params.stopLoss ? params.stopLoss.toString() : null,
           takeProfit: params.takeProfit ? params.takeProfit.toString() : null,
-          createdAt: new Date(),
-          updatedAt: new Date(),
+          createdAt: now,
+          updatedAt: now,
+          // ─── PTA extensions ────────────────────────────────────────────────
+          executionMode: params.isPaper ? "PAPER" : "LIVE",
+          fillModel: (params as any).fillModel ?? "MARK_PRICE",
+          binanceMarkPriceAtSend: params.currentPrice,
+          orderConstructedAt: now,
+          orderSentAt: now,
         })
         .returning({ id: orders.id });
       return result[0].id;
