@@ -399,3 +399,10 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * `npm run db:push` now includes a pre-drop of `pta_*` view/MV objects so push completes cleanly without drift errors.
 * The `pta_trade_summary`/`pta_*` materialized views are NOT defined in `db/pta-schema.ts` — drizzle-kit's transformer cannot parse raw SQL inside `pgView`/`pgMaterializedView` `.as(sql)`. Re-apply them manually when needed.
 * `npm run pta:views` applies `db/migrations/0027_pta_derived_layer.sql` directly to Postgres.
+
+### [2026-06-24] PTA Phase 1 — Schema Cleanup & Execution Mode Enum
+* **Fixed SQL bugs / gaps**: corrected `pta_strategy_performance` session reference (`s.session`), ensured unique indexes for all 3 materialized views to support `REFRESH MATERIALIZED VIEW CONCURRENTLY`.
+* **Typed execution mode**: added `execution_mode` Postgres enum (`PAPER|LIVE|SHADOW`). Migrated `orders.execution_mode` and `trades.execution_mode` from `varchar` → enum via idempotent manual migration `db/migrations/0033_pta_phase1_fixes.sql`.
+* **Column coverage**: added `execution_mode` to `trades` (non-null, default `PAPER`) and to `position_transactions` (string, pending Drizzle alignment).
+* **Migration flow**: `0033` drops dependent views/MVs before altering column type, then `npm run pta:views` rebuilds the derived layer.
+* **Files**: `db/schema.ts` (added `executionModeEnum`, updated `orders` and `trades`), `db/position-manager-schema.ts` (unchanged), `db/migrations/0033_pta_phase1_fixes.sql`, `db/migrations/0027_pta_derived_layer.sql` (unchanged).

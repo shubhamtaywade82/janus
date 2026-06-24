@@ -39,6 +39,7 @@ export const strategyTypeEnum = pgEnum("strategy_type", [
   "h6_momentum",
   "alpha_protocol",
 ]);
+export const executionModeEnum = pgEnum("execution_mode", ["PAPER", "LIVE", "SHADOW"]);
 
 // ─── Users Table (Auth) ───
 export const users = pgTable("users", {
@@ -247,7 +248,8 @@ export const trades = pgTable(
     binanceSignalPrice: decimal("binance_signal_price", { precision: 18, scale: 8 }),
     coindcxFillPrice: decimal("coindcx_fill_price", { precision: 18, scale: 8 }),
     slippageBps: decimal("slippage_bps", { precision: 10, scale: 4 }),
-  },
+    executionMode: executionModeEnum("execution_mode").default("PAPER"),
+    },
   (table) => ({
     userIdPositionIdIdx: index("idx_trades_user_position").on(table.userId, table.positionId),
     idxTradesSymbol: index("idx_trades_symbol").on(table.symbol, table.createdAt),
@@ -916,7 +918,7 @@ export const orders = pgTable("orders", {
     .notNull()
     .$onUpdate(() => new Date()),
   // ─── PTA extensions ────────────────────────────────────────────────────────
-  executionMode: varchar("execution_mode", { length: 20 }).default("PAPER"),
+  executionMode: executionModeEnum("execution_mode").default("PAPER"),
   // PAPER | LIVE | SHADOW
   fillModel: varchar("fill_model", { length: 30 }),
   // MARK_PRICE | ORDERBOOK_WALK | SLIPPAGE_PENALTY | VWAP_ESTIMATE | WORST_CASE
