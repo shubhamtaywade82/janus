@@ -86,33 +86,25 @@ export function detectSwings(klines: Kline[], lookback = 5): SwingPoint[] {
     if (isSwingLow)  swings.push({ time: klines[i].time, price: curLow,  type: "low",  strength, index: i });
   }
 
-  // Classify Highs and Lows (HH, LH, HL, LL)
-  let lastHighPrice = -Infinity;
-  let lastLowPrice = Infinity;
-  let firstHigh = true;
-  let firstLow = true;
+  labelSwingSequence(swings);
+  return swings;
+}
 
-  for (const s of swings) {
+/** HH/LH/HL/LL are properties of the sequence of same-type swings — not individual candles. */
+function labelSwingSequence(swings: SwingPoint[]): void {
+  const ordered = [...swings].sort((a, b) => a.index - b.index || (a.type === "high" ? -1 : 1));
+  let prevHigh: SwingPoint | null = null;
+  let prevLow: SwingPoint | null = null;
+
+  for (const s of ordered) {
     if (s.type === "high") {
-      if (!firstHigh) {
-        s.label = s.price > lastHighPrice ? "HH" : "LH";
-      } else {
-        s.label = "HH";
-        firstHigh = false;
-      }
-      lastHighPrice = s.price;
+      if (prevHigh) s.label = s.price > prevHigh.price ? "HH" : "LH";
+      prevHigh = s;
     } else {
-      if (!firstLow) {
-        s.label = s.price > lastLowPrice ? "HL" : "LL";
-      } else {
-        s.label = "LL";
-        firstLow = false;
-      }
-      lastLowPrice = s.price;
+      if (prevLow) s.label = s.price > prevLow.price ? "HL" : "LL";
+      prevLow = s;
     }
   }
-
-  return swings;
 }
 
 // ─── 2. Order Blocks ───
@@ -249,16 +241,31 @@ export function detectFVGs(klines: Kline[]): FairValueGap[] {
       const bottom  = c1.high;
       const top     = c3.low;
       const gapSize = top - bottom;
+      
+      let filled = false;
+      let fillPercent = 0;
+      let endTime = klines[klines.length - 1].time; // default to last candle
       let maxPen = 0;
+
       for (let m = i + 1; m < klines.length; m++) {
-        if (klines[m].low < top) {
-          const pen = top - Math.max(klines[m].low, bottom);
+        if (klines[m].low <= bottom) {
+          filled = true;
+          fillPercent = 100;
+          endTime = klines[m].time;
+          break;
+        } else if (klines[m].low < top) {
+          const pen = top - klines[m].low;
           if (pen > maxPen) maxPen = pen;
         }
       }
-      const fillPercent = gapSize > 0 ? Math.min(100, (maxPen / gapSize) * 100) : 0;
-      fvgs.push({ startTime: c1.time, endTime: c3.time, top, bottom, midpoint: (top + bottom) / 2,
-        type: "bullish", filled: fillPercent >= 50, fillPercent });
+
+      if (!filled) {
+        fillPercent = gapSize > 0 ? Math.min(100, (maxPen / gapSize) * 100) : 0;
+        if (fillPercent >= 100) filled = true;
+      }
+
+      fvgs.push({ startTime: c1.time, endTime, top, bottom, midpoint: (top + bottom) / 2,
+        type: "bullish", filled, fillPercent });
     }
 
     // Bearish FVG: gap above c3.high, below c1.low
@@ -266,16 +273,31 @@ export function detectFVGs(klines: Kline[]): FairValueGap[] {
       const bottom  = c3.high;
       const top     = c1.low;
       const gapSize = top - bottom;
+      
+      let filled = false;
+      let fillPercent = 0;
+      let endTime = klines[klines.length - 1].time; // default to last candle
       let maxPen = 0;
+
       for (let m = i + 1; m < klines.length; m++) {
-        if (klines[m].high > bottom) {
-          const pen = Math.min(klines[m].high, top) - bottom;
+        if (klines[m].high >= top) {
+          filled = true;
+          fillPercent = 100;
+          endTime = klines[m].time;
+          break;
+        } else if (klines[m].high > bottom) {
+          const pen = klines[m].high - bottom;
           if (pen > maxPen) maxPen = pen;
         }
       }
-      const fillPercent = gapSize > 0 ? Math.min(100, (maxPen / gapSize) * 100) : 0;
-      fvgs.push({ startTime: c1.time, endTime: c3.time, top, bottom, midpoint: (top + bottom) / 2,
-        type: "bearish", filled: fillPercent >= 50, fillPercent });
+
+      if (!filled) {
+        fillPercent = gapSize > 0 ? Math.min(100, (maxPen / gapSize) * 100) : 0;
+        if (fillPercent >= 100) filled = true;
+      }
+
+      fvgs.push({ startTime: c1.time, endTime, top, bottom, midpoint: (top + bottom) / 2,
+        type: "bearish", filled, fillPercent });
     }
   }
 
@@ -297,61 +319,206 @@ export interface StructureBreak {
 }
 
 const MAX_STRUCTURE = 10;
+const RANGE_EPSILON = 0.001;
 
-export function detectStructure(klines: Kline[], swings: SwingPoint[]): StructureBreak[] {
+type StructureTrend = "unknown" | "bullish" | "bearish" | "ranging";
+
+interface StructureTracker {
+  trend: StructureTrend;
+  confirmedSwings: SwingPoint[];
+  prevHighSwing: SwingPoint | null;
+  prevLowSwing: SwingPoint | null;
+  lastHH: SwingPoint | null;
+  lastHL: SwingPoint | null;
+  lastLH: SwingPoint | null;
+  lastLL: SwingPoint | null;
+  priorHH: SwingPoint | null;
+  priorLL: SwingPoint | null;
+  structureReady: boolean;
+  lastBullishBosLevel: number | null;
+  lastBearishBosLevel: number | null;
+  lastBullishChochTime: number | null;
+  lastBearishChochTime: number | null;
+}
+
+function hasInitialStructure(swings: SwingPoint[]): boolean {
+  if (swings.length < 3) return false;
+  const [a, b, c] = swings.slice(-3);
+  return (
+    (a.type === "high" && b.type === "low" && c.type === "high") ||
+    (a.type === "low" && b.type === "high" && c.type === "low")
+  );
+}
+
+function registerConfirmedSwing(tracker: StructureTracker, swing: SwingPoint): void {
+  if (swing.type === "high") {
+    if (tracker.prevHighSwing) {
+      swing.label = swing.price > tracker.prevHighSwing.price ? "HH" : "LH";
+      if (swing.label === "HH") {
+        tracker.priorHH = tracker.lastHH;
+        tracker.lastHH = swing;
+        tracker.lastBullishBosLevel = null;
+      } else {
+        tracker.lastLH = swing;
+        tracker.lastBullishChochTime = null;
+      }
+    }
+    tracker.prevHighSwing = swing;
+  } else {
+    if (tracker.prevLowSwing) {
+      swing.label = swing.price > tracker.prevLowSwing.price ? "HL" : "LL";
+      if (swing.label === "HL") {
+        tracker.lastHL = swing;
+        tracker.lastBearishChochTime = null;
+      } else {
+        tracker.priorLL = tracker.lastLL;
+        tracker.lastLL = swing;
+        tracker.lastBearishBosLevel = null;
+      }
+    }
+    tracker.prevLowSwing = swing;
+  }
+
+  tracker.confirmedSwings.push(swing);
+  tracker.structureReady = hasInitialStructure(tracker.confirmedSwings);
+
+  if (
+    tracker.structureReady &&
+    tracker.lastHH &&
+    tracker.priorHH &&
+    tracker.lastLL &&
+    tracker.priorLL
+  ) {
+    const hhDelta = Math.abs(tracker.lastHH.price - tracker.priorHH.price) / tracker.priorHH.price;
+    const llDelta = Math.abs(tracker.lastLL.price - tracker.priorLL.price) / tracker.priorLL.price;
+    if (hhDelta < RANGE_EPSILON && llDelta < RANGE_EPSILON) {
+      tracker.trend = "ranging";
+    }
+  }
+}
+
+function pushStructureBreak(
+  breaks: StructureBreak[],
+  time: number,
+  close: number,
+  type: StructureBreak["type"],
+  direction: StructureBreak["direction"],
+  brokenSwing: SwingPoint
+): void {
+  breaks.push({
+    time,
+    price: close,
+    type,
+    direction,
+    brokenSwingTime: brokenSwing.time,
+    brokenSwingPrice: brokenSwing.price,
+  });
+}
+
+function evaluateStructureBreak(
+  close: number,
+  time: number,
+  tracker: StructureTracker,
+  breaks: StructureBreak[]
+): boolean {
+  if (!tracker.structureReady) return false;
+
+  if (tracker.trend === "bullish") {
+    if (tracker.lastHL && close < tracker.lastHL.price) {
+      if (tracker.lastBearishChochTime !== tracker.lastHL.time) {
+        pushStructureBreak(breaks, time, close, "CHoCH", "bearish", tracker.lastHL);
+        tracker.lastBearishChochTime = tracker.lastHL.time;
+      }
+      tracker.trend = "bearish";
+      return true;
+    }
+    if (tracker.lastHH && close > tracker.lastHH.price) {
+      if (tracker.lastBullishBosLevel === tracker.lastHH.price) return false;
+      pushStructureBreak(breaks, time, close, "BOS", "bullish", tracker.lastHH);
+      tracker.lastBullishBosLevel = tracker.lastHH.price;
+      return true;
+    }
+    return false;
+  }
+
+  if (tracker.trend === "bearish") {
+    if (tracker.lastLH && close > tracker.lastLH.price) {
+      if (tracker.lastBullishChochTime !== tracker.lastLH.time) {
+        pushStructureBreak(breaks, time, close, "CHoCH", "bullish", tracker.lastLH);
+        tracker.lastBullishChochTime = tracker.lastLH.time;
+      }
+      tracker.trend = "bullish";
+      return true;
+    }
+    if (tracker.lastLL && close < tracker.lastLL.price) {
+      if (tracker.lastBearishBosLevel === tracker.lastLL.price) return false;
+      pushStructureBreak(breaks, time, close, "BOS", "bearish", tracker.lastLL);
+      tracker.lastBearishBosLevel = tracker.lastLL.price;
+      return true;
+    }
+    return false;
+  }
+
+  const bullishBreakLevel = tracker.lastHH ?? tracker.prevHighSwing;
+  const bearishBreakLevel = tracker.lastLL ?? tracker.prevLowSwing;
+
+  if (bullishBreakLevel && close > bullishBreakLevel.price) {
+    if (tracker.lastBullishBosLevel === bullishBreakLevel.price) return false;
+    pushStructureBreak(breaks, time, close, "BOS", "bullish", bullishBreakLevel);
+    tracker.lastBullishBosLevel = bullishBreakLevel.price;
+    tracker.trend = "bullish";
+    return true;
+  }
+
+  if (bearishBreakLevel && close < bearishBreakLevel.price) {
+    if (tracker.lastBearishBosLevel === bearishBreakLevel.price) return false;
+    pushStructureBreak(breaks, time, close, "BOS", "bearish", bearishBreakLevel);
+    tracker.lastBearishBosLevel = bearishBreakLevel.price;
+    tracker.trend = "bearish";
+    return true;
+  }
+
+  return false;
+}
+
+export function detectStructure(klines: Kline[], swings: SwingPoint[], lookback = 5): StructureBreak[] {
   if (klines.length === 0 || swings.length < 2) return [];
 
   const breaks: StructureBreak[] = [];
   const sortedSwings = [...swings].sort((a, b) => a.index - b.index);
+  const tracker: StructureTracker = {
+    trend: "unknown",
+    confirmedSwings: [],
+    prevHighSwing: null,
+    prevLowSwing: null,
+    lastHH: null,
+    lastHL: null,
+    lastLH: null,
+    lastLL: null,
+    priorHH: null,
+    priorLL: null,
+    structureReady: false,
+    lastBullishBosLevel: null,
+    lastBearishBosLevel: null,
+    lastBullishChochTime: null,
+    lastBearishChochTime: null,
+  };
 
-  let trend: "up" | "down" | "unknown" = "unknown";
-  let lastHigh: SwingPoint | null = null;
-  let lastLow:  SwingPoint | null = null;
-  let swingCursor   = 0;
+  let swingCursor = 0;
   let minSwingIndex = 0;
 
   for (let i = 1; i < klines.length; i++) {
-    while (swingCursor < sortedSwings.length && sortedSwings[swingCursor].index < i) {
+    while (
+      swingCursor < sortedSwings.length &&
+      sortedSwings[swingCursor].index + lookback <= i
+    ) {
       const s = sortedSwings[swingCursor];
-      if (s.index >= minSwingIndex) {
-        if (s.type === "high") { if (!lastHigh || s.index > lastHigh.index) lastHigh = s; }
-        else                   { if (!lastLow  || s.index > lastLow.index)  lastLow  = s; }
-      }
+      if (s.index >= minSwingIndex) registerConfirmedSwing(tracker, s);
       swingCursor++;
     }
 
-    const close = klines[i].close;
-
-    if (trend === "unknown") {
-      if (lastHigh && close > lastHigh.price) {
-        breaks.push({ time: klines[i].time, price: close, type: "BOS", direction: "bullish",
-          brokenSwingTime: lastHigh.time, brokenSwingPrice: lastHigh.price });
-        trend = "up"; minSwingIndex = i; lastHigh = null; lastLow = null;
-      } else if (lastLow && close < lastLow.price) {
-        breaks.push({ time: klines[i].time, price: close, type: "BOS", direction: "bearish",
-          brokenSwingTime: lastLow.time, brokenSwingPrice: lastLow.price });
-        trend = "down"; minSwingIndex = i; lastHigh = null; lastLow = null;
-      }
-    } else if (trend === "up") {
-      if (lastHigh && close > lastHigh.price) {
-        breaks.push({ time: klines[i].time, price: close, type: "BOS", direction: "bullish",
-          brokenSwingTime: lastHigh.time, brokenSwingPrice: lastHigh.price });
-        minSwingIndex = i; lastHigh = null; lastLow = null;
-      } else if (lastLow && close < lastLow.price) {
-        breaks.push({ time: klines[i].time, price: close, type: "CHoCH", direction: "bearish",
-          brokenSwingTime: lastLow.time, brokenSwingPrice: lastLow.price });
-        trend = "down"; minSwingIndex = i; lastHigh = null; lastLow = null;
-      }
-    } else {
-      if (lastLow && close < lastLow.price) {
-        breaks.push({ time: klines[i].time, price: close, type: "BOS", direction: "bearish",
-          brokenSwingTime: lastLow.time, brokenSwingPrice: lastLow.price });
-        minSwingIndex = i; lastHigh = null; lastLow = null;
-      } else if (lastHigh && close > lastHigh.price) {
-        breaks.push({ time: klines[i].time, price: close, type: "CHoCH", direction: "bullish",
-          brokenSwingTime: lastHigh.time, brokenSwingPrice: lastHigh.price });
-        trend = "up"; minSwingIndex = i; lastHigh = null; lastLow = null;
-      }
+    if (evaluateStructureBreak(klines[i].close, klines[i].time, tracker, breaks)) {
+      minSwingIndex = i;
     }
   }
 

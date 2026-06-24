@@ -5,6 +5,7 @@ import type {
 } from "./types";
 import { PositionAction as PA } from "./types";
 import { positionStore } from "./position-store";
+import { computeMarginUsdt } from "../paper-currency";
 import { isSlImprovement } from "./execution-manager";
 
 // ─── Policy Guard ────────────────────────────────────────────────────────────
@@ -12,7 +13,7 @@ import { isSlImprovement } from "./execution-manager";
 // May downgrade the action (e.g., SCALE_IN → KEEP_OPEN) if constraints not met.
 
 const MAX_CORRELATION_SAME_SIDE = 4;   // max open positions on same side
-const MIN_FREE_MARGIN_FOR_SCALE = 50;  // USDT
+const MIN_FREE_MARGIN_FOR_SCALE = 15;  // USDT (paper wallet values normalized to USDT in lifecycle)
 
 export interface PortfolioConstraints {
   availableBalance: number;
@@ -46,8 +47,13 @@ export function policyGuard(
       };
     }
 
-    const positionRisk = position.margin / portfolio.totalEquityUsdt;
-    if (positionRisk > 0.25) {
+    const marginUsdt = computeMarginUsdt(
+      position.quantity,
+      position.entryPrice,
+      position.leverage
+    );
+    const positionRisk = marginUsdt / portfolio.totalEquityUsdt;
+    if (positionRisk > 0.40) {
       return {
         approved: false,
         action: PA.KEEP_OPEN,
@@ -74,7 +80,7 @@ export function policyGuard(
     };
   }
 
-  // ── TRAIL_SL: ensure new SL is better than current ────────────────────
+  // ── TRAIL_SL: ensure new SL is better than current and doesn't cross mark price ────
   if (action === PA.TRAIL_SL && recommendation.newStopLoss !== undefined) {
     const newSl = recommendation.newStopLoss;
     const currentSl = position.stopLoss;
@@ -87,9 +93,24 @@ export function policyGuard(
         };
       }
     }
+    const markPrice = position.markPrice;
+    if (position.side === "LONG" && newSl >= markPrice) {
+      return {
+        approved: false,
+        action: PA.KEEP_OPEN,
+        reason: `TRAIL_SL rejected: proposed SL (${newSl.toFixed(4)}) would be >= current mark price (${markPrice.toFixed(4)})`,
+      };
+    }
+    if (position.side === "SHORT" && newSl <= markPrice) {
+      return {
+        approved: false,
+        action: PA.KEEP_OPEN,
+        reason: `TRAIL_SL rejected: proposed SL (${newSl.toFixed(4)}) would be <= current mark price (${markPrice.toFixed(4)})`,
+      };
+    }
   }
 
-  // ── MOVE_TO_BREAKEVEN: only if profitable and not already applied ────
+  // ── MOVE_TO_BREAKEVEN: only if profitable, not already applied, and doesn't cross mark price ────
   if (action === PA.MOVE_TO_BREAKEVEN) {
     if (position.unrealizedPnl <= 0) {
       return {
@@ -103,6 +124,26 @@ export function policyGuard(
         approved: false,
         action: PA.KEEP_OPEN,
         reason: "MOVE_TO_BREAKEVEN rejected: breakeven already applied to this position",
+      };
+    }
+    const newSl =
+      recommendation.newStopLoss ??
+      (position.side === "LONG"
+        ? position.entryPrice * (1 + 0.0005 * 2)
+        : position.entryPrice * (1 - 0.0005 * 2));
+    const markPrice = position.markPrice;
+    if (position.side === "LONG" && newSl >= markPrice) {
+      return {
+        approved: false,
+        action: PA.KEEP_OPEN,
+        reason: `MOVE_TO_BREAKEVEN rejected: target SL (${newSl.toFixed(4)}) would be >= current mark price (${markPrice.toFixed(4)})`,
+      };
+    }
+    if (position.side === "SHORT" && newSl <= markPrice) {
+      return {
+        approved: false,
+        action: PA.KEEP_OPEN,
+        reason: `MOVE_TO_BREAKEVEN rejected: target SL (${newSl.toFixed(4)}) would be <= current mark price (${markPrice.toFixed(4)})`,
       };
     }
   }

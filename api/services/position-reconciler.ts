@@ -15,12 +15,14 @@
  */
 
 import { getDb } from "../queries/connection";
-import { positions, exchangeCredentials } from "@db/schema";
-import { eq, and } from "drizzle-orm";
+import { positions, exchangeCredentials, orders, tradingAccounts, accountLedger } from "@db/schema";
+import { eq, and, lt, inArray } from "drizzle-orm";
 import { getFuturesPositions } from "./coindcx";
 import { decryptCreds } from "../lib/crypto";
 import { broadcastTelegramAlert } from "./telegram";
 import { env, coinDCXEnvCreds } from "../lib/env";
+import Decimal from "decimal.js";
+import { usdtToWallet, isLegacyInrLabelledUsdtMargin, computeMarginUsdt } from "./paper-currency";
 
 const RECONCILE_INTERVAL_MS = 5 * 60_000; // every 5 minutes
 
@@ -56,6 +58,13 @@ class PositionReconciler {
     // Position reconciliation runs regardless of PLACE_ORDERS so live positions
     // are always tracked locally for monitoring and portfolio display.
     const db = getDb();
+
+    // Reconcile paper trading accounts (stale market orders and leaked locked margin)
+    try {
+      await this.reconcilePaperAccounts(db);
+    } catch (err) {
+      console.error("[reconciler] Paper account reconciliation failed:", err);
+    }
 
     const dbCreds = await db
       .select()
@@ -143,53 +152,60 @@ class PositionReconciler {
       }
     }
 
-    // Orphan detection: exchange has a position that DB doesn't know about
-    const dbSymbols = new Set(dbOpen.map((p) => `B-${p.symbol.replace("USDT", "_USDT")}`));
-    for (const [pair, lp] of liveByPair) {
-      const qty = parseFloat(lp.active_pos ?? lp.quantity ?? "0");
-      if (qty !== 0 && !dbSymbols.has(pair)) {
-        const symbol = pair.replace("B-", "").replace("_", "");
-        console.log(
-          `[reconciler] AUTO-IMPORTING ORPHAN POSITION: ${pair} qty=${qty}`
-        );
-        
-        // Use exchange data to create DB entry
-        const side = parseFloat(lp.active_pos) > 0 ? "long" : "short";
-        const markPrice = parseFloat(lp.mark_price || "0");
-        const entryPrice = parseFloat(lp.entry_price || lp.avg_entry_price || "0") || markPrice;
-        const leverage = parseInt(lp.leverage || "1");
-        const margin = parseFloat(lp.position_margin || "0");
+    // Orphan detection: exchange has a position that DB doesn't know about.
+    // Only auto-import orphans if the bot is allowed to place orders (live trade mode).
+    // In paper mode or monitor mode, we do not want to auto-import live positions
+    // since we cannot execute orders to close them, which would cause an infinite
+    // loop of DB imports and virtual closures.
+    if (env.placeOrders) {
+      const dbSymbols = new Set(dbOpen.map((p) => `B-${p.symbol.replace("USDT", "_USDT")}`));
+      for (const [pair, lp] of liveByPair) {
+        const qty = parseFloat(lp.active_pos ?? lp.quantity ?? "0");
+        if (qty !== 0 && !dbSymbols.has(pair)) {
+          const symbol = pair.replace("B-", "").replace("_", "");
+          console.log(
+            `[reconciler] AUTO-IMPORTING ORPHAN POSITION: ${pair} qty=${qty}`
+          );
+          
+          // Use exchange data to create DB entry
+          const side = parseFloat(lp.active_pos) > 0 ? "long" : "short";
+          const markPrice = parseFloat(lp.mark_price || "0");
+          const entryPrice = parseFloat(lp.entry_price || lp.avg_entry_price || "0") || markPrice;
+          const leverage = parseInt(lp.leverage || "1");
+          const calculatedMargin = (Math.abs(qty) * entryPrice) / leverage;
+          const margin = parseFloat(lp.locked_margin || lp.locked_user_margin || lp.position_margin || "0") || calculatedMargin;
 
-        if (entryPrice <= 0) {
-          console.warn(`[reconciler] Skipping orphan import for ${pair}: zero entry price`);
-          continue;
-        }
+          if (entryPrice <= 0) {
+            console.warn(`[reconciler] Skipping orphan import for ${pair}: zero entry price`);
+            continue;
+          }
 
-        try {
-          await db.insert(positions).values({
-            userId: 1,
-            symbol,
-            side,
-            entryPrice: String(entryPrice),
-            currentPrice: String(markPrice || entryPrice),
-            size: String(Math.abs(qty)),
-            leverage,
-            margin: String(margin),
-            status: "open",
-            isPaper: false,
-            exchangeOrderId: String(lp.id || lp.order_id || ""),
-            entryReason: "Auto-imported: Orphan live position detected during reconciliation",
-            createdAt: new Date(),
-            updatedAt: new Date(),
-          });
+          try {
+            await db.insert(positions).values({
+              userId: 1,
+              symbol,
+              side,
+              entryPrice: String(entryPrice),
+              currentPrice: String(markPrice || entryPrice),
+              size: String(Math.abs(qty)),
+              leverage,
+              margin: String(margin),
+              status: "open",
+              isPaper: false,
+              exchangeOrderId: String(lp.id || lp.order_id || ""),
+              entryReason: "Auto-imported: Orphan live position detected during reconciliation",
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            });
 
-          await broadcastTelegramAlert(
-            `✅ <b>Live Position Imported:</b> ${symbol} ${side.toUpperCase()}\n` +
-            `Size: ${Math.abs(qty)}, Entry: ${entryPrice}\n` +
-            ` Janus is now tracking and managing this position.`
-          ).catch(() => {});
-        } catch (err) {
-          console.error(`[reconciler] Failed to import orphan position ${pair}:`, err);
+            await broadcastTelegramAlert(
+              `✅ <b>Live Position Imported:</b> ${symbol} ${side.toUpperCase()}\n` +
+              `Size: ${Math.abs(qty)}, Entry: ${entryPrice}\n` +
+              ` Janus is now tracking and managing this position.`
+            ).catch(() => {});
+          } catch (err) {
+            console.error(`[reconciler] Failed to import orphan position ${pair}:`, err);
+          }
         }
       }
     }
@@ -199,6 +215,136 @@ class PositionReconciler {
         `[reconciler] Done — ${dbOpen.length} DB open, ${livePositions.length} live, ` +
         `${closedCount} closed, ${updatedCount} size-corrected`
       );
+    }
+  }
+
+  async reconcilePaperAccounts(db: any): Promise<void> {
+    // A. Cancel/reject stale OPEN/PENDING MARKET orders that are older than 2 minutes
+    const twoMinutesAgo = new Date(Date.now() - 2 * 60 * 1000);
+    const staleOrders = await db
+      .select()
+      .from(orders)
+      .where(
+        and(
+          eq(orders.status, "OPEN"),
+          eq(orders.orderType, "MARKET"),
+          lt(orders.createdAt, twoMinutesAgo)
+        )
+      )
+      .catch(() => []);
+
+    if (staleOrders.length > 0) {
+      const orderIds = staleOrders.map((o: any) => o.id);
+      await db
+        .update(orders)
+        .set({
+          status: "REJECTED",
+          updatedAt: new Date()
+        })
+        .where(
+          and(
+            inArray(orders.id, orderIds),
+            inArray(orders.status, ["OPEN", "PENDING"])
+          )
+        )
+        .catch((err: any) => console.error("[reconciler] Failed to reject stale orders:", err));
+      console.log(`[reconciler] Rejected ${staleOrders.length} stale open market orders.`);
+    }
+
+    // B. Reconcile paper trading accounts margins
+    const paperAccounts = await db
+      .select()
+      .from(tradingAccounts)
+      .where(eq(tradingAccounts.mode, "paper"))
+      .catch(() => []);
+
+    for (const account of paperAccounts) {
+      // Find all open positions for this user/account
+      const openPositions = await db
+        .select()
+        .from(positions)
+        .where(
+          and(
+            eq(positions.userId, account.userId),
+            eq(positions.isPaper, true),
+            eq(positions.status, "open"),
+            eq(positions.marginCurrency, account.currency)
+          )
+        )
+        .catch(() => []);
+
+      // Sum their margins (stored in account wallet currency)
+      let totalOpenMargin = new Decimal(0);
+      for (const p of openPositions) {
+        const size = parseFloat(String(p.size));
+        const entry = parseFloat(String(p.entryPrice));
+        const lev = Number(p.leverage) || 1;
+        const marginUsdt = computeMarginUsdt(size, entry, lev);
+        let marginWallet = parseFloat(String(p.margin));
+
+        if (
+          account.currency === "INR" &&
+          p.marginCurrency === "INR" &&
+          marginWallet > 0 &&
+          isLegacyInrLabelledUsdtMargin(marginWallet, "INR", marginUsdt)
+        ) {
+          marginWallet = await usdtToWallet(marginUsdt, "INR");
+          await db
+            .update(positions)
+            .set({ margin: marginWallet.toFixed(8), updatedAt: new Date() })
+            .where(eq(positions.id, p.id))
+            .catch((err: unknown) =>
+              console.error(`[reconciler] Failed to repair margin for pos #${p.id}:`, err)
+            );
+        } else if (p.marginCurrency !== account.currency) {
+          marginWallet = await usdtToWallet(marginWallet, account.currency);
+        }
+
+        totalOpenMargin = totalOpenMargin.add(marginWallet);
+      }
+
+      const currentLocked = new Decimal(account.lockedMargin);
+      if (!currentLocked.equals(totalOpenMargin)) {
+        const diff = currentLocked.sub(totalOpenMargin);
+        console.log(
+          `[reconciler] Margin discrepancy for Account ID ${account.id} (${account.currency})! ` +
+          `Expected: ${totalOpenMargin.toFixed(8)}, Got: ${currentLocked.toFixed(8)}. Releasing: ${diff.toFixed(8)}`
+        );
+
+        const availableBefore = new Decimal(account.availableBalance);
+        const availableAfter = availableBefore.add(diff);
+
+        // Update the trading account
+        await db
+          .update(tradingAccounts)
+          .set({
+            lockedMargin: totalOpenMargin.toFixed(8),
+            usedMargin: totalOpenMargin.toFixed(8),
+            availableBalance: availableAfter.toFixed(8),
+            freeMargin: Decimal.max(0, availableAfter).toFixed(8),
+            updatedAt: new Date()
+          })
+          .where(eq(tradingAccounts.id, account.id))
+          .catch((err: any) => console.error("[reconciler] Failed to update paper account margin:", err));
+
+        // Write a ledger entry for the adjustment
+        await db.insert(accountLedger).values({
+          accountId: account.id,
+          eventType: "release_margin",
+          debit: "0.00000000",
+          credit: diff.toFixed(8),
+          balanceBefore: availableBefore.toFixed(8),
+          balanceAfter: availableAfter.toFixed(8),
+          referenceType: "adjustment",
+          referenceId: 0,
+          metadata: {
+            note: "Reconciled leaked locked margin from stale orders",
+            expectedLocked: totalOpenMargin.toNumber(),
+            currentLocked: currentLocked.toNumber(),
+            diff: diff.toNumber()
+          }
+        }).catch(() => {});
+      }
     }
   }
 }

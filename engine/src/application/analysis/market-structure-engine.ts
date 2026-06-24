@@ -5,12 +5,31 @@ import type {
 import { EMA } from "../indicators/ema.js";
 import { RSI } from "../indicators/rsi.js";
 
-const SWING_LOOKBACK = 3; // each side
+const SWING_LOOKBACK = 3;
+const RANGE_EPSILON = 0.001;
+
+type StructureTrend = "UNKNOWN" | "BULLISH" | "BEARISH" | "RANGING";
+
+interface StructureTracker {
+  trend: StructureTrend;
+  confirmedSwings: SwingPoint[];
+  prevHighSwing: SwingPoint | null;
+  prevLowSwing: SwingPoint | null;
+  lastHH: SwingPoint | null;
+  lastHL: SwingPoint | null;
+  lastLH: SwingPoint | null;
+  lastLL: SwingPoint | null;
+  priorHH: SwingPoint | null;
+  priorLL: SwingPoint | null;
+  structureReady: boolean;
+  lastBullishBosLevel: number | null;
+  lastBearishBosLevel: number | null;
+  lastChochLevel: number | null;
+}
 
 /**
- * Detects swing highs and swing lows using a simple pivot algorithm.
- * A swing high at index i requires: H[i] = max of [i-n..i+n]
- * A swing low at index i requires: L[i] = min of [i-n..i+n]
+ * Swing high at i: H[i] > max(H[i-N..i-1]) AND H[i] > max(H[i+1..i+N])
+ * Swing low at i:  L[i] < min(L[i-N..i-1]) AND L[i] < min(L[i+1..i+N])
  */
 export function detectSwingPoints(candles: Candle[], lookback = SWING_LOOKBACK): {
   highs: SwingPoint[];
@@ -21,13 +40,23 @@ export function detectSwingPoints(candles: Candle[], lookback = SWING_LOOKBACK):
 
   for (let i = lookback; i < candles.length - lookback; i++) {
     const c = candles[i];
-    const windowHigh = candles.slice(i - lookback, i + lookback + 1).map((x) => x.high);
-    const windowLow = candles.slice(i - lookback, i + lookback + 1).map((x) => x.low);
 
-    if (c.high === Math.max(...windowHigh)) {
+    let isSwingHigh = true;
+    for (let j = i - lookback; j <= i + lookback && isSwingHigh; j++) {
+      if (j === i) continue;
+      if (candles[j].high >= c.high) isSwingHigh = false;
+    }
+
+    let isSwingLow = true;
+    for (let j = i - lookback; j <= i + lookback && isSwingLow; j++) {
+      if (j === i) continue;
+      if (candles[j].low <= c.low) isSwingLow = false;
+    }
+
+    if (isSwingHigh) {
       highs.push({ price: c.high, ts: c.openTime, index: i, type: "HIGH" });
     }
-    if (c.low === Math.min(...windowLow)) {
+    if (isSwingLow) {
       lows.push({ price: c.low, ts: c.openTime, index: i, type: "LOW" });
     }
   }
@@ -35,73 +64,238 @@ export function detectSwingPoints(candles: Candle[], lookback = SWING_LOOKBACK):
   return { highs, lows };
 }
 
+function mergeSwingsChronologically(highs: SwingPoint[], lows: SwingPoint[]): SwingPoint[] {
+  return [...highs, ...lows].sort((a, b) => a.index - b.index || (a.type === "HIGH" ? -1 : 1));
+}
+
+function hasInitialStructure(swings: SwingPoint[]): boolean {
+  if (swings.length < 3) return false;
+  const [a, b, c] = swings.slice(-3);
+  return (
+    (a.type === "HIGH" && b.type === "LOW" && c.type === "HIGH") ||
+    (a.type === "LOW" && b.type === "HIGH" && c.type === "LOW")
+  );
+}
+
+function createStructureTracker(): StructureTracker {
+  return {
+    trend: "UNKNOWN",
+    confirmedSwings: [],
+    prevHighSwing: null,
+    prevLowSwing: null,
+    lastHH: null,
+    lastHL: null,
+    lastLH: null,
+    lastLL: null,
+    priorHH: null,
+    priorLL: null,
+    structureReady: false,
+    lastBullishBosLevel: null,
+    lastBearishBosLevel: null,
+    lastChochLevel: null,
+  };
+}
+
+function registerConfirmedSwing(tracker: StructureTracker, swing: SwingPoint): void {
+  if (swing.type === "HIGH") {
+    if (tracker.prevHighSwing) {
+      if (swing.price > tracker.prevHighSwing.price) {
+        tracker.priorHH = tracker.lastHH;
+        tracker.lastHH = swing;
+        tracker.lastBullishBosLevel = null;
+      } else {
+        tracker.lastLH = swing;
+        tracker.lastChochLevel = null;
+      }
+    }
+    tracker.prevHighSwing = swing;
+  } else {
+    if (tracker.prevLowSwing) {
+      if (swing.price > tracker.prevLowSwing.price) {
+        tracker.lastHL = swing;
+        tracker.lastChochLevel = null;
+      } else {
+        tracker.priorLL = tracker.lastLL;
+        tracker.lastLL = swing;
+        tracker.lastBearishBosLevel = null;
+      }
+    }
+    tracker.prevLowSwing = swing;
+  }
+
+  tracker.confirmedSwings.push(swing);
+  tracker.structureReady = hasInitialStructure(tracker.confirmedSwings);
+
+  if (
+    tracker.structureReady &&
+    tracker.lastHH &&
+    tracker.priorHH &&
+    tracker.lastLL &&
+    tracker.priorLL
+  ) {
+    const hhDelta = Math.abs(tracker.lastHH.price - tracker.priorHH.price) / tracker.priorHH.price;
+    const llDelta = Math.abs(tracker.lastLL.price - tracker.priorLL.price) / tracker.priorLL.price;
+    if (hhDelta < RANGE_EPSILON && llDelta < RANGE_EPSILON) {
+      tracker.trend = "RANGING";
+    }
+  }
+}
+
+function pushStructureBreak(
+  breaks: StructureBreak[],
+  candle: Candle,
+  type: StructureBreak["type"],
+  direction: StructureBreak["direction"],
+  brokenSwing: SwingPoint,
+  timeframe: CandleInterval
+): void {
+  breaks.push({
+    type,
+    direction,
+    level: brokenSwing.price,
+    ts: candle.openTime,
+    timeframe,
+    confirmed: true,
+  });
+}
+
+function evaluateStructureBreak(
+  candle: Candle,
+  tracker: StructureTracker,
+  breaks: StructureBreak[],
+  timeframe: CandleInterval
+): boolean {
+  if (!tracker.structureReady) return false;
+
+  const close = candle.close;
+
+  if (tracker.trend === "BULLISH") {
+    if (tracker.lastHL && close < tracker.lastHL.price) {
+      if (tracker.lastChochLevel !== tracker.lastHL.price) {
+        pushStructureBreak(breaks, candle, "CHOCH", "BEARISH", tracker.lastHL, timeframe);
+        tracker.lastChochLevel = tracker.lastHL.price;
+      }
+      tracker.trend = "BEARISH";
+      return true;
+    }
+    if (tracker.lastHH && close > tracker.lastHH.price) {
+      if (tracker.lastBullishBosLevel === tracker.lastHH.price) return false;
+      pushStructureBreak(breaks, candle, "BOS", "BULLISH", tracker.lastHH, timeframe);
+      tracker.lastBullishBosLevel = tracker.lastHH.price;
+      return true;
+    }
+    return false;
+  }
+
+  if (tracker.trend === "BEARISH") {
+    if (tracker.lastLH && close > tracker.lastLH.price) {
+      if (tracker.lastChochLevel !== tracker.lastLH.price) {
+        pushStructureBreak(breaks, candle, "CHOCH", "BULLISH", tracker.lastLH, timeframe);
+        tracker.lastChochLevel = tracker.lastLH.price;
+      }
+      tracker.trend = "BULLISH";
+      return true;
+    }
+    if (tracker.lastLL && close < tracker.lastLL.price) {
+      if (tracker.lastBearishBosLevel === tracker.lastLL.price) return false;
+      pushStructureBreak(breaks, candle, "BOS", "BEARISH", tracker.lastLL, timeframe);
+      tracker.lastBearishBosLevel = tracker.lastLL.price;
+      return true;
+    }
+    return false;
+  }
+
+  const bullishBreakLevel = tracker.lastHH ?? tracker.prevHighSwing;
+  const bearishBreakLevel = tracker.lastLL ?? tracker.prevLowSwing;
+
+  if (bullishBreakLevel && close > bullishBreakLevel.price) {
+    if (tracker.lastBullishBosLevel === bullishBreakLevel.price) return false;
+    pushStructureBreak(breaks, candle, "BOS", "BULLISH", bullishBreakLevel, timeframe);
+    tracker.lastBullishBosLevel = bullishBreakLevel.price;
+    tracker.trend = "BULLISH";
+    return true;
+  }
+
+  if (bearishBreakLevel && close < bearishBreakLevel.price) {
+    if (tracker.lastBearishBosLevel === bearishBreakLevel.price) return false;
+    pushStructureBreak(breaks, candle, "BOS", "BEARISH", bearishBreakLevel, timeframe);
+    tracker.lastBearishBosLevel = bearishBreakLevel.price;
+    tracker.trend = "BEARISH";
+    return true;
+  }
+
+  return false;
+}
+
 /**
- * Detects BOS (Break of Structure) and CHOCH (Change of Character).
+ * Deterministic BOS/CHoCH from confirmed swing sequence + close breaks.
  *
- * BOS: price breaks in the direction of the existing trend.
- * CHOCH: price breaks against the existing trend — potential reversal signal.
+ * BOS = continuation (bullish: close > last HH; bearish: close < last LL)
+ * CHOCH = reversal (bullish trend + close < last HL; bearish trend + close > last LH)
  */
 export function detectStructureBreaks(
   candles: Candle[],
   swingHighs: SwingPoint[],
   swingLows: SwingPoint[],
-  timeframe: CandleInterval
+  timeframe: CandleInterval,
+  lookback = SWING_LOOKBACK
 ): StructureBreak[] {
+  if (candles.length === 0 || swingHighs.length + swingLows.length < 2) return [];
+
   const breaks: StructureBreak[] = [];
-  if (swingHighs.length < 2 || swingLows.length < 2) return breaks;
+  const sortedSwings = mergeSwingsChronologically(swingHighs, swingLows);
+  const tracker = createStructureTracker();
 
-  // Determine prior trend by comparing the last two swing highs/lows
-  const prevHigh = swingHighs[swingHighs.length - 2];
-  const lastHigh = swingHighs[swingHighs.length - 1];
-  const prevLow = swingLows[swingLows.length - 2];
-  const lastLow = swingLows[swingLows.length - 1];
+  let swingCursor = 0;
+  let minSwingIndex = 0;
 
-  const makingHigherHighs = lastHigh.price > prevHigh.price;
-  const makingLowerLows = lastLow.price < prevLow.price;
-  const makingLowerHighs = lastHigh.price < prevHigh.price;
-  const makingHigherLows = lastLow.price > prevLow.price;
-
-  // Current candle (last)
-  const last = candles[candles.length - 1];
-
-  if (makingHigherHighs && makingHigherLows) {
-    // Uptrend
-    if (last.close > lastHigh.price) {
-      // Bullish BOS (continuation)
-      breaks.push({
-        type: "BOS", direction: "BULLISH", level: lastHigh.price,
-        ts: last.openTime, timeframe, confirmed: true,
-      });
-    } else if (last.close < lastLow.price) {
-      // Bearish CHOCH (potential reversal)
-      breaks.push({
-        type: "CHOCH", direction: "BEARISH", level: lastLow.price,
-        ts: last.openTime, timeframe, confirmed: last.close < lastLow.price,
-      });
+  for (let i = 1; i < candles.length; i++) {
+    while (
+      swingCursor < sortedSwings.length &&
+      sortedSwings[swingCursor].index + lookback <= i
+    ) {
+      const s = sortedSwings[swingCursor];
+      if (s.index >= minSwingIndex) registerConfirmedSwing(tracker, s);
+      swingCursor++;
     }
-  } else if (makingLowerLows && makingLowerHighs) {
-    // Downtrend
-    if (last.close < lastLow.price) {
-      // Bearish BOS (continuation)
-      breaks.push({
-        type: "BOS", direction: "BEARISH", level: lastLow.price,
-        ts: last.openTime, timeframe, confirmed: true,
-      });
-    } else if (last.close > lastHigh.price) {
-      // Bullish CHOCH (potential reversal)
-      breaks.push({
-        type: "CHOCH", direction: "BULLISH", level: lastHigh.price,
-        ts: last.openTime, timeframe, confirmed: last.close > lastHigh.price,
-      });
+
+    if (evaluateStructureBreak(candles[i], tracker, breaks, timeframe)) {
+      minSwingIndex = i;
     }
   }
 
   return breaks;
 }
 
-/**
- * Derives trend from swing structure (higher highs + higher lows = bullish, etc.)
- */
+export function deriveTrendFromStructure(
+  swingHighs: SwingPoint[],
+  swingLows: SwingPoint[],
+  candles: Candle[],
+  lookback = SWING_LOOKBACK
+): Trend {
+  if (candles.length === 0 || swingHighs.length + swingLows.length < 2) return "RANGING";
+
+  const sortedSwings = mergeSwingsChronologically(swingHighs, swingLows);
+  const tracker = createStructureTracker();
+
+  let swingCursor = 0;
+  for (let i = 1; i < candles.length; i++) {
+    while (
+      swingCursor < sortedSwings.length &&
+      sortedSwings[swingCursor].index + lookback <= i
+    ) {
+      registerConfirmedSwing(tracker, sortedSwings[swingCursor]);
+      swingCursor++;
+    }
+    evaluateStructureBreak(candles[i], tracker, [], "1m");
+  }
+
+  if (tracker.trend === "BULLISH") return "BULLISH";
+  if (tracker.trend === "BEARISH") return "BEARISH";
+  return "RANGING";
+}
+
+/** @deprecated Use deriveTrendFromStructure for bar-accurate trend. Kept for simple callers. */
 export function deriveTrend(swingHighs: SwingPoint[], swingLows: SwingPoint[]): Trend {
   if (swingHighs.length < 2 || swingLows.length < 2) return "RANGING";
 
@@ -118,9 +312,6 @@ export function deriveTrend(swingHighs: SwingPoint[], swingLows: SwingPoint[]): 
   return "RANGING";
 }
 
-/**
- * Classify momentum using RSI readings.
- */
 export function classifyMomentum(rsi: number | null, trend: Trend): Momentum {
   if (rsi === null) return "NEUTRAL";
   if (rsi > 70) return trend === "BULLISH" ? "STRONG_BULLISH" : "EXHAUSTING";
@@ -130,9 +321,6 @@ export function classifyMomentum(rsi: number | null, trend: Trend): Momentum {
   return trend === "BEARISH" ? "STRONG_BEARISH" : "EXHAUSTING";
 }
 
-/**
- * Full single-timeframe analysis.
- */
 export function analyzeTimeframe(candles: Candle[], timeframe: CandleInterval): TimeframeAnalysis {
   if (candles.length < 20) {
     return {
@@ -143,7 +331,6 @@ export function analyzeTimeframe(candles: Candle[], timeframe: CandleInterval): 
 
   const closes = candles.map((c) => c.close);
 
-  // EMA alignment
   const ema20 = new EMA(20);
   const ema50 = new EMA(50);
   const ema200 = new EMA(200);
@@ -158,17 +345,14 @@ export function analyzeTimeframe(candles: Candle[], timeframe: CandleInterval): 
     emaAlignment = e20 > e50 ? "BULLISH" : "BEARISH";
   }
 
-  // RSI
   const rsi = new RSI(14);
   closes.forEach((c) => rsi.update(c));
   const rsiValue = rsi.current;
 
-  // Swing points
   const { highs: swingHighs, lows: swingLows } = detectSwingPoints(candles);
-  const trend = deriveTrend(swingHighs, swingLows);
+  const trend = deriveTrendFromStructure(swingHighs, swingLows, candles);
   const momentum = classifyMomentum(rsiValue, trend);
 
-  // Structure breaks
   const structureBreaks = detectStructureBreaks(candles, swingHighs, swingLows, timeframe);
   const bosEvents = structureBreaks.filter((b) => b.type === "BOS");
   const chochEvents = structureBreaks.filter((b) => b.type === "CHOCH");
@@ -187,9 +371,6 @@ export function analyzeTimeframe(candles: Candle[], timeframe: CandleInterval): 
   };
 }
 
-/**
- * Combines all timeframe analyses into a MarketStructure.
- */
 export function buildMarketStructure(
   timeframeAnalyses: Record<string, TimeframeAnalysis>
 ): MarketStructure {
@@ -198,7 +379,6 @@ export function buildMarketStructure(
   let bullishScore = 0;
   let bearishScore = 0;
 
-  // Weight: 1D=5, 4H=4, 1H=3, 15m=2, 5m=1, 1m=0.5
   const tfWeights: Record<string, number> = {
     "1d": 5, "4h": 4, "1h": 3, "15m": 2, "5m": 1, "1m": 0.5,
   };
@@ -218,11 +398,9 @@ export function buildMarketStructure(
     ? Math.round((Math.max(bullishScore, bearishScore) / total) * 100)
     : 50;
 
-  // Collect all swing points
   const allHighs = tfs.flatMap((t) => t.swingHighs);
   const allLows = tfs.flatMap((t) => t.swingLows);
 
-  // Latest breaks across all timeframes
   const allBos = tfs.filter((t) => t.latestBos).map((t) => t.latestBos!);
   const allChoch = tfs.filter((t) => t.latestChoch).map((t) => t.latestChoch!);
   const latestBos = allBos.sort((a, b) => b.ts - a.ts)[0];

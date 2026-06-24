@@ -4,7 +4,7 @@ import { calculateTakeProfit } from "./tp-calculator";
 import { positionStore } from "./position-store";
 import { positionManagerBus } from "./event-bus";
 import { getDb } from "../../queries/connection";
-import { positions, exchangeCredentials } from "@db/schema";
+import { positions, exchangeCredentials, autoExecutorConfig } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { getFuturesPositions } from "../coindcx";
 import { decryptCreds } from "../../lib/crypto";
@@ -46,8 +46,24 @@ export async function ensureProtection(
     // Calculate missing TP using SL distance
     if (!status.hasTp && sl !== null && position.entryPrice > 0) {
       const slDistancePct = Math.abs((position.entryPrice - sl) / position.entryPrice);
-      const tpResult = calculateTakeProfit(position, ctx, slDistancePct);
-      tp = tpResult.tp1;
+      
+      // Load user configuration
+      const userCfg = await db.select()
+        .from(autoExecutorConfig)
+        .where(eq(autoExecutorConfig.userId, userId))
+        .limit(1)
+        .catch(() => []);
+      const userConfig = userCfg[0];
+      
+      if (userConfig && userConfig.trailingStopEnabled === false) {
+        const rr = parseFloat(userConfig.riskRewardRatio ?? "2.00");
+        tp = position.side === "LONG"
+          ? position.entryPrice * (1 + slDistancePct * rr)
+          : position.entryPrice * (1 - slDistancePct * rr);
+      } else {
+        const tpResult = calculateTakeProfit(position, ctx, slDistancePct);
+        tp = tpResult.tp1;
+      }
     }
 
     if (sl === null || tp === null) return status;

@@ -1,5 +1,6 @@
 import type { ManagedPosition, PositionLifecycleState, PositionSide } from "./types";
 import { positionManagerBus } from "./event-bus";
+import { computeMarginUsdt } from "../paper-currency";
 
 // ─── In-Memory Hot Position Store ───────────────────────────────────────────
 // Avoids DB reads on every assessment cycle.
@@ -58,6 +59,31 @@ class PositionStore {
     positionManagerBus.emit("position:lifecycle-changed", id, prev, state);
   }
 
+  updateQuantity(
+    id: number,
+    quantity: number,
+    margin: number,
+    entryPrice?: number,
+    realizedPnl?: number
+  ): void {
+    const pos = this.store.get(id);
+    if (!pos) return;
+    const pnlMultiplier = pos.side === "LONG" ? 1 : -1;
+    const entry = entryPrice ?? pos.entryPrice;
+    const unrealizedPnl = pnlMultiplier * (pos.markPrice - entry) * quantity;
+    const roe = margin > 0 ? (unrealizedPnl / margin) * 100 : 0;
+    this.store.set(id, {
+      ...pos,
+      quantity,
+      margin,
+      entryPrice: entry,
+      unrealizedPnl,
+      roe,
+      realizedPnl: realizedPnl ?? pos.realizedPnl,
+      updatedAt: new Date(),
+    });
+  }
+
   updateProtection(id: number, stopLoss: number | null, takeProfit: number | null): void {
     const pos = this.store.get(id);
     if (!pos) return;
@@ -110,7 +136,11 @@ class PositionStore {
   totalMarginUsed(isPaper?: boolean): number {
     return this.getOpen()
       .filter((p) => (isPaper === undefined ? true : p.isPaper === isPaper))
-      .reduce((sum, p) => sum + p.margin, 0);
+      .reduce(
+        (sum, p) =>
+          sum + computeMarginUsdt(p.quantity, p.entryPrice, p.leverage),
+        0
+      );
   }
 
   // Correlation check: how many positions on the same side (broad market exposure)

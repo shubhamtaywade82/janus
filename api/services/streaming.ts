@@ -1,11 +1,13 @@
 import { EventEmitter } from "events";
 import WebSocket from "ws";
 import { getDb } from "../queries/connection";
+import { SUPPORTED_SYMBOLS } from "../../contracts/constants";
 import { fundingRateHistory, liquidationEvents, marketData, openInterestData, orderBookSnapshots, recentTicks } from "@db/schema";
 import { marketStateManager } from "./market-state";
 import { getOrCreateFeedHealth, feedHealthRegistry } from "./feed-health";
 import { liquidityEngine } from "./liquidity-engine";
 import { fetchOpenInterest, fetchMarkPrice, fetchFundingRate, fetchKlines } from "./binance";
+import { MatchingEngine } from "./MatchingEngine";
 
 // Survive Vite HMR: store singletons on globalThis so hot-reloads don't orphan listeners
 const _g = globalThis as Record<string, unknown>;
@@ -124,10 +126,7 @@ async function pollMarkPriceAndFunding(symbol: string): Promise<void> {
     ]);
     if (mp) {
       marketStateManager.updateFunding(symbol, {
-        symbol,
         markPrice: mp.markPrice,
-        indexPrice: mp.indexPrice,
-        estimatedSettlePrice: mp.estimatedSettlePrice,
         fundingRate: fr?.fundingRate ?? "0",
         nextFundingTime: fr?.fundingTime ?? Date.now() + 8 * 60 * 60 * 1000,
       });
@@ -327,7 +326,12 @@ function handleTradeStream(symbol: string, data: any, throttle: (key: "depth" | 
   const prevTicker = tickerStateCache.get(symbol) ?? {};
   const liveTicker = { ...prevTicker, symbol: data.s ?? symbol, lastPrice: String(data.p) };
   tickerStateCache.set(symbol, liveTicker);
-  if (priceVal > 0) latestTickerCache.set(symbol, { lastPrice: priceVal, symbol: data.s ?? symbol });
+  if (priceVal > 0) {
+    latestTickerCache.set(symbol, { lastPrice: priceVal, symbol: data.s ?? symbol });
+    MatchingEngine.processIncomingTick(symbol, String(data.p)).catch((err) =>
+      console.error(`[streaming] Failed to match tick for ${symbol}:`, err)
+    );
+  }
   marketEvents.emit(`${symbol}:ticker`, liveTicker);
 
   throttle("trade", 1000, async () => {
@@ -400,7 +404,17 @@ export function unsubscribeFromSymbol(symbol: string) {
   if (!current) return;
 
   current.subscribers--;
-  if (current.subscribers <= 0) {
+  
+  // A bot running 24/7 needs to keep streaming alive for supported pairs
+  const isPermanent = SUPPORTED_SYMBOLS.includes(symbol as any);
+  const minSubscribers = isPermanent ? 1 : 0;
+  
+  if (current.subscribers <= minSubscribers) {
+    if (isPermanent) {
+      current.subscribers = 1;
+      return;
+    }
+    
     console.log(`[streaming] No subscribers left for ${symbol}. Closing WS connection.`);
     if (current.openInterestTimer) {
       clearInterval(current.openInterestTimer);

@@ -5,6 +5,7 @@ import { desc } from "drizzle-orm";
 import { activeStreams, latestTickerCache } from "../services/streaming";
 import { globalKillSwitch } from "../services/kill-switch";
 import { positionStore } from "../services/position-manager/position-store";
+import { env } from "../lib/env";
 
 const _bootTime = Date.now();
 
@@ -118,6 +119,21 @@ export const healthRouter = createRouter({
           open: openPositionCount,
           unrealizedPnl: totalUnrealizedPnl,
         },
+        kronos: await (async () => {
+          try {
+            const res = await fetch(`${env.kronosEndpoint}/health`, { signal: AbortSignal.timeout(3000) });
+            const data = await res.json() as any;
+            return {
+              status: data.status === "ok" ? "ok" : "degraded",
+              modelLoaded: data.model_loaded,
+            };
+          } catch (err: any) {
+            return {
+              status: "error",
+              error: err.message,
+            };
+          }
+        })(),
       },
     };
   }),

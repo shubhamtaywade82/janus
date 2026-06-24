@@ -67,9 +67,18 @@ function codeBasedDecision(
     const slDistance = Math.abs(entryPrice - stopLoss);
     const priceMove = Math.abs(markPrice - entryPrice);
     if (priceMove >= slDistance && stopLoss !== entryPrice) {
+      if (position.symbol.includes("ETH") && position.realizedPnl <= 0) {
+        return {
+          action: PA.PARTIAL_EXIT,
+          exitSizePct: 0.5,
+          confidence: 0.85,
+          reasoning: "ETH hybrid scaling: 1R profit reached — taking 50% off table.",
+          source: "CODE",
+        };
+      }
       return {
         action: PA.MOVE_TO_BREAKEVEN,
-        newStopLoss: entryPrice * 1.001,
+        newStopLoss: isLong ? entryPrice * 1.001 : entryPrice * 1.001,
         confidence: 0.80,
         reasoning: "Position has moved 1R in profit — moving stop to breakeven.",
         source: "CODE",
@@ -77,8 +86,8 @@ function codeBasedDecision(
     }
   }
 
-  // Rule 4: Trail if in strong trend and significant profit
-  if (roe > 10 && bias.bias === "STRONG_BULLISH" && ctx.trend !== "SIDEWAYS") {
+  // Rule 4: Trail if in strong trend and significant profit (Exclude XRP)
+  if (!position.symbol.includes("XRP") && roe > 10 && bias.bias === "STRONG_BULLISH" && ctx.trend !== "SIDEWAYS") {
     const newSl = ctx.atr14
       ? isLong
         ? markPrice - ctx.atr14 * 1.5

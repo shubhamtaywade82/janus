@@ -63,6 +63,7 @@ export const env = {
   ollamaEndpoint: process.env.OLLAMA_ENDPOINT ?? "http://localhost:11434",
   ollamaApiKeys: (process.env.OLLAMA_API_KEYS ?? "").split(",").filter(Boolean),
   ollamaModel: process.env.OLLAMA_MODEL ?? "llama3.2",
+  ollamaTimeoutMs: parseInt(process.env.OLLAMA_TIMEOUT_MS ?? "30000", 10),
 
   // ─── Bot automation ───
   // BOT_AUTO_START=true — auto-start the executor on server boot (default: false)
@@ -78,6 +79,14 @@ export const env = {
   // ENCRYPTION_KEY — 32-byte hex key for AES-256-GCM field-level encryption of API credentials
   // Generate: node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
   encryptionKey: process.env.ENCRYPTION_KEY ?? "",
+
+  // ─── Kronos ───
+  kronosEndpoint: process.env.KRONOS_ENDPOINT ?? "http://localhost:8000",
+
+  // ─── Telegram ───
+  // TELEGRAM_API_BASE — override Bot API host (e.g. local Bot API server or proxy)
+  telegramApiBase: (process.env.TELEGRAM_API_BASE ?? "https://api.telegram.org").replace(/\/$/, ""),
+  telegramConnectTimeoutMs: parseInt(process.env.TELEGRAM_CONNECT_TIMEOUT_MS ?? "5000", 10),
 };
 
 // CoinDCX env credentials fallback (used when DB has no stored credentials)

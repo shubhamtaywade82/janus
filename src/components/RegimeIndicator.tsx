@@ -4,7 +4,7 @@ import { cn } from "@/lib/utils";
 import { Activity, TrendingUp, Zap, AlertTriangle, RefreshCw } from "lucide-react";
 
 type RegimeType = "ranging_tight" | "ranging" | "reversal" | "intraday_trend" | "swing_trend" | "high_volatility";
-type StrategyType = "scalping_micro" | "scalping" | "bb_reversion" | "momentum_reversal" | "intraday" | "swing" | "grid" | "ml_sizing";
+type StrategyType = "bb_reversion" | "momentum_reversal" | "intraday" | "swing" | "grid" | "ml_sizing" | "h6_momentum" | "alpha_protocol";
 
 const REGIME_CFG: Record<RegimeType, { label: string; color: string; icon: React.ReactNode }> = {
   ranging_tight:   { label: "RANGING",   color: "text-[#a855f7] border-[#a855f7]/30 bg-[#a855f7]/10", icon: <Zap size={9} /> },
@@ -15,15 +15,18 @@ const REGIME_CFG: Record<RegimeType, { label: string; color: string; icon: React
   high_volatility: { label: "HIGH VOL",  color: "text-j-down border-j-down/30 bg-j-down/10", icon: <AlertTriangle size={9} /> },
 };
 
-const STRATEGY_LABEL: Record<StrategyType, string> = {
-  scalping_micro:     "Micro Scalp",
-  scalping:           "Scalping",
+const STRATEGY_LABEL: Record<string, string> = {
   bb_reversion:       "BB Revert",
   momentum_reversal:  "Mom. Reversal",
-  intraday:           "Intraday",
-  swing:              "Swing",
-  grid:               "Grid",
+  intraday:           "Intraday Trend",
+  swing:              "Swing Trend",
+  grid:               "Grid / Range",
   ml_sizing:          "ML Sizing",
+  h6_momentum:        "H6 Momentum",
+  alpha_protocol:     "Alpha Protocol",
+  // Legacy — display only for historical positions
+  scalping_micro:     "Micro Scalp (Legacy)",
+  scalping:           "Scalping (Legacy)",
 };
 
 export function RegimeIndicator({ symbol = "BTCUSDT" }: { symbol?: string }) {

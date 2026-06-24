@@ -8,6 +8,7 @@ import { liquidityEngine } from "../services/liquidity-engine";
 import { marketStateManager } from "../services/market-state";
 import {
   fetchKlines,
+  fetchKlinesPaginated,
   fetch24hTicker,
   fetchOrderBook,
   fetchRecentTrades,
@@ -18,7 +19,7 @@ import {
   type BinanceKline,
 } from "../services/binance";
 import { getDb } from "../queries/connection";
-import { marketData, orderBookSnapshots, recentTicks, marketRegimes } from "@db/schema";
+import { marketData, orderBookSnapshots, recentTicks, marketRegimes, liquidityZones } from "@db/schema";
 import { desc, eq, and } from "drizzle-orm";
 
 // ─── Interval → milliseconds ───
@@ -77,7 +78,7 @@ export const marketRouter = createRouter({
       z.object({
         symbol: z.string().default("BTCUSDT"),
         interval: z.string().default("1m"),
-        limit: z.number().min(500).max(1000).default(500),
+        limit: z.number().min(1).max(1000).default(500),
         endTime: z.number().optional(),   // ms timestamp — fetch candles before this time
       })
     )
@@ -144,6 +145,46 @@ export const marketRouter = createRouter({
 
         return []; // no data available
       }
+    }),
+
+  // ─── Single batch (for paginated historical fetch from UI) ───
+  klinesBatch: authedQuery
+    .input(
+      z.object({
+        symbol: z.string(),
+        interval: z.string(),
+        limit: z.number().min(1).max(1500).default(1500),
+        startTime: z.number().optional(),
+        endTime: z.number().optional(),
+      })
+    )
+    .query(async ({ input }) => {
+      return fetchKlines(
+        input.symbol,
+        input.interval,
+        input.limit,
+        input.endTime,
+        input.startTime
+      );
+    }),
+
+  // ─── Full historical range (server-side pagination) ───
+  klinesHistorical: authedQuery
+    .input(
+      z.object({
+        symbol: z.string(),
+        interval: z.string(),
+        startTime: z.number(),
+        endTime: z.number(),
+      })
+    )
+    .query(async ({ input }) => {
+      return fetchKlinesPaginated(
+        input.symbol,
+        input.interval,
+        input.startTime,
+        input.endTime
+      );
     }),
 
   // ─── Fetch 24h ticker stats ───
@@ -497,5 +538,21 @@ export const marketRouter = createRouter({
         .where(eq(marketRegimes.symbol, input.symbol))
         .orderBy(desc(marketRegimes.timestamp))
         .limit(input.limit);
+    }),
+
+  liquidityZones: authedQuery
+    .input(z.object({ symbol: z.string().optional() }).optional())
+    .query(async ({ input }) => {
+      const db = getDb();
+      if (input?.symbol) {
+        return db
+          .select()
+          .from(liquidityZones)
+          .where(and(eq(liquidityZones.isSwept, false), eq(liquidityZones.symbol, input.symbol)));
+      }
+      return db
+        .select()
+        .from(liquidityZones)
+        .where(eq(liquidityZones.isSwept, false));
     }),
 });

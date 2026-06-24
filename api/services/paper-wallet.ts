@@ -17,8 +17,6 @@ import { getUsdtInrRate } from "./coindcx";
 
 import {
   getOrCreateAccount,
-  reserveMargin,
-  releaseMargin,
   updateUnrealizedPnl,
   computeDerivedMetrics,
   resetAccount,
@@ -28,6 +26,7 @@ import {
   depositToAccount,
   getDepositTotals,
 } from "./trading-account";
+import { walletToUsdt } from "./paper-currency";
 
 // In-memory account-id cache keyed by "userId:currency"
 const accountIdCache = new Map<string, number>();
@@ -60,6 +59,10 @@ export async function getPaperWallet(
 
   const metrics = computeDerivedMetrics(account);
   const { totalDeposited, depositCount } = await getDepositTotals(account.id);
+  const walletCurrency = account.currency as "USDT" | "INR";
+  const equityUsdt = await walletToUsdt(metrics.equity, walletCurrency);
+  const balanceUsdt = await walletToUsdt(parseFloat(account.availableBalance), walletCurrency);
+  const freeMarginUsdt = await walletToUsdt(metrics.freeMargin, walletCurrency);
 
   return {
     userId,
@@ -68,9 +71,13 @@ export async function getPaperWallet(
     startingBalance: parseFloat(account.initialBalance),
     balance: parseFloat(account.availableBalance),
     lockedMargin: parseFloat(account.lockedMargin),
+    walletBalance: parseFloat(account.walletBalance),
     realizedPnl: parseFloat(account.realizedPnl),
     unrealizedPnl: parseFloat(account.unrealizedPnl),
     equity: metrics.equity,
+    equityUsdt,
+    balanceUsdt,
+    freeMarginUsdt,
     usedMargin: metrics.usedMargin,
     freeMargin: metrics.freeMargin,
     marginUtilization: metrics.marginUtilization,
@@ -116,13 +123,8 @@ export async function lockPaperMargin(
   positionId?: number,
   currency: "USDT" | "INR" = "INR"
 ): Promise<void> {
-  const accountId = await getAccountId(userId, undefined, currency);
-  let finalMargin = margin;
-  if (currency === "INR") {
-    const rate = await getUsdtInrRate();
-    finalMargin = margin * rate;
-  }
-  await reserveMargin(accountId, finalMargin, positionId ?? 0);
+  const { lockPaperPositionMargin } = await import("./paper-currency");
+  await lockPaperPositionMargin(userId, margin, positionId ?? 0, currency, "position");
 }
 
 /**
@@ -137,16 +139,8 @@ export async function releasePaperMargin(
   positionId?: number,
   currency: "USDT" | "INR" = "INR"
 ): Promise<void> {
-  const accountId = await getAccountId(userId, undefined, currency);
-  let finalMargin = margin;
-  let finalPnl = realizedPnl;
-  if (currency === "INR") {
-    const rate = await getUsdtInrRate();
-    finalMargin = margin * rate;
-    finalPnl = realizedPnl * rate;
-  }
-  const isWin = finalPnl > 0;
-  await releaseMargin(accountId, finalMargin, finalPnl, positionId ?? 0, isWin);
+  const { releasePaperPositionMargin } = await import("./paper-currency");
+  await releasePaperPositionMargin(userId, margin, realizedPnl, positionId ?? 0, currency);
 }
 
 export async function updatePaperUnrealizedPnl(

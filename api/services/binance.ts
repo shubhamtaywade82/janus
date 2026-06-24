@@ -138,9 +138,12 @@ export async function fetchKlines(
   symbol: string,
   interval: string = "1m",
   limit: number = 150,
-  endTime?: number          // ms timestamp — fetch candles BEFORE this time
+  endTime?: number,
+  startTime?: number
 ): Promise<BinanceKline[]> {
-  const qsBase = `symbol=${symbol}&interval=${interval}&limit=${limit}${endTime ? `&endTime=${endTime}` : ""}`;
+  const qsBase = `symbol=${symbol}&interval=${interval}&limit=${limit}${
+    startTime ? `&startTime=${startTime}` : ""
+  }${endTime ? `&endTime=${endTime}` : ""}`;
   const errors: string[] = [];
 
   // 1. Try futures REST (may be geo-blocked in some regions)
@@ -160,6 +163,51 @@ export async function fetchKlines(
   }
 
   throw new Error(`fetchKlines failed (all endpoints): ${errors.join(" | ")}`);
+}
+
+const KLINES_INTERVAL_MS: Record<string, number> = {
+  "1m": 60_000, "3m": 180_000, "5m": 300_000, "15m": 900_000, "30m": 1_800_000,
+  "1h": 3_600_000, "2h": 7_200_000, "4h": 14_400_000, "6h": 21_600_000,
+  "8h": 28_800_000, "12h": 43_200_000, "1d": 86_400_000, "3d": 259_200_000,
+  "1w": 604_800_000, "1M": 30 * 86_400_000,
+};
+
+/** Paginated historical kline fetch (up to 1500 candles per request). */
+export async function fetchKlinesPaginated(
+  symbol: string,
+  interval: string,
+  startMs: number,
+  endMs: number,
+  batchSize = 1500
+): Promise<BinanceKline[]> {
+  const intervalMs = KLINES_INTERVAL_MS[interval] ?? 3_600_000;
+  const all: BinanceKline[] = [];
+  let cursor = startMs;
+  let batches = 0;
+  const maxBatches = Math.ceil((endMs - startMs) / (intervalMs * batchSize)) + 2;
+
+  while (cursor < endMs && batches < maxBatches) {
+    const chunk = await fetchKlines(symbol, interval, batchSize, endMs, cursor);
+    if (!chunk.length) break;
+
+    all.push(...chunk);
+    const last = chunk[chunk.length - 1];
+    const next = last.closeTime + 1;
+    if (next <= cursor) break;
+    cursor = next;
+    batches++;
+    if (chunk.length < batchSize) break;
+    await new Promise((r) => setTimeout(r, 80));
+  }
+
+  const seen = new Set<number>();
+  return all
+    .filter((c) => {
+      if (seen.has(c.openTime)) return false;
+      seen.add(c.openTime);
+      return c.openTime >= startMs && c.openTime <= endMs;
+    })
+    .sort((a, b) => a.openTime - b.openTime);
 }
 
 type BinanceKlineRaw = [number, string, string, string, string, string, number, string, number, ...unknown[]];
@@ -260,9 +308,5 @@ export const SUPPORTED_PAIRS = [
   { binance: "BTCUSDT", coindcx: "B-BTC_USDT", name: "Bitcoin" },
   { binance: "ETHUSDT", coindcx: "B-ETH_USDT", name: "Ethereum" },
   { binance: "SOLUSDT", coindcx: "B-SOL_USDT", name: "Solana" },
-  { binance: "BNBUSDT", coindcx: "B-BNB_USDT", name: "BNB" },
   { binance: "XRPUSDT", coindcx: "B-XRP_USDT", name: "XRP" },
-  { binance: "ADAUSDT", coindcx: "B-ADA_USDT", name: "Cardano" },
-  { binance: "DOGEUSDT", coindcx: "B-DOGE_USDT", name: "Dogecoin" },
-  { binance: "AVAXUSDT", coindcx: "B-AVAX_USDT", name: "Avalanche" },
 ];

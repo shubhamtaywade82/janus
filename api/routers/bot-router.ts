@@ -15,8 +15,9 @@ import { globalAutoExecutor, autoExecutorEvents } from "../services/auto-executo
 import { env } from "../lib/env";
 
 const strategyTypeSchema = z.enum([
-  "scalping", "intraday", "swing", "grid",
-  "momentum_reversal", "bb_reversion", "ml_sizing", "scalping_micro",
+  "intraday", "swing", "grid",
+  "momentum_reversal", "bb_reversion", "ml_sizing", "h6_momentum",
+  "alpha_protocol",
 ]);
 
 export const botRouter = createRouter({

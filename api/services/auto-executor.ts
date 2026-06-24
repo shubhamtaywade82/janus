@@ -17,7 +17,7 @@ import { EventEmitter } from "events";
 import * as fs from "fs";
 import * as path from "path";
 import { getDb } from "../queries/connection";
-import { positions, exchangeCredentials, autoExecutorConfig, systemLogs, signals, executorDecisions, brainEpisodes } from "@db/schema";
+import { positions, exchangeCredentials, autoExecutorConfig, systemLogs, signals, executorDecisions, brainEpisodes, orders } from "@db/schema";
 import { llmDecisionEvents } from "./llm-events";
 import { eq, and } from "drizzle-orm";
 import { globalKillSwitch } from "./kill-switch";
@@ -26,22 +26,34 @@ import { globalGovernor } from "./governor";
 import { BrainOrchestrator } from "../brain/brain-orchestrator";
 import { reflectOnTrade } from "../brain/brain-reflection";
 import { globalLlmAdvisor, type SignalContext } from "./llm-advisor";
+import { getKronosSignal } from "./kronos-client";
 import { latestTickerCache } from "./streaming";
 import { marketStateManager } from "./market-state";
 import { markPriceCache, tradingEvents } from "./coindcx-ws";
 import { fetchKlines } from "./binance";
+import { evaluateWindow, type BinanceCandle } from "./noise-metrics";
 import { createFuturesOrder, getFuturesWallet, getFuturesInstrumentInfo, getOrderStatus, cancelOrder } from "./coindcx";
 import { registerPositionForTrailing, unregisterPosition } from "./trailing-stop";
 import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
 import type { ExitDecision } from "./exit-manager";
 import { snapshotEquity } from "./performance-tracker";
-import { getPaperWallet, lockPaperMargin, releasePaperMargin, getPaperEquity } from "./paper-wallet";
+import { getPaperWallet, getPaperEquity } from "./paper-wallet";
+import {
+  lockPaperPositionMargin,
+  releasePaperPositionMargin,
+  walletToUsdt,
+  resolvePaperPositionMargin,
+} from "./paper-currency";
 import { env, coinDCXEnvCreds } from "../lib/env";
 import { decryptCreds } from "../lib/crypto";
 import { recordPositionTransaction, estimateFee } from "./position-manager/transaction-ledger";
+import { RiskManager } from "./RiskManager";
+import { WalletLedgerService } from "./WalletLedgerService";
+import Decimal from "decimal.js";
 import type { Signal, AutoExecutorConfig } from "@db/schema";
 import type { StrategyType } from "./strategy-config";
+import { SYMBOL_MIN_SL_PCT, DEFAULT_MIN_SL_PCT, clampSystemLeverage, type SupportedSymbol } from "../../contracts/constants";
 
 const DEDUP_FILE = path.resolve(process.cwd(), "dedup-cache-state.json");
 
@@ -201,6 +213,12 @@ export class AutoExecutor {
   private recentExecutions = new Map<string, number>();
   private readonly DEDUP_WINDOW_MS = 60_000;
 
+  /** Synchronous in-flight lock: symbol+direction currently being processed.
+   *  Prevents the gate-3 (duplicate-position) read-then-insert race when
+   *  overlapping/concurrent onSignalBatch calls evaluate the same signal
+   *  before either has committed its position to the DB. */
+  private inFlight = new Set<string>();
+
   // Cache config to avoid DB read on every signal
   private configCache: AutoExecutorConfig | null = null;
   private configCacheAt = 0;
@@ -256,10 +274,10 @@ export class AutoExecutor {
     id: 0,
     userId: 1,
     enabled: true,
-    targetSymbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"],
+    targetSymbols: ["BTCUSDT", "ETHUSDT", "SOLUSDT", "XRPUSDT"],
     defaultSizeUsdt: "50",
-    defaultLeverage: 3,
-    capitalAllocationPct: "0.150",   // 15% base allocation (dynamic, conviction-scaled)
+    defaultLeverage: 5,
+    capitalAllocationPct: "0.250",   // 25% base allocation for paper (dynamic, conviction-scaled)
     useStrategyLeverage: true,        // use STRATEGY_CONFIGS leverage per regime
     stopLossPct: "0.015",
     tp1Pct: "0.015",
@@ -270,9 +288,13 @@ export class AutoExecutor {
     maxTotalPositions: 3,
     paperStartingBalance: "100000",
     paperCurrency: "INR",
+    trailingStopEnabled: true,
+    riskRewardRatio: "2.00",
     brainDriverEnabled: false,
     brainGateEnabled: false,
     brainShadowMode: true,
+    useKronosFilter: false,
+    kronosConfidenceThreshold: "0.5000",
     createdAt: new Date(),
     updatedAt: new Date(),
   };
@@ -445,6 +467,21 @@ export class AutoExecutor {
   }
 
   private async processSignal(signal: Signal, config: AutoExecutorConfig): Promise<ExecutorDecision> {
+    // Acquire the in-flight lock synchronously (before any await) so two
+    // concurrent batches cannot both clear the duplicate-position gate.
+    const flightKey = `${signal.symbol}:${signal.direction}`;
+    if (this.inFlight.has(flightKey)) {
+      return this.skip(signal, "already processing same symbol+side", "in_flight");
+    }
+    this.inFlight.add(flightKey);
+    try {
+      return await this.processSignalInner(signal, config);
+    } finally {
+      this.inFlight.delete(flightKey);
+    }
+  }
+
+  private async processSignalInner(signal: Signal, config: AutoExecutorConfig): Promise<ExecutorDecision> {
     this.state.signalsProcessed++;
 
     const context = await this.prepareExecutionContext(signal, config);
@@ -479,6 +516,12 @@ export class AutoExecutor {
     const advisorAdvice = await this.evaluateLlmAdvisor(signal, config, context);
     if (advisorAdvice && advisorAdvice.action === "skip") {
       return this.skip(signal, advisorAdvice.reason, advisorAdvice.gate, { llmDecision: advisorAdvice.llmDecision });
+    }
+
+    // ─── Kronos Gate Evaluation ───
+    const kronosAdvice = await this.evaluateKronosGate(signal, config, context);
+    if (kronosAdvice && kronosAdvice.action === "skip") {
+      return this.skip(signal, kronosAdvice.reason, kronosAdvice.gate, { llmDecision: kronosAdvice.kronosDecision });
     }
 
     // ─── Sizing & Price Discovery ───
@@ -537,9 +580,7 @@ export class AutoExecutor {
     this.recentExecutions.set(dedupKey, Date.now());
     await this.saveDedupCache();
 
-    if (isPaperMode) {
-      await lockPaperMargin(1, sizing.notional / sizing.leverage, undefined, paperCurrency);
-    }
+
 
     session.tradeCount++;
     await updateSession(session);
@@ -576,6 +617,16 @@ export class AutoExecutor {
   }
 
   private async evaluateBrainAuthority(signal: Signal, _config: AutoExecutorConfig): Promise<{ action: "skip" | "approve"; reason: string; gate: string; llmDecision?: ExecutorDecision["llmDecision"]; brainResult?: any } | null> {
+    const sigMetadata = signal.metadata as Record<string, any> | null;
+    if (sigMetadata?.source === "manual-trigger") {
+      const brainPromise = brainOrchestrator.evaluate(signal, 1).catch((err) => {
+        console.warn("[Auto-Executor] Brain shadow evaluation failed:", err.message);
+        return null;
+      });
+      (signal as any)._brainPromise = brainPromise;
+      return null;
+    }
+
     const brainConfig = await brainOrchestrator.getConfig(1);
     const brainHasAuthority = brainConfig.gateEnabled && !brainConfig.shadowMode;
 
@@ -609,7 +660,8 @@ export class AutoExecutor {
   private async evaluateLlmAdvisor(signal: Signal, config: AutoExecutorConfig, context: any): Promise<{ action: "skip" | "approve"; reason: string; gate: string; llmDecision?: ExecutorDecision["llmDecision"]; sizeMult?: number; stopLossPct?: number; takeProfitPct?: number } | null> {
     const sigMetadata = signal.metadata as Record<string, any> | null;
     const isBrainDriven = sigMetadata?.source === "brain-driver";
-    if (!config.useLlmAdvisor || isBrainDriven) return null;
+    const isManualTrigger = sigMetadata?.source === "manual-trigger";
+    if (!config.useLlmAdvisor || isBrainDriven || isManualTrigger) return null;
 
     const { symbol, side, openCount, session } = context;
     const regimeData = latestRegimeCache.get("BTCUSDT");
@@ -662,7 +714,58 @@ export class AutoExecutor {
       takeProfitPct: advice.takeProfitPct,
     };
   }
-private async getCurrentPrice(symbol: string, signal: Signal): Promise<number> {
+
+  private async evaluateKronosGate(
+    _signal: Signal,
+    config: AutoExecutorConfig,
+    context: any
+  ): Promise<{ action: "skip" | "approve"; reason: string; gate: string; kronosDecision?: any } | null> {
+    if (!config.useKronosFilter) return null;
+
+    const kronos = await getKronosSignal(context.symbol, "1m", 4);
+    if (!kronos) return null;
+
+    const side = context.side as "long" | "short";
+    const kronosDirection = kronos.directionSignal > 0.05 ? "long" : kronos.directionSignal < -0.05 ? "short" : "neutral";
+
+    const threshold = parseFloat(config.kronosConfidenceThreshold ?? "0.5000");
+
+    if (kronos.confidence < threshold) {
+      return {
+        action: "skip",
+        reason: `Kronos confidence ${(kronos.confidence * 100).toFixed(0)}% < ${(threshold * 100).toFixed(0)}% — unclear directional bias`,
+        gate: "kronos_confidence",
+        kronosDecision: { decision: "skip", confidence: kronos.confidence * 100, reasoning: "low confidence", keyUsed: "kronos" }
+      };
+    }
+
+    if (kronosDirection !== "neutral" && kronosDirection !== side) {
+      return {
+        action: "skip",
+        reason: `Kronos veto: predicts ${kronosDirection} but signal is ${side} (signal=${kronos.directionSignal.toFixed(3)})`,
+        gate: "kronos_veto",
+        kronosDecision: { decision: "skip", confidence: kronos.confidence * 100, reasoning: `veto, predicts ${kronosDirection}`, keyUsed: "kronos" }
+      };
+    }
+
+    if (kronos.volatilityForecast > 0.12) {
+      return {
+        action: "skip",
+        reason: `Kronos volatility forecast ${(kronos.volatilityForecast * 100).toFixed(1)}% > 12% — avoiding chaotic conditions`,
+        gate: "kronos_volatility",
+        kronosDecision: { decision: "skip", confidence: kronos.confidence * 100, reasoning: "high volatility", keyUsed: "kronos" }
+      };
+    }
+
+    return {
+      action: "approve",
+      reason: `Kronos aligned: ${kronosDirection} (conf=${(kronos.confidence * 100).toFixed(0)}%, vol=${(kronos.volatilityForecast * 100).toFixed(1)}%)`,
+      gate: "kronos",
+      kronosDecision: { decision: "execute", confidence: kronos.confidence * 100, reasoning: `aligned: ${kronosDirection}`, keyUsed: "kronos" }
+    };
+  }
+
+  private async getCurrentPrice(symbol: string, signal: Signal): Promise<number> {
   let currentPrice = markPriceCache.get(signal.symbol) ?? 0;
   if (currentPrice <= 0) currentPrice = latestTickerCache.get(symbol)?.lastPrice ?? 0;
   if (currentPrice <= 0) currentPrice = marketStateManager.get(symbol)?.ltp ?? 0;
@@ -689,15 +792,24 @@ private async calculateSizing(params: {
   advisorAdvice?: any;
 }) {
   const { signal, config, context, currentPrice, brainResult, advisorAdvice } = params;
-  const { side, walletFree, session } = context;
+  const { side, walletFree, session, isPaperMode } = context;
   const sigMetadata = signal.metadata as Record<string, any> | null;
   const regimeData = latestRegimeCache.get("BTCUSDT");
   const strategyType = (regimeData?.strategy ?? "intraday") as StrategyType;
+  const paperCurrency = (config.paperCurrency as "USDT" | "INR") ?? "INR";
 
   const isManualOverride = sigMetadata?.sizeUsdt !== undefined && sigMetadata.sizeUsdt !== null;
-  const availEquity = walletFree || session.startingBalance;
-  const baseAllocPct = parseFloat(config.capitalAllocationPct ?? "0.15");
-  const MAX_ALLOC_PCT = 0.15;
+  const availEquityRaw = walletFree || session.startingBalance;
+  const availEquityUsdt = isPaperMode
+    ? await walletToUsdt(availEquityRaw, paperCurrency)
+    : availEquityRaw;
+  const baseAllocPct = parseFloat(
+    config.capitalAllocationPct ?? (isPaperMode ? "0.250" : "0.150")
+  );
+  // Live allocation cap increased to 40% for aggressive sizing per user requirement
+  const maxAllocPct = isPaperMode
+    ? Math.max(baseAllocPct, 0.30)
+    : Math.max(baseAllocPct, 0.40);
 
   const score = parseFloat(signal.compositeScore) || 75;
   const scoreMult = Math.max(0.7, Math.min(1.0, 0.7 + 0.3 * ((score - 75) / 25)));
@@ -708,24 +820,179 @@ private async calculateSizing(params: {
     convictionMult *= brainResult.verdict === "REDUCE_RISK" ? 0.4 : 1.0;
   }
 
-  let notional = isManualOverride
-    ? parseFloat(String(sigMetadata!.sizeUsdt))
-    : availEquity * baseAllocPct * convictionMult;
+  // Kronos conviction scaling (direction agreement only — does not override leverage)
+  try {
+    const kronos = await getKronosSignal(signal.symbol, "1m", 4);
+    if (kronos && kronos.confidence > 0.7) {
+      const kronosDirection = kronos.directionSignal > 0 ? "long" : "short";
+      convictionMult *= kronosDirection === side ? 1.2 : 0.6;
+    }
+  } catch (err) {
+    console.warn(`[auto-executor] Failed to fetch Kronos signal for sizing:`, err);
+  }
 
-  if (brainHasAuthority && brainResult?.adjustedSizeUsdt) {
+  // ── 0. Fetch Noise Metrics (ATR, KER, StdDev) ──
+  let atr = 0;
+  let slPct = 0;
+  let tp1Pct = 0;
+  
+  if (context.isPaperMode) {
+    try {
+      const cleanSym = params.signal.symbol.replace(/^B-/, "").replace("_", "");
+      let interval = "1m";
+      let lookback = 50;
+      let multiplier = 1.5;
+      
+      if (strategyType === "swing") {
+        interval = "1h";
+        lookback = 50;
+        multiplier = 3.0;
+      } else if (strategyType === "intraday" || strategyType === "alpha_protocol") {
+        interval = "5m";
+        lookback = 50;
+        multiplier = 2.0;
+      }
+      
+      const klinesRaw = await fetchKlines(cleanSym, interval as any, lookback);
+      if (klinesRaw.length > 20) {
+        const binanceCandles: BinanceCandle[] = klinesRaw.map(k => ({
+          timestamp: k.timestamp,
+          open: parseFloat(k.open),
+          high: parseFloat(k.high),
+          low: parseFloat(k.low),
+          close: parseFloat(k.close),
+          volume: parseFloat(k.volume)
+        }));
+        
+        const metrics = evaluateWindow(binanceCandles);
+        atr = metrics.atr;
+        
+        if (metrics.isNoisy) {
+          return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: `Market is pure noise (KER: ${metrics.ker.toFixed(2)} < 0.3)`, skipGate: "noise_filter" };
+        }
+        
+        // Dynamic SL via multiplier
+        slPct = (multiplier * atr) / currentPrice;
+      }
+    } catch (err) {
+      console.warn(`[auto-executor] Noise metrics calculation failed for ${params.signal.symbol}:`, err);
+    }
+  } else {
+    // Legacy Alpha Protocol simple ATR fallback for Live
+    try {
+      const cleanSym = params.signal.symbol.replace(/^B-/, "").replace("_", "");
+      const klines = await fetchKlines(cleanSym, "1m", 30);
+      if (klines.length >= 2) {
+        const trs = klines.slice(1).map((k, i) => {
+          const prev = klines[i];
+          const high = parseFloat(k.high);
+          const low = parseFloat(k.low);
+          const prevClose = parseFloat(prev.close);
+          return Math.max(high - low, Math.abs(high - prevClose), Math.abs(low - prevClose));
+        });
+        atr = trs.reduce((s, v) => s + v, 0) / trs.length;
+      }
+    } catch (err) {
+      console.warn(`[auto-executor] Volatility sizing check failed for ${params.signal.symbol}:`, err);
+    }
+  }
+
+  // ── 1. Determine Stop Loss and Take Profit Percentages first ──
+  const baseSlPct = advisorAdvice?.stopLossPct ?? (sigMetadata?.stopLossPct ? parseFloat(String(sigMetadata.stopLossPct)) : parseFloat(config.stopLossPct ?? "0.015"));
+  const baseTp1Pct = advisorAdvice?.takeProfitPct ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
+  
+  if (slPct === 0) {
+    slPct = baseSlPct;
+  }
+  
+  tp1Pct = baseTp1Pct;
+
+  if (config.trailingStopEnabled === false) {
+    const rr = parseFloat(config.riskRewardRatio ?? "2.00");
+    tp1Pct = slPct * rr;
+  }
+
+  if (brainHasAuthority && brainResult) {
+    if (brainResult.adjustedSlPct !== undefined) slPct = brainResult.adjustedSlPct / 100;
+    if (brainResult.adjustedTpPct !== undefined) tp1Pct = brainResult.adjustedTpPct / 100;
+  } else if (!context.isPaperMode && atr > 0) {
+    // Alpha Protocol ATR-based stop loss for Live (Multiplier = 2)
+    slPct = (2.0 * atr) / currentPrice;
+  }
+  
+  // Automatically set TP to 2R if not provided by brain and not statically overridden
+  if (atr > 0 && !advisorAdvice?.takeProfitPct && !sigMetadata?.takeProfitPct) {
+    tp1Pct = slPct * 2.0;
+  }
+
+  const minSlPct = SYMBOL_MIN_SL_PCT[params.signal.symbol as SupportedSymbol] ?? DEFAULT_MIN_SL_PCT;
+  const MAX_SL_PCT = 0.08;   // 8%
+  const MIN_TP_PCT = 0.005;  // 0.5%
+  const MAX_TP_PCT = 0.15;   // 15%
+
+  if (slPct > 1) {
+    console.warn(`[auto-executor] slPct ${slPct} appears to be a whole percentage — dividing by 100`);
+    slPct = slPct / 100;
+  }
+  if (tp1Pct > 1) {
+    console.warn(`[auto-executor] tp1Pct ${tp1Pct} appears to be a whole percentage — dividing by 100`);
+    tp1Pct = tp1Pct / 100;
+  }
+
+  slPct = Math.max(minSlPct, Math.min(MAX_SL_PCT, slPct));
+  tp1Pct = Math.max(MIN_TP_PCT, Math.min(MAX_TP_PCT, tp1Pct));
+
+  // ── 2. Calculate Capital Allocation (Hybrid Risk-Aware) ──
+  // Limit how punishing the conviction multiplier can be (minimum 30% conviction to prevent tiny trades)
+  convictionMult = Math.max(0.3, convictionMult);
+
+  let notional = 0;
+  if (isManualOverride) {
+    notional = parseFloat(String(sigMetadata!.sizeUsdt));
+    if (!Number.isFinite(notional) || notional <= 0) {
+      return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: "manual sizeUsdt must be > 0", skipGate: "sizing" };
+    }
+    if (notional > availEquityUsdt) {
+      console.warn(`[auto-executor] manual sizeUsdt $${notional.toFixed(2)} capped to available equity $${availEquityUsdt.toFixed(2)} USDT`);
+      notional = availEquityUsdt;
+    }
+  } else {
+    // Alpha Protocol: Account Risk = 1.5% of Equity
+    const riskPct = 0.015;
+    const accountRisk = availEquityUsdt * riskPct * convictionMult;
+    const baseNotional = accountRisk / slPct;
+    
+    // Default fallback size (prevent micro-sizes in highly penalized conditions)
+    const defaultMinSize = parseFloat(config.defaultSizeUsdt ?? "50");
+
+    notional = Math.max(baseNotional, defaultMinSize);
+    notional = Math.min(notional, availEquityUsdt * maxAllocPct); // Hard cap on total notional
+  }
+
+  if (!isManualOverride && brainHasAuthority && brainResult?.adjustedSizeUsdt) {
     notional = brainResult.adjustedSizeUsdt;
   }
 
-  if (!isManualOverride) {
-    notional = Math.min(notional, availEquity * MAX_ALLOC_PCT);
+  // ── 3. Alpha Protocol Enforcements ──
+  const rrr = tp1Pct / slPct;
+  if (rrr < 1.5) {
+    return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: `RRR ${rrr.toFixed(2)} < 1.5`, skipGate: "rrr_filter" };
+  }
+  
+  if (atr > 0) {
+    const atrPct = atr / currentPrice;
+    if (atrPct > 0.05) {
+      notional *= 0.5;
+      console.log(`[auto-executor] Volatility regime EXTREME: ATR ${(atrPct * 100).toFixed(2)}% > 5% — halving size for ${params.signal.symbol}`);
+    }
   }
 
   const strategyMaxLev = STRATEGY_CONFIGS[strategyType]?.maxLeverage ?? 5;
   const manualLeverage = sigMetadata?.leverage ? parseFloat(String(sigMetadata.leverage)) : undefined;
   const rawLeverage = manualLeverage !== undefined
     ? manualLeverage
-    : (config.useStrategyLeverage ? strategyMaxLev : Math.min(config.defaultLeverage ?? 3, strategyMaxLev));
-  const leverage = manualLeverage !== undefined ? rawLeverage : Math.min(rawLeverage, 10);
+    : (config.useStrategyLeverage ? strategyMaxLev : Math.min(config.defaultLeverage ?? 5, strategyMaxLev));
+  const leverage = clampSystemLeverage(rawLeverage);
 
   let size = notional / currentPrice;
   let basePrecision = 2;
@@ -746,12 +1013,10 @@ private async calculateSizing(params: {
         size = parseFloat(size.toFixed(instrInfo.target_currency_precision ?? 4));
       }
 
-      // Re-check min quantity after rounding down to step size — rounding can push size below the exchange minimum
       if (minQty > 0 && size < minQty) {
         return { size: 0, leverage: 0, notional: 0, stopLoss: 0, takeProfit: 0, strategyType, skipReason: `rounded size ${size.toFixed(6)} < min qty ${minQty}`, skipGate: "min_qty" };
       }
 
-      // Min notional check — exchange rejects orders whose value (qty × price) is below this threshold
       const minNotional = parseFloat(instrInfo.min_notional ?? "0");
       const roundedNotional = size * currentPrice;
       if (minNotional > 0 && roundedNotional < minNotional) {
@@ -762,49 +1027,23 @@ private async calculateSizing(params: {
     console.warn(`[auto-executor] Failed to fetch instrument info:`, err);
   }
 
-  let slPct = advisorAdvice?.stopLossPct ?? (sigMetadata?.stopLossPct ? parseFloat(String(sigMetadata.stopLossPct)) : parseFloat(config.stopLossPct ?? "0.015"));
-  let tp1Pct = advisorAdvice?.takeProfitPct ?? (sigMetadata?.takeProfitPct ? parseFloat(String(sigMetadata.takeProfitPct)) : parseFloat(config.tp1Pct ?? "0.015"));
-
-  if (brainHasAuthority && brainResult) {
-    if (brainResult.adjustedSlPct !== undefined) slPct = brainResult.adjustedSlPct / 100;
-    if (brainResult.adjustedTpPct !== undefined) tp1Pct = brainResult.adjustedTpPct / 100;
-  }
-
-  // ── Sanity clamp: catch any remaining misscaled or out-of-range values ──
-  const MIN_SL_PCT = 0.003;  // 0.3%
-  const MAX_SL_PCT = 0.08;   // 8%
-  const MIN_TP_PCT = 0.005;  // 0.5%
-  const MAX_TP_PCT = 0.15;   // 15%
-
-  if (slPct > 1) {
-    console.warn(`[auto-executor] slPct ${slPct} appears to be a whole percentage — dividing by 100`);
-    slPct = slPct / 100;
-  }
-  if (tp1Pct > 1) {
-    console.warn(`[auto-executor] tp1Pct ${tp1Pct} appears to be a whole percentage — dividing by 100`);
-    tp1Pct = tp1Pct / 100;
-  }
-
-  slPct = Math.max(MIN_SL_PCT, Math.min(MAX_SL_PCT, slPct));
-  tp1Pct = Math.max(MIN_TP_PCT, Math.min(MAX_TP_PCT, tp1Pct));
-
   const stopLoss = parseFloat((side === "long" ? currentPrice * (1 - slPct) : currentPrice * (1 + slPct)).toFixed(basePrecision));
   const takeProfit = parseFloat((side === "long" ? currentPrice * (1 + tp1Pct) : currentPrice * (1 - tp1Pct)).toFixed(basePrecision));
 
   // ── Final sanity: SL must be on correct side of entry ──
   if (side === "long" && stopLoss >= currentPrice) {
-    console.warn(`[auto-executor] SL ${stopLoss} >= entry ${currentPrice} for LONG — resetting to -${(MIN_SL_PCT * 100).toFixed(1)}%`);
-    const correctedSl = parseFloat((currentPrice * (1 - MIN_SL_PCT)).toFixed(basePrecision));
+    console.warn(`[auto-executor] SL ${stopLoss} >= entry ${currentPrice} for LONG — resetting to -${(minSlPct * 100).toFixed(1)}%`);
+    const correctedSl = parseFloat((currentPrice * (1 - minSlPct)).toFixed(basePrecision));
     return { size, leverage, notional, stopLoss: correctedSl, takeProfit, strategyType };
   }
   if (side === "short" && stopLoss <= currentPrice) {
-    console.warn(`[auto-executor] SL ${stopLoss} <= entry ${currentPrice} for SHORT — resetting to +${(MIN_SL_PCT * 100).toFixed(1)}%`);
-    const correctedSl = parseFloat((currentPrice * (1 + MIN_SL_PCT)).toFixed(basePrecision));
+    console.warn(`[auto-executor] SL ${stopLoss} <= entry ${currentPrice} for SHORT — resetting to +${(minSlPct * 100).toFixed(1)}%`);
+    const correctedSl = parseFloat((currentPrice * (1 + minSlPct)).toFixed(basePrecision));
     return { size, leverage, notional, stopLoss: correctedSl, takeProfit, strategyType };
   }
 
   const book = marketStateManager.get(params.signal.symbol)?.orderBook;
-  if (book) {
+  if (book && !isManualOverride) {
     const levels = side === "long" ? book.asks : book.bids;
     const totalDepth = levels.reduce((sum, [, qty]) => sum + qty, 0);
     if (totalDepth > 0 && size > totalDepth * 0.05) {
@@ -858,39 +1097,96 @@ private async executePosition(params: {
   }): Promise<void> {
     const db = getDb();
     const clientOrderId = `AE-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const currency = params.isPaper ? (params.paperCurrency ?? "INR") : "USDT";
 
-    // 1. Pre-insert the position record in the database before order execution.
-    // If the process crashes or DB becomes unavailable now, no live order was placed.
-    // If the DB write succeeds but subsequent order placement crashes, the record is left
-    // as a pending tracking record with exchangeOrderId = clientOrderId for the reconciler.
-    const posId = await db.transaction(async (tx) => {
-      const result = await tx.insert(positions).values({
-        userId: params.userId,
-        symbol: params.symbol,
-        side: params.side,
-        entryPrice: String(params.currentPrice),
-        currentPrice: String(params.currentPrice),
-        size: String(params.size),
-        leverage: params.leverage,
-        margin: String((params.notional / params.leverage).toFixed(4)),
-        marginCurrency: params.isPaper ? (params.paperCurrency ?? "INR") : "USDT",
-        stopLoss: String(params.stopLoss),
-        takeProfit: String(params.takeProfit),
-        unrealizedPnl: "0",
-        realizedPnl: "0",
-        status: "open",
-        exchangeOrderId: clientOrderId, // Store temporary client ID first
-        signalId: params.signalId,
-        strategyType: params.strategyType,
-        isPaper: params.isPaper,
-        entryReason: params.entryReason,
-      }).returning({ id: positions.id });
+    // 1. Structural evaluation via RiskManager
+    const orderParams = {
+      symbol: params.symbol,
+      side: (params.side === "long" ? "BUY" : "SELL") as "BUY" | "SELL",
+      orderType: "MARKET" as const,
+      quantity: params.size.toString(),
+      price: params.currentPrice.toString(),
+      leverage: params.leverage,
+      stopLoss: params.stopLoss ? params.stopLoss.toString() : undefined,
+      takeProfit: params.takeProfit ? params.takeProfit.toString() : undefined,
+    };
+    await RiskManager.validateOrder(params.userId, orderParams, params.isPaper, currency);
+
+    // 2. Insert order record into the database
+    const orderId = await db.transaction(async (tx) => {
+      const now = new Date();
+      const result = await tx
+        .insert(orders as any)
+        .values({
+          clientOrderId,
+          userId: params.userId,
+          symbol: params.symbol,
+          side: params.side === "long" ? "BUY" : "SELL",
+          orderType: "MARKET",
+          price: params.currentPrice.toString(),
+          quantity: params.size.toString(),
+          status: params.isPaper ? "OPEN" : "PENDING",
+          leverage: params.leverage,
+          stopLoss: params.stopLoss ? params.stopLoss.toString() : null,
+          takeProfit: params.takeProfit ? params.takeProfit.toString() : null,
+          createdAt: now,
+          updatedAt: now,
+          // ─── PTA extensions ────────────────────────────────────────────────
+          executionMode: params.isPaper ? "PAPER" : "LIVE",
+          fillModel: (params as any).fillModel ?? "MARK_PRICE",
+          binanceMarkPriceAtSend: params.currentPrice,
+          orderConstructedAt: now,
+          orderSentAt: now,
+        })
+        .returning({ id: orders.id });
       return result[0].id;
     });
 
-    let exchangeOrderId: string | undefined;
+    // 3. Pessimistically lock margin using WalletLedgerService
+    const marginAllocation = new Decimal(params.size)
+      .mul(new Decimal(params.currentPrice))
+      .div(new Decimal(params.leverage))
+      .toFixed(8);
 
-    if (params.creds && !params.isPaper) {
+    if (params.isPaper) {
+      await lockPaperPositionMargin(
+        params.userId,
+        parseFloat(marginAllocation),
+        orderId,
+        currency,
+        "order"
+      );
+    } else {
+      await WalletLedgerService.lockMargin(
+        params.userId,
+        "live",
+        currency,
+        marginAllocation,
+        orderId,
+        "order"
+      );
+    }
+
+    // 4. Execution path
+    if (params.isPaper) {
+      console.log(`[auto-executor] Enqueuing paper order ${clientOrderId} to matching engine queue`);
+      const { Queue } = await import("bullmq");
+      const { default: Redis } = await import("ioredis");
+      const executionQueue = new Queue("EngineExecution", {
+        connection: new Redis(process.env.REDIS_URL || "redis://127.0.0.1:6379") as any,
+      });
+
+      await executionQueue.add("ExecuteMatch", {
+        clientOrderId,
+        executionPrice: params.currentPrice.toString(),
+        timestamp: Date.now(),
+      });
+    } else {
+      if (!params.creds) {
+        throw new Error("No exchange credentials found for live execution");
+      }
+
+      let exchangeOrderId: string | undefined;
       try {
         const coindcxSym = `B-${params.symbol.replace("USDT", "_USDT")}`;
         const order = await placeEntryOrder(
@@ -909,76 +1205,120 @@ private async executePosition(params: {
         exchangeOrderId = order?.id;
         console.log(`[auto-executor] Exchange order placed: ${exchangeOrderId} (client=${clientOrderId})`);
 
-        // Verify order was fully filled (remaining_quantity should be "0" for market orders)
         const remaining = parseFloat(order?.remaining_quantity ?? "0");
         if (remaining > 0) {
           console.warn(
-            `[auto-executor] Order ${exchangeOrderId} partially filled — remaining=${remaining}. ` +
-            `Position will reflect actual fill.`
+            `[auto-executor] Order ${exchangeOrderId} partially filled — remaining=${remaining}`
           );
         }
 
-        // 2. Update DB with actual exchangeOrderId and fill price (avg_price from exchange)
-        const fillPrice = parseFloat(order?.avg_price || order?.price_per_unit || "0");
-        const updateFields: { exchangeOrderId: string; entryPrice?: string; currentPrice?: string } = { exchangeOrderId: exchangeOrderId! };
-        if (fillPrice > 0 && Math.abs(fillPrice - params.currentPrice) / params.currentPrice > 0.0001) {
-          updateFields.entryPrice = String(fillPrice);
-          updateFields.currentPrice = String(fillPrice);
-          console.log(`[auto-executor] Fill price: ${params.currentPrice} → ${fillPrice} (slippage ${((fillPrice - params.currentPrice) / params.currentPrice * 100).toFixed(4)}%)`);
-        }
-        await db.update(positions)
-          .set(updateFields)
-          .where(eq(positions.id, posId));
+        const fillPrice = parseFloat(order?.avg_price || order?.price_per_unit || "0") || params.currentPrice;
 
-      } catch (err: any) {
-        console.error(`[auto-executor] Exchange order failed: ${err.message}. Cleaning up DB record ${posId}...`);
-        // 3. Rollback: delete the position record if order placement failed
-        await db.delete(positions).where(eq(positions.id, posId)).catch((dbErr) => {
-          console.error(`[auto-executor] Failed to clean up DB record after order failure:`, dbErr);
+        const posId = await db.transaction(async (tx) => {
+          await tx
+            .update(orders)
+            .set({
+              status: "FILLED",
+              filledQuantity: params.size.toString(),
+              updatedAt: new Date(),
+            })
+            .where(eq(orders.id, orderId));
+
+          const result = await tx
+            .insert(positions)
+            .values({
+              userId: params.userId,
+              symbol: params.symbol,
+              side: params.side,
+              entryPrice: String(fillPrice),
+              currentPrice: String(fillPrice),
+              size: String(params.size),
+              leverage: params.leverage,
+              margin: String((params.size * fillPrice / params.leverage).toFixed(4)),
+              marginCurrency: "USDT",
+              stopLoss: String(params.stopLoss),
+              takeProfit: String(params.takeProfit),
+              unrealizedPnl: "0",
+              realizedPnl: "0",
+              status: "open",
+              exchangeOrderId: exchangeOrderId,
+              signalId: params.signalId,
+              strategyType: params.strategyType,
+              isPaper: false,
+              entryReason: params.entryReason,
+              createdAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .returning({ id: positions.id });
+          return result[0].id;
         });
-        throw err; // re-throw so processSignal catches it
+
+        const feeVal = estimateFee(params.size * fillPrice);
+        await WalletLedgerService.chargeFee(
+          params.userId,
+          "live",
+          "USDT",
+          feeVal.toFixed(8),
+          posId
+        );
+
+        await recordPositionTransaction({
+          positionId: posId,
+          userId: params.userId,
+          symbol: params.symbol,
+          type: "OPEN",
+          side: params.side,
+          quantityBefore: 0,
+          quantityAfter: params.size,
+          quantityDelta: params.size,
+          price: fillPrice,
+          avgEntryPrice: fillPrice,
+          realizedPnl: 0,
+          fee: feeVal,
+          marginBefore: 0,
+          marginAfter: (params.size * fillPrice) / params.leverage,
+          metadata: {
+            signalId: params.signalId,
+            strategyType: params.strategyType,
+            isPaper: false,
+            exchangeOrderId: exchangeOrderId ?? clientOrderId,
+            leverage: params.leverage,
+            stopLoss: params.stopLoss,
+            takeProfit: params.takeProfit,
+          },
+        });
+
+        if (!params.disableTrailing && !params.symbol.includes("XRP")) {
+          registerPositionForTrailing({
+            id: posId,
+            symbol: params.symbol,
+            side: params.side,
+            entryPrice: fillPrice,
+            stopLoss: params.stopLoss,
+            strategyType: params.strategyType,
+            userId: params.userId,
+            size: params.size,
+          });
+        }
+      } catch (err: any) {
+        console.error(
+          `[auto-executor] Exchange order failed: ${err.message}. Rejecting order and refunding margin...`
+        );
+        await db
+          .update(orders)
+          .set({ status: "REJECTED", updatedAt: new Date() })
+          .where(eq(orders.id, orderId));
+
+        await WalletLedgerService.refundMargin(
+          params.userId,
+          "live",
+          "USDT",
+          marginAllocation,
+          orderId,
+          "order"
+        );
+        throw err;
       }
-    }
-
-    // Record OPEN transaction in the immutable ledger
-    const margin = parseFloat((params.notional / params.leverage).toFixed(4));
-    await recordPositionTransaction({
-      positionId: posId,
-      userId: params.userId,
-      symbol: params.symbol,
-      type: "OPEN",
-      side: params.side,
-      quantityBefore: 0,
-      quantityAfter: params.size,
-      quantityDelta: params.size,
-      price: params.currentPrice,
-      avgEntryPrice: params.currentPrice,
-      realizedPnl: 0,
-      fee: estimateFee(params.notional),
-      marginBefore: 0,
-      marginAfter: margin,
-      metadata: {
-        signalId: params.signalId,
-        strategyType: params.strategyType,
-        isPaper: params.isPaper,
-        exchangeOrderId: exchangeOrderId ?? clientOrderId,
-        leverage: params.leverage,
-        stopLoss: params.stopLoss,
-        takeProfit: params.takeProfit,
-      },
-    });
-
-    if (!params.disableTrailing) {
-      registerPositionForTrailing({
-        id: posId,
-        symbol: params.symbol,
-        side: params.side,
-        entryPrice: params.currentPrice,
-        stopLoss: params.stopLoss,
-        strategyType: params.strategyType,
-        userId: params.userId,
-        size: params.size,
-      });
     }
 
     tradingEvents.emit(`portfolio-update:${params.userId}`);
@@ -1033,7 +1373,20 @@ private async executePosition(params: {
     if (position.isPaper) {
       const cfg = await this.getConfig();
       const paperCurrency = (position.marginCurrency as "USDT" | "INR") ?? (cfg?.paperCurrency as "USDT" | "INR") ?? "INR";
-      await releasePaperMargin(position.userId, parseFloat(position.margin), realizedPnl, position.id, paperCurrency);
+      const { marginUsdt } = await resolvePaperPositionMargin({
+        marginStored: parseFloat(position.margin),
+        marginCurrency: paperCurrency,
+        size: parseFloat(position.size),
+        entryPrice: parseFloat(position.entryPrice),
+        leverage: position.leverage,
+      });
+      await releasePaperPositionMargin(
+        position.userId,
+        marginUsdt,
+        realizedPnl,
+        position.id,
+        paperCurrency
+      );
     } else {
       console.log(`[auto-executor] Live position ${position.symbol} #${position.id} exit signal — DB updated, no exchange order placed (monitor-only)`);
     }

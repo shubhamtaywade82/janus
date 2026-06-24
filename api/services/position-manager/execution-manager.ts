@@ -8,11 +8,33 @@ import { createFuturesOrder, getFuturesInstrumentInfo } from "../coindcx";
 import { syncTrailingStopLoss } from "../trailing-stop";
 import { env } from "../../lib/env";
 import { getDb } from "../../queries/connection";
-import { positions, exchangeCredentials } from "@db/schema";
+import { positions, exchangeCredentials, autoExecutorConfig, trades, strategyTypeEnum } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { decryptCreds } from "../../lib/crypto";
-import { releasePaperMargin } from "../paper-wallet";
+import {
+  lockPaperPositionMargin,
+  releasePaperPositionMargin,
+  walletToUsdt,
+  resolvePaperPositionMargin,
+  usdtMarginToStored,
+  computeMarginUsdt,
+} from "../paper-currency";
+import { getPaperWallet } from "../paper-wallet";
 import { recordPositionTransaction, estimateFee } from "../position-manager/transaction-ledger";
+
+async function paperMarginSnapshot(position: ManagedPosition) {
+  const currency = (position.marginCurrency as "USDT" | "INR") ?? "INR";
+  return {
+    currency,
+    ...(await resolvePaperPositionMargin({
+      marginStored: position.margin,
+      marginCurrency: currency,
+      size: position.quantity,
+      entryPrice: position.entryPrice,
+      leverage: position.leverage,
+    })),
+  };
+}
 
 /**
  * Returns true only if the proposed SL is strictly better than current.
@@ -43,6 +65,19 @@ async function fetchCredentials(userId: number) {
   return decryptCreds(cred);
 }
 
+async function roundQty(symbol: string, qty: number): Promise<number> {
+  try {
+    const instrInfo = await getFuturesInstrumentInfo(symbol);
+    if (!instrInfo) return qty;
+    const stepSize = parseFloat(instrInfo.step ?? instrInfo.quantity_step ?? "0");
+    const targetPrecision = instrInfo.target_currency_precision ?? 4;
+    if (stepSize > 0) return Math.floor(qty / stepSize) * stepSize;
+    return parseFloat(qty.toFixed(targetPrecision));
+  } catch {
+    return qty;
+  }
+}
+
 export async function executeAction(
   position: ManagedPosition,
   recommendation: AiRecommendation,
@@ -52,20 +87,9 @@ export async function executeAction(
   const action = policy.action;
   const db = getDb();
 
-  // Live positions are monitor-only regardless of mode (paper-only execution policy)
-  if (!position.isPaper && action !== PA.KEEP_OPEN) {
-    positionManagerBus.emit(
-      "position:action-executed",
-      position.id,
-      action,
-      "ok",
-      `[monitor] would execute ${action}: ${recommendation.reasoning ?? ""}`
-    );
-    return { success: true, detail: `[monitor] ${action} observed — live position, no automatic execution` };
-  }
-
-  // Monitor mode: observe and emit events but never mutate positions or place orders.
-  // KEEP_OPEN passes through so the assessment cycle still records assessments.
+  // Live AI execution enabled — bot decisions execute automatically.
+  // The monitor-mode guard still prevents execution when env.isMonitorMode is true.
+  // Previous live-only monitor guard removed per user requirement for complete automation.
   if (env.isMonitorMode && action !== PA.KEEP_OPEN) {
     positionManagerBus.emit(
       "position:action-executed",
@@ -93,7 +117,7 @@ export async function executeAction(
           recommendation.newStopLoss ??
           (position.side === "LONG"
             ? position.entryPrice * (1 + TAKER_FEE * 2)
-            : position.entryPrice * (1 - TAKER_FEE * 2));
+            : position.entryPrice * (1 + TAKER_FEE * 2));
 
         if (!isSlImprovement(position.side, position.stopLoss, newSl)) {
           positionManagerBus.emit(
@@ -104,6 +128,28 @@ export async function executeAction(
             `MOVE_TO_BREAKEVEN rejected: ${newSl.toFixed(4)} is worse than current ${position.stopLoss?.toFixed(4)}`
           );
           return { success: false, detail: `Breakeven rejected: would lower SL` };
+        }
+
+        const markPrice = position.markPrice;
+        if (position.side === "LONG" && newSl >= markPrice) {
+          positionManagerBus.emit(
+            "position:action-executed",
+            position.id,
+            action,
+            "failed",
+            `MOVE_TO_BREAKEVEN rejected: proposed SL ${newSl.toFixed(4)} is >= current mark ${markPrice.toFixed(4)}`
+          );
+          return { success: false, detail: `Breakeven rejected: SL would cross current mark price` };
+        }
+        if (position.side === "SHORT" && newSl <= markPrice) {
+          positionManagerBus.emit(
+            "position:action-executed",
+            position.id,
+            action,
+            "failed",
+            `MOVE_TO_BREAKEVEN rejected: proposed SL ${newSl.toFixed(4)} is <= current mark ${markPrice.toFixed(4)}`
+          );
+          return { success: false, detail: `Breakeven rejected: SL would cross current mark price` };
         }
 
         await db
@@ -156,6 +202,28 @@ export async function executeAction(
             `TRAIL_SL rejected: ${newSl.toFixed(4)} is worse than current ${position.stopLoss?.toFixed(4)}`
           );
           return { success: false, detail: `Trail rejected: would reverse SL` };
+        }
+
+        const markPrice = position.markPrice;
+        if (position.side === "LONG" && newSl >= markPrice) {
+          positionManagerBus.emit(
+            "position:action-executed",
+            position.id,
+            action,
+            "failed",
+            `TRAIL_SL rejected: proposed SL ${newSl.toFixed(4)} is >= current mark ${markPrice.toFixed(4)}`
+          );
+          return { success: false, detail: `Trail rejected: SL would cross current mark price` };
+        }
+        if (position.side === "SHORT" && newSl <= markPrice) {
+          positionManagerBus.emit(
+            "position:action-executed",
+            position.id,
+            action,
+            "failed",
+            `TRAIL_SL rejected: proposed SL ${newSl.toFixed(4)} is <= current mark ${markPrice.toFixed(4)}`
+          );
+          return { success: false, detail: `Trail rejected: SL would cross current mark price` };
         }
 
         await db
@@ -255,6 +323,10 @@ export async function executeAction(
           console.warn(`[execution-manager] Failed to fetch instrument info for precision mapping:`, err);
         }
 
+        if (exitQty <= 0) {
+          return { success: false, detail: "PARTIAL_EXIT skipped: exit quantity rounds to zero" };
+        }
+
         if (!position.isPaper) {
           if (!env.placeOrders) {
             return { success: false, detail: "PARTIAL_EXIT skipped: PLACE_ORDERS=false" };
@@ -262,8 +334,11 @@ export async function executeAction(
           try {
             const creds = await fetchCredentials(userId);
             const coindcxSide = position.side === "LONG" ? "sell" : "buy";
+            const coindcxSymbol = position.symbol.startsWith("B-")
+              ? position.symbol
+              : `B-${position.symbol.replace("USDT", "_USDT")}`;
             await createFuturesOrder(creds, {
-              market: position.symbol,
+              market: coindcxSymbol,
               side: coindcxSide,
               order_type: "market",
               total_quantity: exitQty,
@@ -279,25 +354,45 @@ export async function executeAction(
 
         // Update position size in DB (paper: always; live: only after successful exchange order)
         const newQty = position.quantity - exitQty;
-        const newMargin = position.margin * (newQty / position.quantity);
-        const marginReleased = position.margin - newMargin;
         const partialPnl = (position.side === "LONG" ? 1 : -1) * (position.markPrice - position.entryPrice) * exitQty;
         const prevRealized = position.realizedPnl || 0;
         const nextRealized = prevRealized + partialPnl;
+
+        let newMarginWallet = 0;
+        let marginReleasedUsdt = 0;
+        if (position.isPaper) {
+          const { currency, marginUsdt } = await paperMarginSnapshot(position);
+          marginReleasedUsdt = marginUsdt * (exitQty / position.quantity);
+          const newMarginUsdt = marginUsdt - marginReleasedUsdt;
+          newMarginWallet = await usdtMarginToStored(newMarginUsdt, currency);
+          await releasePaperPositionMargin(
+            userId,
+            marginReleasedUsdt,
+            partialPnl,
+            position.id,
+            currency
+          );
+        } else {
+          newMarginWallet = position.margin * (newQty / position.quantity);
+        }
 
         await db
           .update(positions)
           .set({
             size: newQty.toFixed(8),
-            margin: newMargin.toFixed(8),
+            margin: newMarginWallet.toFixed(8),
             realizedPnl: nextRealized.toFixed(8),
             updatedAt: new Date(),
           })
           .where(eq(positions.id, position.id));
 
-        if (position.isPaper) {
-          const pCcy = (position.marginCurrency as "USDT" | "INR") ?? "USDT";
-          await releasePaperMargin(userId, marginReleased, partialPnl, position.id, pCcy);
+        positionStore.updateQuantity(position.id, newQty, newMarginWallet, undefined, nextRealized);
+        if (newQty <= 0) {
+          positionStore.updateLifecycleState(position.id, "CLOSED");
+          positionStore.remove(position.id);
+          positionManagerBus.emit("position:closed", position.id, recommendation.reasoning);
+        } else {
+          positionStore.updateLifecycleState(position.id, "MANAGED");
         }
 
         await recordPositionTransaction({
@@ -314,15 +409,18 @@ export async function executeAction(
           realizedPnl: partialPnl,
           fee: estimateFee(position.markPrice * exitQty),
           marginBefore: position.margin,
-          marginAfter: newMargin,
+          marginAfter: newMarginWallet,
           metadata: {
             exitPct,
             exitQty,
-            marginReleased,
+            marginReleasedUsdt,
             prevRealized: position.realizedPnl,
             nextRealized,
             isPaper: position.isPaper,
           },
+          liquiditySide: "TAKER",
+          fillModel: position.isPaper ? "SIMULATED" : "COINDCX_MARKET",
+          fillLatencyMs: 0,
         });
 
         positionManagerBus.emit("position:action-executed", position.id, action, "ok",
@@ -339,8 +437,11 @@ export async function executeAction(
           try {
             const creds = await fetchCredentials(userId);
             const coindcxSide = position.side === "LONG" ? "sell" : "buy";
+            const coindcxSymbol = position.symbol.startsWith("B-")
+              ? position.symbol
+              : `B-${position.symbol.replace("USDT", "_USDT")}`;
             await createFuturesOrder(creds, {
-              market: position.symbol,
+              market: coindcxSymbol,
               side: coindcxSide,
               order_type: "market",
               total_quantity: position.quantity,
@@ -370,8 +471,14 @@ export async function executeAction(
           .where(eq(positions.id, position.id));
 
         if (position.isPaper) {
-          const pCcy = (position.marginCurrency as "USDT" | "INR") ?? "USDT";
-          await releasePaperMargin(userId, position.margin, realizedPnl, position.id, pCcy);
+          const { currency, marginUsdt } = await paperMarginSnapshot(position);
+          await releasePaperPositionMargin(
+            userId,
+            marginUsdt,
+            realizedPnl,
+            position.id,
+            currency
+          );
         }
 
         await recordPositionTransaction({
@@ -393,8 +500,58 @@ export async function executeAction(
             reason: recommendation.reasoning,
             exitReason: recommendation.reasoning,
             isPaper: position.isPaper,
+            exitPrice: position.markPrice,
+            entryPrice: position.entryPrice,
           },
+          // ─── PTA extensions ────────────────────────────────────────────────
+          liquiditySide: "TAKER",
+          fillModel: position.isPaper ? "SIMULATED" : "COINDCX_MARKET",
+          fillLatencyMs: 0, // exit is same-session; latency tracking can be added later
         });
+
+        // ─── PTA: write denormalized trades row ────────────────────────────
+        const heldSec =
+          typeof (position as any).openedAt === "object"
+            ? Math.floor(
+                (Date.now() - ((position as any).openedAt as Date).getTime()) / 1000
+              )
+            : position.holdingMinutes
+              ? position.holdingMinutes * 60
+              : null;
+        const grossPnl = realizedPnl;
+        const feeAmt = position.markPrice * position.quantity * 0.0004;
+        try {
+          await db
+            .insert(trades)
+            .values({
+              userId: String(userId),
+              positionId: String(position.id),
+              symbol: position.symbol,
+              side: position.side === "LONG" ? "long" : "short",
+              orderType: "MARKET",
+              price: String(position.markPrice),
+              size: String(position.quantity),
+              leverage: position.leverage,
+              fee: String(feeAmt),
+              tdsDeducted: "0",
+              total: String(position.quantity * position.markPrice),
+              status: "filled",
+              executedAt: new Date(),
+              strategyType: (position.strategyType as string) || "intraday",
+              stopLossPrice: position.stopLoss ? String(position.stopLoss) : null,
+              takeProfitPrice: position.takeProfit ? String(position.takeProfit) : null,
+              grossPnlUsdt: String(grossPnl),
+              netPnlUsdt: String(grossPnl - feeAmt),
+              totalFeesUsdt: String(feeAmt),
+              exitReason: recommendation.reasoning,
+              holdingPeriodSeconds: heldSec ?? undefined,
+              binanceSignalPrice: String(position.entryPrice),
+              coindcxFillPrice: String(position.markPrice),
+              slippageBps: "0",
+            });
+        } catch {
+          // Trades insert is best-effort — do not block position close on PTA writes
+        }
 
         positionStore.updateLifecycleState(position.id, "CLOSED");
         positionStore.remove(position.id);
@@ -405,11 +562,83 @@ export async function executeAction(
 
       // ── Scale in (add to position) ───────────────────────────────────
       case PA.SCALE_IN: {
-        // Scale-in is logged only — actual execution goes through auto-executor
-        // to respect all 8 gates. We emit an event for the executor to pick up.
+        if (!position.isPaper) {
+          positionManagerBus.emit("position:action-executed", position.id, action, "ok",
+            "Scale-in signal emitted to auto-executor");
+          return { success: true, detail: "Scale-in event emitted to auto-executor" };
+        }
+
+        const dbCfg = getDb();
+        const [cfg] = await dbCfg
+          .select({
+            capitalAllocationPct: autoExecutorConfig.capitalAllocationPct,
+            paperStartingBalance: autoExecutorConfig.paperStartingBalance,
+            paperCurrency: autoExecutorConfig.paperCurrency,
+          })
+          .from(autoExecutorConfig)
+          .where(eq(autoExecutorConfig.userId, userId))
+          .limit(1);
+        const paperCurrency = (cfg?.paperCurrency as "USDT" | "INR") ?? "INR";
+        const allocPct = parseFloat(cfg?.capitalAllocationPct ?? "0.250");
+        const scalePct = recommendation.exitSizePct ?? 0.5;
+        const startingBalance = parseFloat(cfg?.paperStartingBalance ?? "100000");
+        const pw = await getPaperWallet(userId, startingBalance, paperCurrency);
+        const equityUsdt = await walletToUsdt(pw.equity, paperCurrency);
+        const addNotionalUsdt = equityUsdt * allocPct * scalePct;
+        let addQty = addNotionalUsdt / position.markPrice;
+        addQty = await roundQty(position.symbol, addQty);
+
+        if (addQty <= 0) {
+          return { success: false, detail: "SCALE_IN skipped: add size rounds to zero" };
+        }
+
+        const addMarginUsdt = computeMarginUsdt(addQty, position.markPrice, position.leverage);
+        const { currency, marginUsdt, marginWallet } = await paperMarginSnapshot(position);
+        const newMarginUsdt = marginUsdt + addMarginUsdt;
+        const newMarginWallet = await usdtMarginToStored(newMarginUsdt, currency);
+        const newQty = position.quantity + addQty;
+        const newEntry =
+          (position.entryPrice * position.quantity + position.markPrice * addQty) / newQty;
+
+        await lockPaperPositionMargin(userId, addMarginUsdt, position.id, currency, "position");
+
+        await db
+          .update(positions)
+          .set({
+            size: newQty.toFixed(8),
+            margin: newMarginWallet.toFixed(8),
+            entryPrice: newEntry.toFixed(8),
+            updatedAt: new Date(),
+          })
+          .where(eq(positions.id, position.id));
+
+        await recordPositionTransaction({
+          positionId: position.id,
+          userId,
+          symbol: position.symbol,
+          type: "SCALE_IN",
+          side: position.side === "LONG" ? "long" : "short",
+          quantityBefore: position.quantity,
+          quantityAfter: newQty,
+          quantityDelta: addQty,
+          price: position.markPrice,
+          avgEntryPrice: newEntry,
+          realizedPnl: 0,
+          fee: estimateFee(position.markPrice * addQty),
+          marginBefore: marginWallet,
+          marginAfter: newMarginWallet,
+          metadata: {
+            addNotionalUsdt,
+            addQty,
+            scalePct,
+            isPaper: true,
+          },
+        });
+
+        positionStore.updateQuantity(position.id, newQty, newMarginWallet, newEntry);
         positionManagerBus.emit("position:action-executed", position.id, action, "ok",
-          "Scale-in signal emitted to auto-executor");
-        return { success: true, detail: "Scale-in event emitted" };
+          `Scaled in ${addQty.toFixed(4)} @ ${position.markPrice.toFixed(4)}`);
+        return { success: true, detail: `Scale-in: added ${addQty.toFixed(4)} units` };
       }
 
       default:

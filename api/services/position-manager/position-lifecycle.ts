@@ -21,6 +21,12 @@ import { eq, and, desc, gte as _gte } from "drizzle-orm";
 import { userPositionsCache, markPriceCache } from "../coindcx-ws";
 import { latestTickerCache } from "../streaming";
 import { getPaperWallet } from "../paper-wallet";
+import {
+  walletToUsdt,
+  computeMarginUsdt,
+  paperMarginStoredToWalletSync,
+} from "../paper-currency";
+import { getUsdtInrRate } from "../coindcx";
 import { registerPositionForTrailing, syncTrailingStopLoss, isPositionTracked, unregisterPosition } from "../trailing-stop";
 import type { StrategyType } from "../strategy-config";
 // ─── Position Lifecycle Manager ──────────────────────────────────────────────
@@ -117,6 +123,8 @@ export class PositionLifecycleManager {
     // Build merged set keyed by exchangeOrderId / DB id
     const managed = new Map<string, ManagedPosition>();
 
+    const usdtInrRate = await getUsdtInrRate().catch(() => 89);
+
     // First pass: DB positions as baseline
     for (const dbPos of dbPositions) {
       const binanceSym = dbPos.symbol.replace("B-", "").replace("_", "");
@@ -130,11 +138,19 @@ export class PositionLifecycleManager {
 
       const entryPrice = parseFloat(dbPos.entryPrice);
       const quantity = parseFloat(dbPos.size);
-      const margin = parseFloat(dbPos.margin);
+      const marginUsdt = computeMarginUsdt(quantity, entryPrice, dbPos.leverage);
+      const marginStored = parseFloat(dbPos.margin);
+      const marginCurrency = (dbPos.marginCurrency ?? "USDT") as "USDT" | "INR";
+      const margin = paperMarginStoredToWalletSync(
+        marginStored,
+        marginCurrency,
+        marginUsdt,
+        usdtInrRate
+      );
       const isLong = dbPos.side === "long";
       const unrealizedPnl =
         (isLong ? 1 : -1) * (markPriceRaw - entryPrice) * quantity;
-      const roe = margin > 0 ? (unrealizedPnl / margin) * 100 : 0;
+      const roe = marginUsdt > 0 ? (unrealizedPnl / marginUsdt) * 100 : 0;
       const sl = dbPos.stopLoss ? parseFloat(dbPos.stopLoss) : null;
       const tp = dbPos.takeProfit ? parseFloat(dbPos.takeProfit) : null;
       const liqPrice = dbPos.liquidationPrice ? parseFloat(dbPos.liquidationPrice) : null;
@@ -208,9 +224,14 @@ export class PositionLifecycleManager {
           (isLong ? 1 : -1) *
           (newMarkPrice - existing.entryPrice) *
           existing.quantity;
+        const marginUsdt = computeMarginUsdt(
+          existing.quantity,
+          existing.entryPrice,
+          existing.leverage
+        );
         const roe =
-          existing.margin > 0
-            ? (unrealizedPnl / existing.margin) * 100
+          marginUsdt > 0
+            ? (unrealizedPnl / marginUsdt) * 100
             : 0;
         managed.set(key, {
           ...existing,
@@ -249,6 +270,7 @@ export class PositionLifecycleManager {
             strategyType: mp.strategyType as StrategyType,
             userId: mp.userId,
             size: mp.quantity,
+            takeProfit: mp.takeProfit,
           });
         } else {
           // Position already tracked — sync DB stop-loss if it has improved
@@ -292,16 +314,20 @@ export class PositionLifecycleManager {
     if (openPositions.length === 0) return;
 
     // Fetch both portfolios (we track live even in paper mode)
-    const [paperBal, paperEq, liveBal, liveEq] = await Promise.all([
+    const [paperBal, paperEq, liveBal, liveEq, paperCurrency] = await Promise.all([
       this.fetchAvailableBalance(true),
       this.fetchTotalEquity(true),
       this.fetchAvailableBalance(false),
       this.fetchTotalEquity(false),
+      this.fetchPaperCurrency(),
     ]);
 
+    const paperBalUsdt = await walletToUsdt(paperBal, paperCurrency);
+    const paperEqUsdt = await walletToUsdt(paperEq, paperCurrency);
+
     const paperPortfolio = {
-      totalEquityUsdt: paperEq,
-      availableBalance: paperBal,
+      totalEquityUsdt: paperEqUsdt,
+      availableBalance: paperBalUsdt,
       totalUnrealizedPnl: positionStore.totalUnrealizedPnl(true),
       openPositionCount: openPositions.filter(p => p.isPaper).length,
     };
@@ -479,6 +505,20 @@ export class PositionLifecycleManager {
     this.assessmentHistory.push(record);
     if (this.assessmentHistory.length > this.MAX_HISTORY) {
       this.assessmentHistory.shift();
+    }
+  }
+
+  private async fetchPaperCurrency(): Promise<"USDT" | "INR"> {
+    try {
+      const db = getDb();
+      const [cfg] = await db
+        .select({ paperCurrency: autoExecutorConfig.paperCurrency })
+        .from(autoExecutorConfig)
+        .where(eq(autoExecutorConfig.userId, this.config.userId))
+        .limit(1);
+      return (cfg?.paperCurrency as "USDT" | "INR") ?? "INR";
+    } catch {
+      return "INR";
     }
   }
 

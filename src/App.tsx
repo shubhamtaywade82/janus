@@ -9,6 +9,8 @@ import NotFound from "./pages/NotFound";
 import RiskMetrics from "./pages/RiskMetrics";
 import AiAnalysis from "./pages/AiAnalysis";
 import BrainDashboard from "./pages/BrainDashboard";
+import AdaptiveSupertrend from "./pages/AdaptiveSupertrend";
+import Surveillance from "./pages/Surveillance";
 import { Toaster } from "./components/ui/sonner";
 
 const App = () => {
@@ -29,6 +31,22 @@ const App = () => {
         element={
           <Layout>
             <Signals />
+          </Layout>
+        }
+      />
+      <Route
+        path="/adaptive-st"
+        element={
+          <Layout>
+            <AdaptiveSupertrend />
+          </Layout>
+        }
+      />
+      <Route
+        path="/surveillance"
+        element={
+          <Layout>
+            <Surveillance />
           </Layout>
         }
       />

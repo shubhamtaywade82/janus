@@ -38,15 +38,22 @@ export function KillSwitchButton() {
   trpc.autoExecutor.killSwitchStream.useSubscription(undefined, streamOpts.current);
 
   const isActive = status?.isActive ?? false;
+  const autoResetMinutes = status?.autoResetAt
+    ? Math.max(0, Math.ceil((status.autoResetAt - Date.now()) / 60_000))
+    : null;
 
   if (isActive) {
     return (
       <button
         onClick={() => killSwitch.mutate({ action: "reset", reason: "" })}
         className="flex items-center gap-1.5 px-2 py-1 rounded text-[10px] font-semibold bg-j-down/10 text-j-down border border-j-down/40 animate-pulse hover:bg-j-down/20 transition-colors"
+        title={autoResetMinutes !== null ? `Auto-resumes in ~${autoResetMinutes} min` : undefined}
       >
         <ShieldAlert size={11} />
-        <span>HALTED — Reset</span>
+        <span>
+          HALTED — Reset
+          {autoResetMinutes !== null && autoResetMinutes > 0 ? ` (${autoResetMinutes}m)` : ""}
+        </span>
       </button>
     );
   }

@@ -16,6 +16,7 @@ interface OrderBookProps {
 export const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLiquidityEvent }: OrderBookProps) => {
   const [activeTab, setActiveTab] = useState<"book" | "telemetry">("book");
   const [depth, setDepth] = useState<any>(null);
+  const [visualMode, setVisualMode] = useState<"vol" | "depth">("vol");
 
   const decimals = getPriceDecimals(symbol);
   const defaultStep = parseFloat(Math.pow(10, -decimals).toFixed(decimals));
@@ -55,11 +56,22 @@ export const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLi
   const bids = useMemo(() => aggregateOrderBook(rawBids, priceStep, true).slice(0, 20), [rawBids, priceStep]);
   const asks = useMemo(() => aggregateOrderBook(rawAsks, priceStep, false).slice(0, 20), [rawAsks, priceStep]);
 
-  const { bidsWithSum, asksWithSum, totalBidVolume, totalAskVolume } = useMemo(() => {
+  const { bidsWithSum, asksWithSum, totalBidVolume, totalAskVolume, maxQty } = useMemo(() => {
     let bSum = 0, aSum = 0;
-    const bWS = bids.map(([p, q]) => { const s = parseFloat(q); bSum += s; return { price: p, qty: s, sum: bSum }; });
-    const aWS = asks.map(([p, q]) => { const s = parseFloat(q); aSum += s; return { price: p, qty: s, sum: aSum }; });
-    return { bidsWithSum: bWS, asksWithSum: aWS, totalBidVolume: bSum, totalAskVolume: aSum };
+    let maxQ = 0;
+    const bWS = bids.map(([p, q]) => {
+      const s = parseFloat(q);
+      bSum += s;
+      if (s > maxQ) maxQ = s;
+      return { price: p, qty: s, sum: bSum };
+    });
+    const aWS = asks.map(([p, q]) => {
+      const s = parseFloat(q);
+      aSum += s;
+      if (s > maxQ) maxQ = s;
+      return { price: p, qty: s, sum: aSum };
+    });
+    return { bidsWithSum: bWS, asksWithSum: aWS, totalBidVolume: bSum, totalAskVolume: aSum, maxQty: maxQ || 1 };
   }, [bids, asks]);
 
   const lastPrice = tickerData ? parseFloat(tickerData.lastPrice) : 0;
@@ -67,6 +79,62 @@ export const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLi
   const lastPriceColor = isPriceUp ? "hsl(var(--janus-up-bright))" : "hsl(var(--janus-down-bright))";
   const totalVol = totalBidVolume + totalAskVolume;
   const bidPct = totalVol > 0 ? (totalBidVolume / totalVol) * 100 : 50;
+
+  const getEventForPrice = (priceStr: string, _isBid: boolean) => {
+    const price = parseFloat(priceStr);
+    if (isNaN(price)) return null;
+
+    const activeEvents = liquidityEvents.filter(ev => {
+      if (ev.symbol !== symbol) return false;
+      if (Date.now() - ev.timestamp > 120000) return false; // 2 minutes active window
+
+      // Check void ranges
+      if (ev.type === "LIQUIDITY_VOID") {
+        const range = ev.data?.range;
+        if (range && price >= range.low && price <= range.high) return true;
+      }
+
+      // Extract price level
+      let eventPrice = ev.data?.level;
+      if (eventPrice === undefined) {
+        const match = ev.message.match(/\$(\d+\.?\d*)/);
+        if (match) eventPrice = parseFloat(match[1]);
+      }
+
+      if (eventPrice !== undefined) {
+        return Math.abs(price - eventPrice) < priceStep * 0.99;
+      }
+
+      return false;
+    });
+
+    if (activeEvents.length === 0) return null;
+    return activeEvents.sort((a, b) => b.timestamp - a.timestamp)[0];
+  };
+
+  const getEventLabel = (ev: any): string => {
+    if (!ev) return "";
+    const type = ev.type;
+    if (type === "BS_LIQUIDITY_CREATED" || type === "SS_LIQUIDITY_CREATED") return "pool";
+    if (type === "LIQUIDITY_STACK") return "stack";
+    if (type === "LIQUIDITY_VOID") return "void";
+    if (type === "LIQUIDITY_PULL") return "pull";
+    if (type === "LIQUIDITY_FILL") return "fill";
+    if (type === "LIQUIDITY_RUN") return "run";
+    if (type === "INDUCEMENT") return "trap";
+    if (type === "RESTING_LIQ_ADDED") return "+liq";
+    if (type === "RESTING_LIQ_REMOVED") return "-liq";
+    if (type === "VALUE_AREA_ACCEPTANCE") return "vaa";
+    if (type === "VALUE_AREA_REJECTION") return "var";
+    if (type.includes("EXHAUSTION")) return "exh";
+    return type.toLowerCase().replace(/_/g, " ").slice(0, 5);
+  };
+
+  const latestEvent = useMemo(() => {
+    const active = liquidityEvents.filter(ev => ev.symbol === symbol && Date.now() - ev.timestamp < 60000);
+    if (active.length === 0) return null;
+    return active.sort((a, b) => b.timestamp - a.timestamp)[0];
+  }, [liquidityEvents, symbol]);
 
   return (
     <div className="flex flex-col h-full text-[10px]">
@@ -77,6 +145,29 @@ export const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLi
             <select value={priceStep} onChange={(e) => setPriceStep(parseFloat(e.target.value))} className="bg-[#18181b] border border-[#27272a] rounded px-1 py-0.5 text-[9px] text-[#f4f4f5] h-5">
               {aggregationOptions.map(opt => <option key={opt} value={opt}>{opt}</option>)}
             </select>
+
+            {activeTab === "book" && (
+              <div className="flex items-center bg-[#18181b] border border-[#27272a]/80 rounded p-0.5 h-5 ml-1 select-none">
+                <button
+                  onClick={() => setVisualMode("vol")}
+                  className={cn(
+                    "px-1.5 py-0.5 rounded text-[8px] font-mono lowercase tracking-wider h-full flex items-center justify-center transition-all",
+                    visualMode === "vol" ? "bg-[#27272a] text-[#f4f4f5]" : "text-[#71717a] hover:text-[#a1a1aa]"
+                  )}
+                >
+                  vol
+                </button>
+                <button
+                  onClick={() => setVisualMode("depth")}
+                  className={cn(
+                    "px-1.5 py-0.5 rounded text-[8px] font-mono lowercase tracking-wider h-full flex items-center justify-center transition-all",
+                    visualMode === "depth" ? "bg-[#27272a] text-[#f4f4f5]" : "text-[#71717a] hover:text-[#a1a1aa]"
+                  )}
+                >
+                  depth
+                </button>
+              </div>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-4">
@@ -99,24 +190,130 @@ export const OrderBook = ({ symbol, tickerData, markPrice, liquidityEvents, onLi
             </div>
             <span className="text-j-down-bright">ASKS {(100-bidPct).toFixed(0)}%</span>
           </div>
-          <div className="flex-1 flex flex-col justify-between overflow-hidden">
-            <div className="flex-1 overflow-hidden flex flex-col justify-end">
-              {asksWithSum.slice().reverse().map((ask, i) => <div key={`ask-${i}`} className="relative grid grid-cols-3 py-0.5 px-3 hover:bg-[#27272a]/30">
-                <div className="absolute inset-y-0 right-0 bg-j-down-bright/15" style={{ width: `${(ask.qty/totalAskVolume)*100}%` }} />
-                <span className="relative text-j-down-bright">{formatPrice(ask.price, symbol)}</span>
-                <span className="relative text-right">{ask.qty.toFixed(1)}</span>
-                <span className="relative text-right text-zinc-500">{ask.sum.toFixed(1)}</span>
-              </div>)}
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* Main side-by-side headers */}
+            <div className="grid grid-cols-2 border-b border-[#27272a]/30 bg-[#18181b]/20 py-1.5 font-mono text-[9px] select-none lowercase tracking-wider font-bold">
+              <div className="text-j-up-bright border-r border-[#27272a] text-center">
+                bid
+              </div>
+              <div className="text-j-down-bright text-center">
+                ask
+              </div>
             </div>
-            <div className="py-1 px-3 border-y border-[#27272a]/50 bg-[#18181b]/50 text-[11px] font-bold" style={{ color: lastPriceColor }}>{lastPrice > 0 ? <AnimatedNumber value={lastPrice} decimals={getPriceDecimals(symbol)} duration={150} /> : "--"}</div>
-            <div className="flex-1 overflow-hidden">
-              {bidsWithSum.map((bid, i) => <div key={`bid-${i}`} className="relative grid grid-cols-3 py-0.5 px-3 hover:bg-[#27272a]/30">
-                <div className="absolute inset-y-0 right-0 bg-j-up-bright/15" style={{ width: `${(bid.qty/totalBidVolume)*100}%` }} />
-                <span className="relative text-j-up-bright">{formatPrice(bid.price, symbol)}</span>
-                <span className="relative text-right">{bid.qty.toFixed(1)}</span>
-                <span className="relative text-right text-zinc-500">{bid.sum.toFixed(1)}</span>
-              </div>)}
+
+            {/* Sub-headers */}
+            <div className="grid grid-cols-2 border-b border-[#27272a]/20 bg-[#18181b]/10 py-0.5 text-center select-none text-[8px] text-[#71717a] font-mono lowercase tracking-wider">
+              <div className="grid grid-cols-2 px-3 border-r border-[#27272a]">
+                <span className="text-left font-semibold">amt</span>
+                <span className="text-right font-semibold">price</span>
+              </div>
+              <div className="grid grid-cols-2 px-3">
+                <span className="text-left font-semibold">price</span>
+                <span className="text-right font-semibold">amt</span>
+              </div>
             </div>
+
+            {/* Side-by-side rows */}
+            <div className="flex-1 overflow-y-auto divide-y divide-[#27272a]/5">
+              {Array.from({ length: Math.max(bidsWithSum.length, asksWithSum.length) }).map((_, i) => {
+                return (() => {
+                  const bid = bidsWithSum[i];
+                  const ask = asksWithSum[i];
+                  const bidEvent = bid ? getEventForPrice(bid.price, true) : null;
+                  const askEvent = ask ? getEventForPrice(ask.price, false) : null;
+                  return (
+                    <div key={i} className="grid grid-cols-2 hover:bg-[#27272a]/20 transition-colors py-0.5 text-[9px]">
+                      {/* Bids side (Amt Price) */}
+                      <div className="relative grid grid-cols-2 px-3 border-r border-[#27272a]">
+                        {bid && (
+                          <>
+                            <div
+                              className="absolute inset-y-0 right-0 bg-j-up-bright pointer-events-none transition-all duration-300"
+                              style={{
+                                width: `${
+                                  visualMode === "vol"
+                                    ? (bid.qty / maxQty) * 100
+                                    : totalBidVolume > 0
+                                    ? (bid.sum / totalBidVolume) * 100
+                                    : 0
+                                }%`,
+                                opacity: 0.04 + (visualMode === "vol" ? (bid.qty / maxQty) : (bid.sum / totalBidVolume)) * 0.26
+                              }}
+                            />
+                            <span className="relative text-left font-mono text-zinc-300 flex items-center gap-1">
+                              {bid.qty.toFixed(1)}
+                              {bidEvent && (
+                                <span className={cn(
+                                  "px-1 py-0.2 rounded-[3px] text-[6px] font-sans font-black uppercase tracking-wide leading-none",
+                                  bidEvent.type.includes("LIQUIDITY_CREATED") || bidEvent.type.includes("POOL")
+                                    ? "bg-amber-500/10 text-amber-500 border border-amber-500/20 animate-pulse"
+                                    : bidEvent.type.includes("REMOVED") || bidEvent.type.includes("PULL")
+                                    ? "bg-red-500/10 text-red-400 border border-red-500/20"
+                                    : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                                )}>
+                                  {getEventLabel(bidEvent)}
+                                </span>
+                              )}
+                            </span>
+                            <span className="relative text-right font-mono text-j-up-bright font-medium">{formatPrice(bid.price, symbol)}</span>
+                          </>
+                        )}
+                      </div>
+
+                      {/* Asks side (Price Amt) */}
+                      <div className="relative grid grid-cols-2 px-3">
+                        {ask && (
+                          <>
+                            <div
+                              className="absolute inset-y-0 left-0 bg-j-down-bright pointer-events-none transition-all duration-300"
+                              style={{
+                                width: `${
+                                  visualMode === "vol"
+                                    ? (ask.qty / maxQty) * 100
+                                    : totalAskVolume > 0
+                                    ? (ask.sum / totalAskVolume) * 100
+                                    : 0
+                                }%`,
+                                opacity: 0.04 + (visualMode === "vol" ? (ask.qty / maxQty) : (ask.sum / totalAskVolume)) * 0.26
+                              }}
+                            />
+                            <span className="relative text-left font-mono text-j-down-bright font-medium">{formatPrice(ask.price, symbol)}</span>
+                            <span className="relative text-right font-mono text-zinc-300 flex items-center justify-end gap-1">
+                              {askEvent && (
+                                <span className={cn(
+                                  "px-1 py-0.2 rounded-[3px] text-[6px] font-sans font-black uppercase tracking-wide leading-none",
+                                  askEvent.type.includes("LIQUIDITY_CREATED") || askEvent.type.includes("POOL")
+                                    ? "bg-amber-500/10 text-amber-500 border border-amber-500/20 animate-pulse"
+                                    : askEvent.type.includes("REMOVED") || askEvent.type.includes("PULL")
+                                    ? "bg-red-500/10 text-red-400 border border-red-500/20"
+                                    : "bg-blue-500/10 text-blue-400 border border-blue-500/20"
+                                )}>
+                                  {getEventLabel(askEvent)}
+                                </span>
+                              )}
+                              {ask.qty.toFixed(1)}
+                            </span>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })();
+              })}
+            </div>
+
+            {/* Bottom event banner */}
+            {latestEvent && (
+              <div className="px-3 py-1 border-t border-white/[0.06] bg-[#18181b]/60 flex items-center justify-between select-none">
+                <span className="text-[7px] text-[#71717a] uppercase tracking-wider font-mono font-bold">feed alert</span>
+                <span className={cn(
+                  "text-[8px] font-sans font-bold flex items-center gap-1.5 animate-pulse",
+                  latestEvent.priority === "SSS" ? "text-amber-500" : "text-zinc-300"
+                )}>
+                  {latestEvent.message}
+                </span>
+              </div>
+            )}
           </div>
         </>
       ) : (

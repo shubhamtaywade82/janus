@@ -12,6 +12,7 @@
  */
 
 // ─── Types ───
+import { getCachedDailyTrend, dailyTrendScore } from "./trend-bias";
 export interface ConfluenceScore {
   symbol: string;
   microScore: number;   // 0-100
@@ -150,13 +151,40 @@ export function calculateIntraScore(
   return Math.max(0, Math.min(100, score));
 }
 
-// ─── Swing Scoring (35%) ───
-export function calculateSwingScore(prices: number[]): number {
+// ─── Swing Scoring with Daily Trend Bias (35%) ───
+export function calculateSwingScore(
+  prices: number[],
+  dailyTrendScore?: number
+): number {
+  if (dailyTrendScore !== undefined) {
+    // Use true multi-day trend bias as the base (50–100 scale),
+    // then supplement with intraday support/resistance and ADX.
+    let score = dailyTrendScore;
+
+    // Support/Resistance proximity (intraday, last 50 candles)
+    const recentHigh = Math.max(...prices.slice(-50));
+    const recentLow = Math.min(...prices.slice(-50));
+    const range = recentHigh - recentLow;
+    const currentPrice = prices[prices.length - 1];
+    if (range > 0) {
+      const positionInRange = (currentPrice - recentLow) / range;
+      if (positionInRange > 0.8) score -= 10; // near resistance
+      else if (positionInRange < 0.2) score += 10; // near support
+    }
+
+    // Trend strength (ADX approximation)
+    const adx = calculateADXApproximation(prices, 14);
+    if (adx > 25) score += 5; // strong trend
+
+    return Math.max(0, Math.min(100, score));
+  }
+
+  // ─── Fallback: legacy 1-minute "swing" scoring (kept for backward compat) ───
   if (prices.length < 50) return 50;
 
   let score = 50;
 
-  // Long-term trend (50 EMA vs 200 EMA)
+  // Long-term trend (50 EMA vs 200 EMA) — NOTE: these are 50-min / 200-min on 1m data
   const ema50 = calculateEMA(prices, 50);
   const ema200 = calculateEMA(prices, Math.min(200, prices.length));
   if (ema50.length > 0 && ema200.length > 0) {
@@ -164,7 +192,7 @@ export function calculateSwingScore(prices: number[]): number {
     else score -= 15;
   }
 
-  // Market regime (bull/bear)
+  // Market regime (bull/bear) — NOTE: SMA50 on 1m data = 50-minute average
   const sma50 = calculateSMA(prices, 50);
   const currentPrice = prices[prices.length - 1];
   if (sma50.length > 0) {
@@ -212,6 +240,59 @@ export function calculateCompositeScore(
   return { composite: Math.round(composite * 100) / 100, direction };
 }
 
+// ─── Kronos-Aware Composite Score ───
+import { getKronosSignal } from "./kronos-client";
+
+export async function calculateKronosAugmentedScore(
+  symbol: string,
+  microScore: number,
+  intraScore: number,
+  swingScore: number,
+  weights = WEIGHTS,
+  threshold = DEFAULT_THRESHOLD
+): Promise<{ composite: number; direction: "long" | "short" | "neutral"; kronosBoost: number; kronosSignal?: any }> {
+  // Base confluence score
+  const baseComposite = weights.micro * microScore + weights.intra * intraScore + weights.swing * swingScore;
+
+  // Fetch Kronos signal
+  const kronos = await getKronosSignal(symbol, "1m", 4);
+  let kronosBoost = 0;
+  let direction: "long" | "short" | "neutral" = "neutral";
+
+  if (kronos && kronos.confidence > 0.6) {
+    const kronosDirection = kronos.directionSignal > 0.05 ? "long" : kronos.directionSignal < -0.05 ? "short" : "neutral";
+
+    // Boost composite if Kronos agrees with intra direction
+    const intraDirection = intraScore > 50 ? "long" : "short";
+
+    if (kronosDirection === intraDirection) {
+      // Kronos agrees with technical signal — boost up to +15 points
+      kronosBoost = Math.min(15, Math.abs(kronos.directionSignal) * 20 * kronos.confidence);
+    } else if (kronosDirection !== "neutral" && kronosDirection !== intraDirection) {
+      // Kronos disagrees — penalize up to -10 points
+      kronosBoost = -Math.min(10, Math.abs(kronos.directionSignal) * 15 * kronos.confidence);
+    }
+
+    // Volatility regime adjustment: reduce score in high predicted vol
+    if (kronos.volatilityForecast > 0.08) {
+      kronosBoost -= 5; // Penalty for chaotic conditions
+    }
+  }
+
+  const composite = Math.max(0, Math.min(100, baseComposite + kronosBoost));
+
+  if (composite >= threshold) {
+    direction = intraScore > 50 ? "long" : "short";
+  }
+
+  return { 
+    composite: Math.round(composite * 100) / 100, 
+    direction, 
+    kronosBoost,
+    kronosSignal: kronos
+  };
+}
+
 // ─── Full Confluence Analysis ───
 export function analyzeConfluence(
   symbol: string,
@@ -232,7 +313,13 @@ export function analyzeConfluence(
 ): ConfluenceScore {
   const microScore = calculateMicroScore(orderBook, tradeTape);
   const intraScore = calculateIntraScore(prices, volumes);
-  const swingScore = calculateSwingScore(prices);
+
+  // Fetch true multi-day trend bias (daily SMA50/200) instead of relying on 1-minute data
+  const dailyTrend = getCachedDailyTrend(symbol);
+  const swingScore = calculateSwingScore(
+    prices,
+    dailyTrend ? dailyTrendScore(dailyTrend) : undefined
+  );
 
   const { composite, direction } = calculateCompositeScore(
     microScore,

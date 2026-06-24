@@ -15,8 +15,14 @@ import { latestTickerCache, subscribeToSymbol } from "./streaming";
 import { env, coinDCXEnvCreds } from "../lib/env";
 import { globalKillSwitch } from "./kill-switch";
 import { TRPCError } from "@trpc/server";
+import { MIN_SYSTEM_LEVERAGE, MAX_SYSTEM_LEVERAGE } from "../../contracts/constants";
+import {
+  computeMarginUsdt,
+  paperMarginStoredToWalletSync,
+  paperMarginStoredToUsdtSync,
+} from "./paper-currency";
 
-export function mapPaperPosition(p: any, markets: any[] = []) {
+export function mapPaperPosition(p: any, markets: any[] = [], usdtInrRate = 99) {
   const symbol = p.symbol.startsWith("B-")
     ? p.symbol.slice(2).replace("_USDT", "USDT").replace("_", "")
     : p.symbol;
@@ -36,9 +42,23 @@ export function mapPaperPosition(p: any, markets: any[] = []) {
 
   const posLeverage = Number(p.leverage) || 1;
   const notional = sizeVal * lastPrice;
-  const initialMargin = notional / posLeverage;
-  const marginVal = parseFloat(p.margin) || initialMargin;
-  const roe = marginVal > 0 ? (unrealizedPnl / marginVal) * 100 : 0;
+  const initialMargin = computeMarginUsdt(sizeVal, entryPrice, posLeverage);
+  const marginCurrency = (p.marginCurrency || "USDT") as "USDT" | "INR";
+  const marginStored = parseFloat(p.margin) || initialMargin;
+  const marginVal = paperMarginStoredToWalletSync(
+    marginStored,
+    marginCurrency,
+    initialMargin,
+    usdtInrRate
+  );
+  const marginUsdt = paperMarginStoredToUsdtSync(
+    marginStored,
+    marginCurrency,
+    initialMargin,
+    usdtInrRate
+  );
+
+  const roe = marginUsdt > 0 ? (unrealizedPnl / marginUsdt) * 100 : 0;
   const priceChangePct = entryPrice > 0 ? ((lastPrice - entryPrice) / entryPrice) * 100 : 0;
 
   const liqPriceRaw = parseFloat(p.liquidationPrice || "0");
@@ -70,13 +90,13 @@ export function mapPaperPosition(p: any, markets: any[] = []) {
     stopLoss: p.stopLoss ? String(p.stopLoss) : null,
     takeProfit: p.takeProfit ? String(p.takeProfit) : null,
     marginMode: p.marginMode || "isolated",
-    marginCurrency: p.marginCurrency || "USDT",
+    marginCurrency,
     status: p.status,
     createdAt: p.createdAt,
     updatedAt: p.updatedAt,
     isPaper: true as const,
     notional: String(notional),
-    initialMargin: String(initialMargin),
+    initialMargin: String(marginUsdt),
     roe: String(roe),
     priceChangePct: String(priceChangePct),
     liqDistance: String(liqDistance),
@@ -106,6 +126,7 @@ export async function fetchPortfolioData(userId: number) {
 
   let openPositions: any[] = [];
   let totalRealizedPnl = 0;
+  let totalRealizedPnlGross = 0;
   let totalMargin = 0;
   let totalUnrealizedPnl = 0;
   let recentTrades: any[] = [];
@@ -262,13 +283,17 @@ export async function fetchPortfolioData(userId: number) {
             targetPrecision: getPrecisions(symbol).targetPrecision,
           };
         });
-        totalRealizedPnl = filledOrders.reduce(
-          (sum: number, o: any) => sum + parseFloat(o.fee || "0") * -1,
+        // Sum fees from exchange orders (GROSS PnL = NET + fees)
+        const totalFees = filledOrders.reduce(
+          (sum: number, o: any) => sum + Math.abs(parseFloat(o.fee || "0")),
           0
         );
+        // totalRealizedPnl already holds NET from exchange wallet above
+        totalRealizedPnlGross = totalRealizedPnl + totalFees;
       } catch {
         recentTrades = [];
         totalRealizedPnl = 0;
+        totalRealizedPnlGross = 0;
       }
 
       let walletUsdt = 0;
@@ -332,25 +357,32 @@ export async function fetchPortfolioData(userId: number) {
         .where(and(eq(positions.userId, userId), eq(positions.status, "open")));
 
       // ── 5. Merge Live (Exchange) + DB ───────────────────────────────────
-      // We prioritize exchange truth for size/price, but use DB for ID/SL/TP metadata
+      // We prioritize exchange truth for size/price, but use DB for ID/SL/TP metadata.
+      // Group DB live positions by symbol:side so each exchange position consumes the next
+      // unmatched DB row, avoiding duplicate IDs when CoinDCX returns >1 position per pair.
+      const dbLiveByKey = new Map<string, typeof dbPositions>();
+      for (const dbp of dbPositions) {
+        if (dbp.isPaper) continue;
+        const key = `${dbp.symbol}:${dbp.side}`;
+        if (!dbLiveByKey.has(key)) dbLiveByKey.set(key, []);
+        dbLiveByKey.get(key)!.push(dbp);
+      }
+
       const mergedLive: any[] = [];
       const dbMatchedIds = new Set<number>();
 
       for (let i = 0; i < openPositions.length; i++) {
         const lp = openPositions[i];
-        const lpSymbol = lp.symbol;
-        const lpSide = lp.side;
+        const key = `${lp.symbol}:${lp.side}`;
+        const group = dbLiveByKey.get(key);
 
-        // Try to find a matching live position in the DB
-        const match = dbPositions.find(
-          (dbp) => !dbp.isPaper && dbp.symbol === lpSymbol && dbp.side === lpSide
-        );
-
-        if (match) {
+        if (group && group.length > 0) {
+          // Consume the first unmatched DB row for this symbol+side
+          const match = group.shift()!;
           dbMatchedIds.add(match.id);
           mergedLive.push({
             ...lp,
-            id: match.id, // Use real DB ID
+            id: match.id,
             stopLoss: match.stopLoss ? parseFloat(match.stopLoss) : lp.stopLoss,
             takeProfit: match.takeProfit ? parseFloat(match.takeProfit) : lp.takeProfit,
             entryReason: match.entryReason,
@@ -358,7 +390,7 @@ export async function fetchPortfolioData(userId: number) {
             isPaper: false,
           });
         } else {
-          // Orphan exchange position
+          // No matching DB row — orphan exchange position, assign synthetic ID
           mergedLive.push({
             ...lp,
             id: i + 10000,
@@ -367,10 +399,41 @@ export async function fetchPortfolioData(userId: number) {
         }
       }
 
+      // Append any DB live positions that were never matched (orphaned DB rows),
+      // preserving them in the stream so nothing is silently dropped.
+      for (const [, group] of dbLiveByKey) {
+        for (const orphan of group) {
+          dbMatchedIds.add(orphan.id);
+          mergedLive.push({
+            id: orphan.id,
+            userId,
+            symbol: orphan.symbol,
+            side: orphan.side,
+            entryPrice: orphan.entryPrice ?? "0",
+            currentPrice: orphan.currentPrice ?? orphan.entryPrice ?? "0",
+            size: orphan.size ?? "0",
+            leverage: orphan.leverage ?? 1,
+            margin: orphan.margin ?? "0",
+            unrealizedPnl: orphan.unrealizedPnl ?? "0",
+            realizedPnl: orphan.realizedPnl ?? "0.00",
+            liquidationPrice: orphan.liquidationPrice ? String(orphan.liquidationPrice) : null,
+            stopLoss: orphan.stopLoss ? parseFloat(orphan.stopLoss) : null,
+            takeProfit: orphan.takeProfit ? parseFloat(orphan.takeProfit) : null,
+            marginMode: orphan.marginMode || "isolated",
+            marginCurrency: orphan.marginCurrency || "USDT",
+            status: orphan.status || "open",
+            createdAt: orphan.createdAt,
+            updatedAt: orphan.updatedAt,
+            missingFromExchange: true,
+            isPaper: false,
+          });
+        }
+      }
+
       // ── 6. Add Paper positions from DB ──────────────────────────────────
       const paperMapped = dbPositions
         .filter((p) => p.isPaper)
-        .map((p) => mapPaperPosition(p, markets));
+        .map((p) => mapPaperPosition(p, markets, usdtInrRate));
 
       const allPositions = [...mergedLive, ...paperMapped];
 
@@ -379,7 +442,8 @@ export async function fetchPortfolioData(userId: number) {
         livePositionsCount: openPositions.length,
         paperPositionsCount: paperMapped.length,
         totalUnrealizedPnl: totalUnrealizedPnl.toFixed(4),
-        totalRealizedPnl: totalRealizedPnl.toFixed(4),
+        totalRealizedPnlNet: totalRealizedPnl.toFixed(4),
+        totalRealizedPnlGross: totalRealizedPnlGross.toFixed(4),
         totalMargin: totalMargin.toFixed(4),
         walletUsdt: walletUsdt.toFixed(4),
         walletCurrency,
@@ -412,14 +476,32 @@ export async function fetchPortfolioData(userId: number) {
     .orderBy(desc(trades.createdAt))
     .limit(100);
 
+  const closedPositions = await db
+    .select()
+    .from(positions)
+    .where(
+      and(
+        eq(positions.userId, userId),
+        eq(positions.status, "closed")
+      )
+    );
+
   const localUnrealizedPnl = localPositions.reduce(
     (sum, p) => sum + parseFloat(p.unrealizedPnl || "0"),
     0
   );
-  const localRealizedPnl = allTrades.reduce(
-    (sum, t) => sum + parseFloat(t.fee || "0") * -1,
+  // NET realized PnL = sum of closed positions' realized PnL (after fees)
+  const localRealizedPnlNet = closedPositions.reduce(
+    (sum, p) => sum + parseFloat(p.realizedPnl || "0"),
     0
   );
+  // Total fees paid across all trades
+  const localTotalFees = allTrades.reduce(
+    (sum, t) => sum + Math.abs(parseFloat(t.fee || "0")),
+    0
+  );
+  // GROSS realized PnL = NET + fees (what you made before fees were deducted)
+  const localRealizedPnlGross = localRealizedPnlNet + localTotalFees;
   const localMargin = localPositions.reduce(
     (sum, p) => sum + parseFloat(p.margin || "0"),
     0
@@ -464,7 +546,9 @@ export async function fetchPortfolioData(userId: number) {
     livePositionsCount: localPositions.filter(p => !p.isPaper).length,
     paperPositionsCount: localPositions.filter(p => p.isPaper).length,
     totalUnrealizedPnl: localUnrealizedPnl.toFixed(4),
-    totalRealizedPnl: localRealizedPnl.toFixed(4),
+    totalRealizedPnlNet: localRealizedPnlNet.toFixed(4),
+    totalRealizedPnlGross: localRealizedPnlGross.toFixed(4),
+    totalFees: localTotalFees.toFixed(4),
     totalMargin: localMargin.toFixed(4),
     walletUsdt: "0.0000",
     walletCurrency: "USDT",
@@ -479,7 +563,12 @@ export async function fetchPortfolioData(userId: number) {
 
 export async function executeOrder(userId: number, input: any) {
   if (!globalKillSwitch.canTrade()) throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Trading halted" });
-  if (input.leverage > 10) throw new TRPCError({ code: "BAD_REQUEST", message: "Leverage cap 10x" });
+  if (input.leverage < MIN_SYSTEM_LEVERAGE || input.leverage > MAX_SYSTEM_LEVERAGE) {
+    throw new TRPCError({
+      code: "BAD_REQUEST",
+      message: `Leverage must be between ${MIN_SYSTEM_LEVERAGE}x and ${MAX_SYSTEM_LEVERAGE}x`,
+    });
+  }
 
   const db = getDb();
   const dbCreds = await db.select().from(exchangeCredentials).where(and(eq(exchangeCredentials.userId, userId), eq(exchangeCredentials.exchange, "coindcx"))).limit(1);

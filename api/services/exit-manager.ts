@@ -4,8 +4,7 @@ import { SUPPORTED_PAIRS } from "./binance";
 import { latestTickerCache } from "./streaming";
 import { getDb } from "../queries/connection";
 import { positions } from "@db/schema";
-import { eq, and } from "drizzle-orm";
-import { env } from "../lib/env";
+import { eq } from "drizzle-orm";
 
 export interface MonitoredPosition {
   id: number;

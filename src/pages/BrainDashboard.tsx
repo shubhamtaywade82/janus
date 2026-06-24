@@ -39,6 +39,11 @@ export default function BrainDashboard() {
     { enabled: tradingMode === "paper", refetchInterval: 5000 }
   );
 
+  const { data: conversion } = trpc.trading.currencyConversion.useQuery(undefined, {
+    enabled: tradingMode === "paper",
+    refetchInterval: 60_000,
+  });
+
   // Fetch live portfolio details if in live mode
   const { data: livePortfolioData } = trpc.trading.portfolio.useQuery(
     undefined,
@@ -53,13 +58,15 @@ export default function BrainDashboard() {
 
   const isPaper = tradingMode === "paper";
 
-  const availableEquity = useMemo(() => {
+  const availableEquityUsdt = useMemo(() => {
     if (isPaper) {
-      return paperWalletData?.equity ?? 10000;
-    } else {
-      return livePortfolioData?.totalEquity ?? 0;
+      if (paperWalletData?.equityUsdt != null) return paperWalletData.equityUsdt;
+      const rawEquity = paperWalletData?.equity ?? 10_000;
+      const rate = conversion?.conversion_price ?? 89;
+      return paperWalletData?.currency === "INR" ? rawEquity / rate : rawEquity;
     }
-  }, [isPaper, paperWalletData, livePortfolioData]);
+    return livePortfolioData?.totalEquity ?? 0;
+  }, [isPaper, paperWalletData, livePortfolioData, conversion?.conversion_price]);
 
   const terminalEndRef = useRef<HTMLDivElement>(null);
 
@@ -171,7 +178,7 @@ export default function BrainDashboard() {
 
   const handleTriggerSignal = async () => {
     const capitalValue = capitalMode === "pct"
-      ? (availableEquity * triggerCapitalPct) / 100
+      ? (availableEquityUsdt * triggerCapitalPct) / 100
       : parseFloat(triggerCapitalFixed || "0");
 
     if (!capitalValue || isNaN(capitalValue) || capitalValue <= 0) {
@@ -414,8 +421,8 @@ export default function BrainDashboard() {
                     />
                     <span className="absolute right-2 top-1.5 text-[10px] text-zinc-500 font-semibold">%</span>
                   </div>
-                  <span className="text-[9px] text-zinc-500 font-medium truncate max-w-[55px]" title={`≈ $${((availableEquity * triggerCapitalPct) / 100).toFixed(2)}`}>
-                    ≈${((availableEquity * triggerCapitalPct) / 100).toFixed(0)}
+                  <span className="text-[9px] text-zinc-500 font-medium truncate max-w-[55px]" title={`≈ $${((availableEquityUsdt * triggerCapitalPct) / 100).toFixed(2)} USDT`}>
+                    ≈${((availableEquityUsdt * triggerCapitalPct) / 100).toFixed(0)}
                   </span>
                 </div>
               ) : (
@@ -429,7 +436,7 @@ export default function BrainDashboard() {
                     placeholder="50"
                   />
                   <span className="text-[9px] text-zinc-500 font-medium whitespace-nowrap">
-                    ≈{availableEquity > 0 ? ((parseFloat(triggerCapitalFixed || "0") / availableEquity) * 100).toFixed(0) : 0}%
+                    ≈{availableEquityUsdt > 0 ? ((parseFloat(triggerCapitalFixed || "0") / availableEquityUsdt) * 100).toFixed(0) : 0}%
                   </span>
                 </div>
               )}
@@ -478,8 +485,8 @@ export default function BrainDashboard() {
               <label className="block text-[10px] text-zinc-500 font-bold uppercase mb-1">Leverage</label>
               <input
                 type="number"
-                min="1"
-                max="125"
+                min={5}
+                max={20}
                 value={triggerLeverage}
                 onChange={(e) => setTriggerLeverage(e.target.value)}
                 className="w-full px-2 py-1.5 rounded bg-[#09090b] border border-[#27272a] text-xs text-zinc-200 focus:border-emerald-500/50 outline-none"

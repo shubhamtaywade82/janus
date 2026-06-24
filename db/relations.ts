@@ -1,13 +1,14 @@
 import { relations } from "drizzle-orm";
 import {
   users, positions, trades, signals, systemLogs, exchangeCredentials,
-  tradingAccounts, accountLedger, accountSnapshots,
+  tradingAccounts, accountLedger, accountSnapshots, orders,
 } from "./schema";
 
 export const usersRelations = relations(users, ({ many }) => ({
   positions: many(positions),
   trades: many(trades),
   credentials: many(exchangeCredentials),
+  orders: many(orders),
 }));
 
 export const positionsRelations = relations(positions, ({ one, many }) => ({
@@ -64,3 +65,11 @@ export const accountSnapshotsRelations = relations(accountSnapshots, ({ one }) =
     references: [tradingAccounts.id],
   }),
 }));
+
+export const ordersRelations = relations(orders, ({ one }) => ({
+  user: one(users, {
+    fields: [orders.userId],
+    references: [users.id],
+  }),
+}));
+

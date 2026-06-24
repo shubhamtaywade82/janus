@@ -79,13 +79,12 @@ describe("detectSwingPoints", () => {
     lows.forEach((l) => expect(l.type).toBe("LOW"));
   });
 
-  it("detects all candles as pivot highs in a flat sequence (tie = qualifies)", () => {
+  it("returns no swing highs in a flat sequence (strict pivot inequality)", () => {
     const candles = Array.from({ length: 10 }, (_, i) =>
       makeCandle(100, { openTime: i * 60_000, high: 101, low: 99 })
     );
     const { highs } = detectSwingPoints(candles, 2);
-    // Flat market: every candle's high equals the window max → all qualify as highs
-    expect(highs.length).toBeGreaterThan(0);
+    expect(highs).toHaveLength(0);
   });
 });
 

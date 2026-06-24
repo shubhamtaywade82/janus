@@ -12,20 +12,25 @@ import {
   Signal,
   ScrollText,
   ChevronRight,
+  ChevronLeft,
   Settings,
   Shield,
   Bell,
   Brain,
   Zap,
+  LineChart,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import SettingsModal from "./SettingsModal";
 import AlertsModal from "./AlertsModal";
+import SearchModal from "./SearchModal";
 import { playAlertChime } from "@/lib/alert-sound";
 
 const navItems = [
   { path: "/", label: "Dashboard", icon: TrendingUp },
   { path: "/signals", label: "Signals", icon: Signal },
+  { path: "/adaptive-st", label: "Adaptive ST", icon: LineChart },
+  { path: "/surveillance", label: "Surveillance", icon: Activity },
   { path: "/ai-analysis", label: "AI Analysis", icon: Brain },
   { path: "/brain", label: "Brain", icon: Zap },
   { path: "/portfolio", label: "Portfolio", icon: Wallet },
@@ -39,6 +44,33 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
   const [isAlertsOpen, setIsAlertsOpen] = useState(false);
   const [activeAlertsCount, setActiveAlertsCount] = useState(0);
+  const [isCollapsed, setIsCollapsed] = useState(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("janus_sidebar_collapsed");
+      return saved === null ? true : saved === "true";
+    }
+    return true;
+  });
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+
+  useEffect(() => {
+    const down = (e: KeyboardEvent) => {
+      if (e.key === "k" && (e.metaKey || e.ctrlKey)) {
+        e.preventDefault();
+        setIsSearchOpen((open) => !open);
+      }
+    };
+    document.addEventListener("keydown", down);
+    return () => document.removeEventListener("keydown", down);
+  }, []);
+
+  const toggleSidebar = () => {
+    setIsCollapsed((prev) => {
+      const newVal = !prev;
+      localStorage.setItem("janus_sidebar_collapsed", String(newVal));
+      return newVal;
+    });
+  };
 
   // ─── Backend user-alert stream → in-browser toast + badge ───
   // Alert evaluation and Telegram delivery happen on the backend (AlertEngine).
@@ -169,16 +201,24 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
   return (
     <div className="flex h-screen w-screen bg-[#09090b] text-[#f4f4f5] overflow-hidden">
       {/* Sidebar */}
-      <aside className="w-16 flex-shrink-0 flex flex-col items-center py-4 border-r border-[#27272a] bg-[#09090b]">
+      <aside className={cn(
+        "flex-shrink-0 flex flex-col py-4 border-r border-white/[0.06] bg-[#09090b] relative z-20 transition-all duration-300 ease-in-out",
+        isCollapsed ? "w-16 items-center" : "w-52 px-4"
+      )}>
         {/* Logo */}
-        <div className="mb-6">
-          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-j-up to-j-up/70 flex items-center justify-center">
+        <div className={cn("mb-6 flex items-center gap-3 w-full", isCollapsed ? "justify-center" : "px-2")}>
+          <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-j-up to-j-up/70 flex items-center justify-center flex-shrink-0">
             <span className="text-white font-bold text-sm">J</span>
           </div>
+          {!isCollapsed && (
+            <span className="text-sm font-black tracking-wider bg-gradient-to-r from-white to-zinc-400 bg-clip-text text-transparent transition-all">
+              JANUS
+            </span>
+          )}
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 flex flex-col items-center gap-2">
+        <nav className={cn("flex-1 flex flex-col gap-2 w-full", isCollapsed ? "items-center" : "items-stretch")}>
           {navItems.map((item) => {
             const isActive = location.pathname === item.path;
             const Icon = item.icon;
@@ -187,55 +227,135 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
                 key={item.path}
                 to={item.path}
                 className={cn(
-                  "w-10 h-10 rounded-lg flex items-center justify-center transition-all duration-200 group relative",
+                  "rounded-lg flex items-center transition-all duration-200 group relative",
+                  isCollapsed ? "w-10 h-10 justify-center" : "w-full px-3 py-2 gap-3",
                   isActive
-                    ? "bg-j-up/10 text-j-up"
+                    ? "bg-j-up/10 text-j-up shadow-[inset_0_1px_1px_rgba(255,255,255,0.05)]"
                     : "text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#18181b]"
                 )}
               >
-                <Icon size={20} />
+                {isActive && (
+                  <span className={cn(
+                    "absolute w-[3px] rounded-r-full bg-j-up shadow-[0_0_8px_rgba(34,197,94,0.5)]",
+                    isCollapsed ? "-left-3 top-2 bottom-2" : "-left-4 top-2 bottom-2"
+                  )} />
+                )}
+                <Icon size={20} className="flex-shrink-0" />
+                {!isCollapsed && (
+                  <span className="text-xs font-semibold whitespace-nowrap">{item.label}</span>
+                )}
                 {/* Tooltip */}
-                <div className="absolute left-12 bg-[#18181b] text-[#f4f4f5] text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 border border-[#27272a]">
-                  {item.label}
-                </div>
+                {isCollapsed && (
+                  <div className="absolute left-12 bg-[#18181b] text-[#f4f4f5] text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 border border-[#27272a]">
+                    {item.label}
+                  </div>
+                )}
               </Link>
             );
           })}
         </nav>
 
         {/* Bottom Actions */}
-        <div className="flex flex-col items-center gap-2 mt-auto">
+        <div className={cn("flex flex-col gap-2 mt-auto w-full", isCollapsed ? "items-center" : "items-stretch")}>
+          {/* Collapse/Expand Toggle Button */}
+          <button
+            onClick={toggleSidebar}
+            className={cn(
+              "rounded-lg flex items-center text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#18181b] transition-all relative group",
+              isCollapsed ? "w-10 h-10 justify-center" : "w-full px-3 py-2 gap-3"
+            )}
+            title={isCollapsed ? "Expand Sidebar" : "Collapse Sidebar"}
+          >
+            {isCollapsed ? (
+              <ChevronRight size={18} />
+            ) : (
+              <>
+                <ChevronLeft size={18} className="flex-shrink-0" />
+                <span className="text-xs font-semibold">Collapse</span>
+              </>
+            )}
+            {isCollapsed && (
+              <div className="absolute left-12 bg-[#18181b] text-[#f4f4f5] text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 border border-[#27272a]">
+                Expand Sidebar
+              </div>
+            )}
+          </button>
+
           <button
             onClick={() => setIsSettingsOpen(true)}
-            className="w-10 h-10 rounded-lg flex items-center justify-center text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#18181b] transition-all relative group"
+            className={cn(
+              "rounded-lg flex items-center text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#18181b] transition-all relative group",
+              isCollapsed ? "w-10 h-10 justify-center" : "w-full px-3 py-2 gap-3"
+            )}
           >
-            <Settings size={18} />
-            <div className="absolute left-12 bg-[#18181b] text-[#f4f4f5] text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 border border-[#27272a]">
-              Settings
-            </div>
+            <Settings size={18} className="flex-shrink-0" />
+            {!isCollapsed && (
+              <span className="text-xs font-semibold">Settings</span>
+            )}
+            {isCollapsed && (
+              <div className="absolute left-12 bg-[#18181b] text-[#f4f4f5] text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 border border-[#27272a]">
+                Settings
+              </div>
+            )}
           </button>
-          <button className="w-10 h-10 rounded-lg flex items-center justify-center text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#18181b] transition-all">
-            <Search size={18} />
+
+          <button
+            onClick={() => setIsSearchOpen(true)}
+            className={cn(
+              "rounded-lg flex items-center text-[#71717a] hover:text-[#f4f4f5] hover:bg-[#18181b] transition-all relative group",
+              isCollapsed ? "w-10 h-10 justify-center" : "w-full px-3 py-2 gap-3"
+            )}
+          >
+            <Search size={18} className="flex-shrink-0" />
+            {!isCollapsed && (
+              <span className="text-xs font-semibold">Search</span>
+            )}
+            {isCollapsed && (
+              <div className="absolute left-12 bg-[#18181b] text-[#f4f4f5] text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 border border-[#27272a]">
+                Search
+              </div>
+            )}
           </button>
+
           {user && (
             <button
               onClick={logout}
-              className="w-10 h-10 rounded-lg flex items-center justify-center text-[#71717a] hover:text-j-down hover:bg-[#18181b] transition-all"
+              className={cn(
+                "rounded-lg flex items-center text-[#71717a] hover:text-j-down hover:bg-[#18181b] transition-all relative group",
+                isCollapsed ? "w-10 h-10 justify-center" : "w-full px-3 py-2 gap-3"
+              )}
             >
-              <LogOut size={18} />
+              <LogOut size={18} className="flex-shrink-0" />
+              {!isCollapsed && (
+                <span className="text-xs font-semibold">Logout</span>
+              )}
+              {isCollapsed && (
+                <div className="absolute left-12 bg-[#18181b] text-[#f4f4f5] text-xs px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap pointer-events-none z-50 border border-[#27272a]">
+                  Logout
+                </div>
+              )}
             </button>
           )}
-          {user?.avatar ? (
-            <img
-              src={user.avatar}
-              alt=""
-              className="w-8 h-8 rounded-full border border-[#27272a]"
-            />
-          ) : (
-            <div className="w-8 h-8 rounded-full bg-[#18181b] border border-[#27272a] flex items-center justify-center text-xs text-[#71717a]">
-              {user?.name?.[0]?.toUpperCase() || "U"}
-            </div>
-          )}
+
+          <div className={cn("flex items-center gap-3", isCollapsed ? "justify-center mt-2" : "px-2 py-1 mt-2 border-t border-white/[0.04] pt-3")}>
+            {user?.avatar ? (
+              <img
+                src={user.avatar}
+                alt=""
+                className="w-8 h-8 rounded-full border border-white/[0.06] flex-shrink-0"
+              />
+            ) : (
+              <div className="w-8 h-8 rounded-full bg-[#18181b] border border-white/[0.06] flex items-center justify-center text-xs text-[#71717a] flex-shrink-0 font-bold">
+                {user?.name?.[0]?.toUpperCase() || "U"}
+              </div>
+            )}
+            {!isCollapsed && (
+              <div className="flex flex-col min-w-0">
+                <span className="text-xs font-bold text-zinc-300 truncate">{user?.name || "User"}</span>
+                <span className="text-[9px] text-[#71717a] truncate font-medium">Administrator</span>
+              </div>
+            )}
+          </div>
         </div>
       </aside>
 
@@ -248,28 +368,31 @@ const Layout = ({ children }: { children: React.ReactNode }) => {
         setActiveAlertsCount(0);
       }} />
 
+      {/* Global Command Search Modal */}
+      <SearchModal isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
+
       {/* Main Content */}
       <main className="flex-1 flex flex-col overflow-hidden">
         {/* Top Bar */}
-        <header className="h-12 flex-shrink-0 flex items-center justify-between px-4 border-b border-[#27272a] bg-[#09090b]">
+        <header className="h-12 flex-shrink-0 flex items-center justify-between px-4 border-b border-white/[0.06] bg-[#09090b]/80 backdrop-blur-md relative z-10">
           <div className="flex items-center gap-4">
-            <h1 className="text-sm font-semibold tracking-wider text-[#f4f4f5]">
+            <h1 className="text-sm font-semibold tracking-wider text-[#f4f4f5] bg-gradient-to-r from-white to-zinc-400 bg-clip-text text-transparent">
               JANUS
             </h1>
-            <div className="h-4 w-px bg-[#27272a]" />
-            <div className="flex items-center gap-2 text-xs text-[#71717a]">
-              <span className="flex items-center gap-1">
+            <div className="h-4 w-px bg-white/[0.06]" />
+            <div className="flex items-center gap-1.5 text-[10px]">
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800/80 text-zinc-300 font-medium">
                 <span className="w-1.5 h-1.5 rounded-full bg-j-up animate-pulse" />
                 Binance Feed
               </span>
-              <ChevronRight size={12} />
-              <span className="flex items-center gap-1">
+              <ChevronRight size={10} className="text-zinc-600" />
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-zinc-900 border border-zinc-800/80 text-zinc-300 font-medium">
                 <span className="w-1.5 h-1.5 rounded-full bg-[#3b82f6] animate-pulse" />
                 CoinDCX Exec
               </span>
-              <ChevronRight size={12} />
-              <span className="flex items-center gap-1 text-j-up">
-                <Activity size={12} />
+              <ChevronRight size={10} className="text-zinc-600" />
+              <span className="flex items-center gap-1.5 px-2 py-0.5 rounded bg-j-up/10 border border-j-up/20 text-j-up font-bold">
+                <Activity size={11} className="animate-pulse" />
                 Live
               </span>
             </div>

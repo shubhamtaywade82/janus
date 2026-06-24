@@ -220,7 +220,7 @@ sizeMult: 0.5 (reduce) | 1.0 (normal) | 1.5 (increase, only if very high convict
       method: "POST",
       headers,
       body: JSON.stringify({ model: key.model, prompt, stream: false }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(env.ollamaTimeoutMs ?? 30_000),
     });
 
     if (!res.ok) {
@@ -246,7 +246,7 @@ sizeMult: 0.5 (reduce) | 1.0 (normal) | 1.5 (increase, only if very high convict
         temperature: 0.2,
         max_tokens: 120,
       }),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(env.ollamaTimeoutMs ?? 30_000),
     });
 
     if (!res.ok) {

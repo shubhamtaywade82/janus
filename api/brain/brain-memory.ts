@@ -14,6 +14,7 @@ import { eq, sql } from "drizzle-orm";
  */
 export async function getEmbedding(text: string): Promise<number[]> {
   const openaiKey = process.env.OPENAI_API_KEY;
+  let rawEmbedding: number[] | undefined;
 
   if (openaiKey) {
     try {
@@ -27,29 +28,69 @@ export async function getEmbedding(text: string): Promise<number[]> {
       });
       const json: any = await res.json();
       if (json.data?.[0]?.embedding) {
-        return json.data[0].embedding;
+        rawEmbedding = json.data[0].embedding;
       }
     } catch (e) {
       console.warn("[Brain Memory] OpenAI Embedding failed, attempting Ollama fallback:", e);
     }
   }
 
-  // Fallback to Ollama embedding API
-  const ollamaUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
-  const model = process.env.OLLAMA_MODEL || "llama3.2";
+  if (!rawEmbedding) {
+    // Fallback to Ollama embedding API
+    const ollamaUrl = process.env.OLLAMA_BASE_URL || "http://localhost:11434";
+    const model = process.env.OLLAMA_EMBEDDING_MODEL || "nomic-embed-text";
 
-  const res = await fetch(`${ollamaUrl}/api/embeddings`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ model, prompt: text })
-  });
-
-  const json: any = await res.json();
-  if (json.embedding) {
-    return json.embedding;
+    try {
+      const res = await fetch(`${ollamaUrl}/api/embeddings`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model, prompt: text })
+      });
+      if (!res.ok) {
+        throw new Error(`Ollama HTTP ${res.status}`);
+      }
+      const json: any = await res.json();
+      if (json.embedding) {
+        rawEmbedding = json.embedding;
+      } else if (json.error) {
+        throw new Error(json.error);
+      }
+    } catch (err: any) {
+      console.warn(`[Brain Memory] Ollama embedding failed with model ${model}, trying llama3.2 fallback:`, err.message);
+      try {
+        const res = await fetch(`${ollamaUrl}/api/embeddings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ model: "llama3.2", prompt: text })
+        });
+        if (!res.ok) {
+          throw new Error(`Ollama HTTP ${res.status}`);
+        }
+        const json: any = await res.json();
+        if (json.embedding) {
+          rawEmbedding = json.embedding;
+        }
+      } catch (e: any) {
+        console.warn("[Brain Memory] Llama3.2 embedding fallback failed:", e.message);
+      }
+    }
   }
 
-  throw new Error("Failed to generate vector embedding from both OpenAI and Ollama.");
+  if (!rawEmbedding) {
+    throw new Error("Failed to generate vector embedding from both OpenAI and Ollama.");
+  }
+
+  // Ensure embedding matches target dimension (1536) for pgvector compatibility
+  const TARGET_DIM = 1536;
+  if (rawEmbedding.length < TARGET_DIM) {
+    const padded = [...rawEmbedding];
+    while (padded.length < TARGET_DIM) padded.push(0);
+    return padded;
+  } else if (rawEmbedding.length > TARGET_DIM) {
+    return rawEmbedding.slice(0, TARGET_DIM);
+  }
+
+  return rawEmbedding;
 }
 
 export const memoryStore = {

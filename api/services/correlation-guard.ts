@@ -15,11 +15,7 @@ const CORRELATION_GROUPS: Record<string, string> = {
   BTCUSDT:  "crypto_beta",
   ETHUSDT:  "crypto_beta",
   SOLUSDT:  "crypto_beta",
-  BNBUSDT:  "crypto_beta",
-  AVAXUSDT: "crypto_beta",
-  ADAUSDT:  "crypto_beta",
   XRPUSDT:  "crypto_beta",
-  DOGEUSDT: "crypto_beta",
 };
 
 // Mode-aware: paper is aggressive (more concurrent correlated positions allowed),

@@ -38,6 +38,11 @@ export class OrderBlockPrimitive implements ISeriesPrimitive<Time> {
 
             target.useBitmapCoordinateSpace(({ context: ctx, horizontalPixelRatio: hpr, verticalPixelRatio: vpr }) => {
               ctx.save();
+              
+              const data = series.data();
+              const lastItem = data.length > 0 ? data[data.length - 1] : null;
+              const lastX = lastItem ? toX(lastItem.time) : null;
+
               for (const block of self._blocks) {
                 const x1 = toX(block.time);
                 const y1 = toY(block.top);
@@ -49,7 +54,16 @@ export class OrderBlockPrimitive implements ISeriesPrimitive<Time> {
 
                 const bx = Math.round(x1 * hpr);
                 const by = Math.round(Math.min(y1, y2) * vpr);
-                const bw = Math.max(0, ctx.canvas.width - bx);
+                
+                let x2 = null;
+                if (block.mitigated && block.mitigatedAt) {
+                  x2 = toX(block.mitigatedAt);
+                } else if (lastX !== null) {
+                  x2 = lastX;
+                }
+                const endX = x2 !== null ? x2 * hpr : ctx.canvas.width;
+                const bw = Math.max(0, Math.round(endX) - bx);
+                
                 const bh = Math.round(Math.abs(y2 - y1) * vpr);
                 if (bh < 1) continue;
 

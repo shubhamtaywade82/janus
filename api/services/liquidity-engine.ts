@@ -253,9 +253,14 @@ export class LiquidityEngine extends EventEmitter {
   }
 
   private notifyTelegram(ev: LiquidityEvent) {
+    if (ev.type === "LONG_LIQUIDATION_CASCADE" || ev.type === "SHORT_LIQUIDATION_CASCADE") {
+      return;
+    }
+
     const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     const text = `🚨 <b>[${ev.priority}] ${esc(ev.symbol)} Liquidity Alert</b>\n\n<b>Type:</b> ${esc(ev.type.replace(/_/g, " "))}\n<b>Message:</b> ${esc(ev.message)}`;
-    broadcastTelegramAlert(text).catch(err => console.error("Failed to broadcast telegram alert", err));
+
+    broadcastTelegramAlert(text, { isLiquidityAlert: true }).catch(() => {});
   }
 }
 

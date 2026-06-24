@@ -68,9 +68,32 @@ describe("detectSwings", () => {
   });
 
   it("returns empty for completely flat series", () => {
-    // All highs equal → no dominant high
     const result = detectSwings(flat(100, 20), 3);
     expect(result.filter((s) => s.type === "high")).toHaveLength(0);
+  });
+
+  it("labels HH/LH/HL/LL from same-type swing sequences only", () => {
+    const klines: Kline[] = [
+      makeKline(0, 50, 52, 48, 50),
+      makeKline(1, 50, 52, 48, 50),
+      makeKline(2, 55, 60, 54, 58),
+      makeKline(3, 58, 59, 55, 56),
+      makeKline(4, 56, 57, 40, 42),
+      makeKline(5, 42, 43, 41, 42),
+      makeKline(6, 45, 70, 44, 68),
+      makeKline(7, 68, 69, 43, 52),
+      makeKline(8, 52, 53, 42, 52),
+      makeKline(9, 52, 53, 51, 52),
+      makeKline(10, 55, 85, 54, 83),
+    ];
+    const swings = detectSwings(klines, 2);
+    const highs = swings.filter((s) => s.type === "high");
+    const lows = swings.filter((s) => s.type === "low");
+
+    expect(highs[0]?.label).toBeUndefined();
+    expect(highs[1]?.label).toBe("HH");
+    expect(lows[0]?.label).toBeUndefined();
+    expect(lows[1]?.label).toBe("HL");
   });
 });
 
@@ -158,24 +181,48 @@ describe("detectOrderBlocks", () => {
 
 // ─── detectStructure ───
 describe("detectStructure", () => {
-  it("detects BOS when price closes above previous swing high (uptrend continuation)", () => {
-    // Rising series with a clear swing high break
-    const klines = trend(100, 2, 20);
-    const swings = detectSwings(klines, 3);
-    const structure = detectStructure(klines, swings);
-    const bosEvents = structure.filter((s) => s.type === "BOS" && s.direction === "bullish");
-    expect(bosEvents.length).toBeGreaterThanOrEqual(0); // may not fire if no swing forms
+  const zigzagFixture: Kline[] = [
+    makeKline(0, 50, 52, 48, 50),
+    makeKline(1, 50, 52, 48, 50),
+    makeKline(2, 55, 60, 54, 58),
+    makeKline(3, 58, 59, 55, 56),
+    makeKline(4, 56, 57, 40, 42),
+    makeKline(5, 42, 43, 41, 42),
+    makeKline(6, 45, 70, 44, 68),
+    makeKline(7, 68, 69, 43, 52),
+    makeKline(8, 52, 53, 42, 52),
+    makeKline(9, 52, 53, 51, 52),
+    makeKline(10, 55, 85, 54, 83),
+    makeKline(11, 83, 84, 82, 83),
+    makeKline(12, 83, 84, 41, 41),
+  ];
+
+  it("emits bullish BOS only after initial structure and close above HH", () => {
+    const swings = detectSwings(zigzagFixture, 2);
+    const structure = detectStructure(zigzagFixture, swings, 2);
+    const bullishBos = structure.filter((s) => s.type === "BOS" && s.direction === "bullish");
+    expect(bullishBos.length).toBeGreaterThan(0);
+    expect(bullishBos.some((s) => s.brokenSwingPrice === 70)).toBe(true);
   });
 
-  it("detects CHoCH when uptrend price closes below last swing low", () => {
-    // Go up then sharply reverse
-    const up   = trend(100, 3, 10, 0);
-    const down = trend(130, -5, 10, 10 * 60_000);
-    const klines = [...up, ...down];
-    const swings = detectSwings(klines, 2);
-    const structure = detectStructure(klines, swings);
-    expect(Array.isArray(structure)).toBe(true);
-    // At minimum returns array without error
+  it("emits bearish CHoCH when bullish trend closes below last HL", () => {
+    const swings = detectSwings(zigzagFixture, 2);
+    const structure = detectStructure(zigzagFixture, swings, 2);
+    expect(structure.some((s) => s.type === "CHoCH" && s.direction === "bearish")).toBe(true);
+    expect(structure.some((s) => s.brokenSwingPrice === 42)).toBe(true);
+  });
+
+  it("does not emit breaks before HIGH-LOW-HIGH or LOW-HIGH-LOW structure forms", () => {
+    const klines: Kline[] = [
+      makeKline(0, 100, 101, 99, 100),
+      makeKline(1, 101, 110, 100, 109),
+      makeKline(2, 109, 110, 108, 109),
+      makeKline(3, 109, 110, 108, 109),
+      makeKline(4, 109, 110, 108, 109),
+    ];
+    const swings = detectSwings(klines, 1);
+    const structure = detectStructure(klines, swings, 1);
+    expect(structure).toHaveLength(0);
   });
 
   it("labels each break as BOS or CHoCH", () => {

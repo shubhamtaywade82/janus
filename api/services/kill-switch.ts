@@ -17,12 +17,22 @@ import { getDb } from "../queries/connection";
 import { killSwitchState } from "@db/schema";
 
 const STATE_FILE = path.resolve(process.cwd(), "kill-switch-state.json");
+const DEFAULT_AUTO_RESET_MS = 60 * 60 * 1000;
+
+function getAutoResetMs(): number {
+  const raw = process.env.KILL_SWITCH_AUTO_RESET_MS;
+  if (raw === "0") return 0;
+  const parsed = parseInt(raw ?? String(DEFAULT_AUTO_RESET_MS), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : DEFAULT_AUTO_RESET_MS;
+}
 
 export class KillSwitch {
   state: KillState | null = null;
+  private _autoResetTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this._loadFromFile();
+    this._applyAutoResetPolicy();
   }
 
   private _loadFromFile() {
@@ -63,6 +73,7 @@ export class KillSwitch {
           console.log(`[kill-switch] DB overrides file — state cleared`);
         }
         this.state = null;
+        this._clearAutoResetTimer();
         return;
       }
 
@@ -70,6 +81,7 @@ export class KillSwitch {
       if (row.reason?.startsWith("shutdown_")) {
         // Shutdown artifact in DB — clear it
         this.state = null;
+        this._clearAutoResetTimer();
         this._persistToDb().catch(() => {});
         return;
       }
@@ -85,9 +97,50 @@ export class KillSwitch {
         this.state = dbState;
         console.log(`[kill-switch] Restored from DB: type=${dbState.type} reason="${dbState.reason}"`);
       }
+
+      this._applyAutoResetPolicy();
     } catch (err) {
       console.error("[kill-switch] Failed to load DB state:", err);
     }
+  }
+
+  private _clearAutoResetTimer(): void {
+    if (this._autoResetTimer) {
+      clearTimeout(this._autoResetTimer);
+      this._autoResetTimer = null;
+    }
+  }
+
+  private _applyAutoResetPolicy(): void {
+    this._clearAutoResetTimer();
+
+    const autoResetMs = getAutoResetMs();
+    if (autoResetMs <= 0 || !this.state) return;
+
+    const elapsed = Date.now() - this.state.triggeredAt;
+    const remaining = autoResetMs - elapsed;
+
+    if (remaining <= 0) {
+      console.log(`[kill-switch] AUTO-RESET — ${Math.round(autoResetMs / 60_000)}min TTL elapsed`);
+      this.reset();
+      return;
+    }
+
+    this._autoResetTimer = setTimeout(() => {
+      this._autoResetTimer = null;
+      if (!this.isActive) return;
+      console.log(
+        `[kill-switch] AUTO-RESET — ${Math.round(autoResetMs / 60_000)}min TTL elapsed (was: ${this.state?.reason ?? "unknown"})`
+      );
+      this.reset();
+    }, remaining);
+  }
+
+  /** Epoch ms when the active kill switch auto-resets, or null if inactive/disabled. */
+  getAutoResetAt(): number | null {
+    const autoResetMs = getAutoResetMs();
+    if (autoResetMs <= 0 || !this.state) return null;
+    return this.state.triggeredAt + autoResetMs;
   }
 
   private _saveToFile() {
@@ -173,10 +226,12 @@ export class KillSwitch {
     console.error(`[kill-switch] TRIGGERED — type=${type} reason="${reason}"`);
     this._saveToFile();
     this._persistToDb().catch(() => {});
+    this._applyAutoResetPolicy();
     killSwitchEvents.emit("triggered", this.state);
   }
 
   reset() {
+    this._clearAutoResetTimer();
     const prev = this.state;
     this.state = null;
     console.log(`[kill-switch] RESET — was: ${prev?.reason ?? "none"}`);

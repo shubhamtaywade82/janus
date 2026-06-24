@@ -16,7 +16,7 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
-import { formatPrice, formatQty } from "@/utils/precision";
+import { formatPrice, formatQty, getPriceDecimals } from "@/utils/precision";
 
 // ─── Position Row ───
 const PositionRow = ({
@@ -32,26 +32,28 @@ const PositionRow = ({
   isClosing: boolean;
   usdtInrRate: number;
 }) => {
+  const isOpen = position.status === "open";
   const entryPrice = parseFloat(position.entryPrice || "0");
   const backendPrice = parseFloat(position.currentPrice || "0");
-  const livePriceVal = (livePrice && livePrice > 0 && !isNaN(livePrice)) ? livePrice : null;
+  const livePriceVal = (isOpen && livePrice && livePrice > 0 && !isNaN(livePrice)) ? livePrice : null;
   const dbPriceVal = (backendPrice > 0 && !isNaN(backendPrice)) ? backendPrice : null;
   const currentPrice = livePriceVal ?? dbPriceVal ?? entryPrice;
   const size = parseFloat(position.size || "0");
   const marginCurrency = position.marginCurrency || "USDT";
 
-  // Use live price for real-time PnL when available; fall back to backend-provided value
-  const pnl = currentPrice > 0
-    ? (position.side === "long"
-        ? (currentPrice - entryPrice) * size
-        : (entryPrice - currentPrice) * size)
-    : parseFloat(position.unrealizedPnl || "0");
+  // Use live price for real-time PnL when available (open positions only); otherwise use static realized PnL
+  const pnl = isOpen
+    ? (currentPrice > 0
+        ? (position.side === "long"
+            ? (currentPrice - entryPrice) * size
+            : (entryPrice - currentPrice) * size)
+        : parseFloat(position.unrealizedPnl || "0"))
+    : parseFloat(position.realizedPnl || "0");
   const isProfit = pnl >= 0;
   const margin = parseFloat(position.margin || "0");
-  const roe = margin > 0 ? (pnl / margin) * 100 : parseFloat(position.roe || "0");
-
   const marginInr = marginCurrency === "INR" ? margin : margin * usdtInrRate;
   const marginUsdt = marginCurrency === "INR" ? margin / usdtInrRate : margin;
+  const roe = marginUsdt > 0 ? (pnl / marginUsdt) * 100 : parseFloat(position.roe || "0");
 
   const maintMarginVal = position.maintenanceMargin ? parseFloat(position.maintenanceMargin) : null;
   const maintMarginInr = maintMarginVal !== null
@@ -117,7 +119,7 @@ const PositionRow = ({
         {formatPrice(position.entryPrice, position.symbol, position.basePrecision)}
       </td>
       <td className={cn("px-3 py-2 text-xs text-[#f4f4f5] tabular-nums rounded", priceFlash)}>
-        <AnimatedNumber value={currentPrice} decimals={position.basePrecision ?? 2} duration={200} />
+        <AnimatedNumber value={currentPrice} decimals={position.basePrecision ?? getPriceDecimals(position.symbol)} duration={200} />
       </td>
       <td className="px-3 py-2 text-[10px] tabular-nums">
         <div className="flex flex-col gap-0.5">
@@ -371,19 +373,9 @@ export default function Portfolio() {
     { enabled: statusFilter !== "open" && statusFilter !== "equity_curve", refetchInterval: 10000 }
   );
 
-  // Always-on direct DB query for paper positions — independent of portfolioStream
-  const { data: allDbOpenPositions } = trpc.trading.positions.useQuery(
-    { status: "open" },
-    { refetchInterval: 5000 }
-  );
-  const paperPositions = (allDbOpenPositions || []).filter((p: any) => p.isPaper);
-  const livePositionsFromStream: any[] = (portfolio?.positions || []).filter((p: any) => !p.isPaper);
-  const livePositionsFromDb = (allDbOpenPositions || []).filter((p: any) => !p.isPaper);
-
-  // Merge live positions: stream (exchange real-time) + DB fallback for IDs not in stream
-  const streamLiveIds = new Set(livePositionsFromStream.map((p: any) => p.id));
-  const livePositionsOnlyDb = livePositionsFromDb.filter((p: any) => !streamLiveIds.has(p.id));
-  const openLivePositions = [...livePositionsFromStream, ...livePositionsOnlyDb];
+  const openPositions: any[] = portfolio?.positions || [];
+  const openLivePositions = useMemo(() => openPositions.filter((p: any) => !p.isPaper), [openPositions]);
+  const paperPositions = useMemo(() => openPositions.filter((p: any) => p.isPaper), [openPositions]);
 
   // Paper wallet stats from auto-executor
   const { data: paperWalletData } = trpc.autoExecutor.paperWallet.useQuery(
@@ -391,14 +383,9 @@ export default function Portfolio() {
     { refetchInterval: 5000 }
   );
 
-  const openPositions: any[] = portfolio?.positions || [];
   const symbols = useMemo(
-    () => [...new Set([
-      ...openPositions.map((p: any) => p.symbol as string),
-      ...paperPositions.map((p: any) => p.symbol as string),
-    ])],
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [[...openPositions, ...paperPositions].map((p: any) => p.symbol).join(",")]
+    () => [...new Set(openPositions.map((p: any) => p.symbol as string))],
+    [openPositions]
   );
 
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
@@ -408,24 +395,36 @@ export default function Portfolio() {
   }, []);
 
   // Respect portfolio mode: live tab shows live, paper tab shows paper
-  const allPositions = statusFilter !== "open"
-    ? (dbPositions || []).filter((p: any) => portfolioMode === "live" ? !p.isPaper : p.isPaper)
-    : portfolioMode === "live"
-      ? openLivePositions
-      : paperPositions;
+  const allPositions = useMemo(() => {
+    const rawList = statusFilter !== "open"
+      ? (dbPositions || []).filter((p: any) => portfolioMode === "live" ? !p.isPaper : p.isPaper)
+      : portfolioMode === "live"
+        ? openLivePositions
+        : paperPositions;
 
-  // Query historical positions and trades for tax metrics
+    // Sort deterministically: newest first (createdAt descending), then fallback to symbol and id
+    return [...rawList].sort((a: any, b: any) => {
+      const timeA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+      const timeB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+      if (timeB !== timeA) return timeB - timeA;
+      const symCompare = (a.symbol || "").localeCompare(b.symbol || "");
+      if (symCompare !== 0) return symCompare;
+      return (b.id || 0) - (a.id || 0);
+    });
+  }, [statusFilter, dbPositions, portfolioMode, openLivePositions, paperPositions]);
+
+  // Query historical positions and trades for tax metrics (always live only)
   const { data: closedPositions } = trpc.trading.positions.useQuery(
-    { status: "closed" },
+    { status: "closed", isPaper: false },
     { refetchInterval: 30000 }
   );
   const { data: liquidatedPositions } = trpc.trading.positions.useQuery(
-    { status: "liquidated" },
+    { status: "liquidated", isPaper: false },
     { refetchInterval: 30000 }
   );
   const { data: tradeHistory } = trpc.trading.trades.useQuery(
     {},
-    { refetchInterval: 30000 }
+    { enabled: portfolioMode === "live", refetchInterval: 30000 }
   );
 
   const taxMetrics = useMemo(() => {
@@ -478,6 +477,7 @@ export default function Portfolio() {
   const isPaperCcyInr = paperWalletData?.currency === "INR";
   const rawPaperFree = parseFloat(String(paperWalletData?.balance ?? 1000000));
   const rawPaperLocked = parseFloat(String(paperWalletData?.lockedMargin ?? 0));
+  const rawPaperWallet = parseFloat(String(paperWalletData?.walletBalance ?? (rawPaperFree + rawPaperLocked)));
   const rawPaperRealized = parseFloat(String(paperWalletData?.realizedPnl ?? 0));
   const rawPaperStarting = parseFloat(String(paperWalletData?.startingBalance ?? 1000000));
 
@@ -486,6 +486,9 @@ export default function Portfolio() {
 
   const paperLockedMarginInr = isPaperCcyInr ? rawPaperLocked : rawPaperLocked * usdtInrRate;
   const paperLockedMarginUsdt = isPaperCcyInr ? rawPaperLocked / usdtInrRate : rawPaperLocked;
+
+  const paperWalletBalanceInr = isPaperCcyInr ? rawPaperWallet : rawPaperWallet * usdtInrRate;
+  const paperWalletBalanceUsdt = isPaperCcyInr ? rawPaperWallet / usdtInrRate : rawPaperWallet;
 
   const paperRealizedPnlInr = isPaperCcyInr ? rawPaperRealized : rawPaperRealized * usdtInrRate;
   const paperRealizedPnlUsdt = isPaperCcyInr ? rawPaperRealized / usdtInrRate : rawPaperRealized;
@@ -519,7 +522,7 @@ export default function Portfolio() {
     || ((portfolio?.totalEquity || 0) - parseFloat(portfolio?.totalUnrealizedPnl || "0"));
   const totalEquityUsdt = walletBase + liveTotalUnrealizedPnl;
 
-  const totalPnl = liveTotalUnrealizedPnl + parseFloat(portfolio?.totalRealizedPnl || "0");
+  const totalPnl = liveTotalUnrealizedPnl + parseFloat(portfolio?.totalRealizedPnlNet || "0");
   const isProfit = totalPnl >= 0;
 
   // Risk warning toast — fire once when threshold crossed
@@ -735,10 +738,10 @@ export default function Portfolio() {
               <span className="text-[8px] font-bold px-1 rounded bg-[#f59e0b]/10 text-[#f59e0b] border border-[#f59e0b]/20">VIRTUAL</span>
             </div>
             <div className="text-xl font-bold text-[#f4f4f5] tabular-nums">
-              ₹<AnimatedNumber value={paperFreeBalanceInr} decimals={2} duration={400} />
+              ₹<AnimatedNumber value={paperWalletBalanceInr} decimals={2} duration={400} />
             </div>
             <div className="text-[10px] text-[#52525b] mt-1 tabular-nums">
-              <AnimatedNumber value={paperFreeBalanceUsdt} decimals={4} duration={400} suffix=" USDT" /> · Rate ₹{usdtInrRate.toFixed(2)}
+              <AnimatedNumber value={paperWalletBalanceUsdt} decimals={4} duration={400} suffix=" USDT" /> · Rate ₹{usdtInrRate.toFixed(2)}
               {rateMode === "static" && <span className="ml-1 text-[#f59e0b]">(static)</span>}
             </div>
             <div className="mt-2 flex items-center justify-between text-[9px] tabular-nums">
@@ -891,9 +894,9 @@ export default function Portfolio() {
                   </tr>
                 </thead>
                 <tbody>
-                  {allPositions?.map((pos: any) => (
+                  {allPositions?.map((pos: any, idx: number) => (
                     <PositionRow
-                      key={pos.id}
+                      key={`${pos.id}-${pos.symbol}-${pos.side}-${idx}`}
                       position={pos}
                       livePrice={livePrices[pos.symbol]}
                       onClose={handleClosePosition}
@@ -914,8 +917,8 @@ export default function Portfolio() {
             </div>
           </div>
 
-          {/* Recent Trades */}
-          {portfolio && portfolio.recentTrades.length > 0 && (
+          {/* Recent Trades (Live only) */}
+          {portfolioMode === "live" && portfolio && portfolio.recentTrades.length > 0 && (
             <div className="bg-[#18181b] border border-[#27272a] rounded-lg overflow-hidden">
               <div className="px-4 py-2 border-b border-[#27272a]">
                 <span className="text-xs font-semibold text-[#f4f4f5]">Recent Trades</span>

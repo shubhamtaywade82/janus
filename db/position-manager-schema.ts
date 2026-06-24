@@ -111,12 +111,21 @@ export const positionTransactions = pgTable(
     marginBefore: decimal("margin_before", { precision: 18, scale: 8 }).default("0"),
     marginAfter: decimal("margin_after", { precision: 18, scale: 8 }).default("0"),
     metadata: jsonb("metadata"), // { oldSl, newSl, oldTp, newTp, reason, exchangeOrderId, etc. }
+    // ─── PTA extensions ──────────────────────────────────────────────────────
+    orderId: integer("order_id"), // FK to existing orders table
+    liquiditySide: varchar("liquidity_side", { length: 10 }),
+    // MAKER | TAKER
+    fillModel: varchar("fill_model", { length: 30 }),
+    // MARK_PRICE | ORDERBOOK_WALK | SLIPPAGE_PENALTY | VWAP_ESTIMATE | WORST_CASE
+    simulatedSlippageBps: decimal("simulated_slippage_bps", { precision: 10, scale: 4 }),
+    fillLatencyMs: integer("fill_latency_ms"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => ({
     positionTxIdx: index("idx_position_transactions_position").on(table.positionId, table.createdAt),
     userTxIdx: index("idx_position_transactions_user").on(table.userId, table.createdAt),
     symbolTxIdx: index("idx_position_transactions_symbol").on(table.symbol, table.createdAt),
+    orderTxIdx: index("idx_position_transactions_order").on(table.orderId),
   })
 );
 

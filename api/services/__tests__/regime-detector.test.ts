@@ -55,8 +55,8 @@ describe("classifyRegime", () => {
 });
 
 describe("regimeToStrategy", () => {
-  it("ranging_tight → scalping_micro", () => {
-    expect(regimeToStrategy("ranging_tight")).toBe("scalping_micro");
+  it("ranging_tight → grid", () => {
+    expect(regimeToStrategy("ranging_tight")).toBe("grid");
   });
   it("ranging → bb_reversion", () => {
     expect(regimeToStrategy("ranging")).toBe("bb_reversion");

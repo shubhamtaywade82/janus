@@ -64,6 +64,16 @@ export function evaluateBias(ctx: MarketContext, position: ManagedPosition): Bia
     }
   }
 
+  // ── Daily Trend (weight: 25) — multi-day SMAs, NOT 1-minute data ───────
+  if (ctx.dailyTrend && ctx.dailyTrendConfidence !== null) {
+    const weight = 25 * ctx.dailyTrendConfidence;
+    if (ctx.dailyTrend === "STRONG_BULLISH") { score += weight; factors.push(`Daily trend STRONG_BULLISH (${ctx.dailyTrendConfidence.toFixed(2)})`); }
+    else if (ctx.dailyTrend === "BULLISH") { score += weight * 0.6; factors.push(`Daily trend BULLISH (${ctx.dailyTrendConfidence.toFixed(2)})`); }
+    else if (ctx.dailyTrend === "STRONG_BEARISH") { score -= weight; factors.push(`Daily trend STRONG_BEARISH (${ctx.dailyTrendConfidence.toFixed(2)})`); }
+    else if (ctx.dailyTrend === "BEARISH") { score -= weight * 0.6; factors.push(`Daily trend BEARISH (${ctx.dailyTrendConfidence.toFixed(2)})`); }
+    else { factors.push(`Daily trend NEUTRAL (${ctx.dailyTrendConfidence.toFixed(2)})`); }
+  }
+
   // ── Funding rate (weight: 5) ───────────────────────────────────────────
   if (ctx.fundingBias === "POSITIVE" && position.side === "LONG") {
     score -= 5; factors.push("Positive funding rate (longs pay)");

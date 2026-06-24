@@ -11,6 +11,14 @@ import {
   ChevronRight,
 } from "lucide-react";
 import type { KnnSnapshotLike } from "@/lib/chart/alert-engine";
+import {
+  kronosBias,
+  normalizeBinanceSymbol,
+  parseKronosMetadata,
+  resolveKronosForCard,
+  type KronosCardData,
+  type KronosLivePrediction,
+} from "@/lib/kronos-display";
 import { cn } from "@/lib/utils";
 
 // ─── Market Regime Classifier ───
@@ -65,8 +73,73 @@ const ScoreBar = ({ score, color, label, weight }: { score: number; color: strin
   </div>
 );
 
+const TRACKED_SYMBOLS = ["BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "ADAUSDT", "DOGEUSDT", "AVAXUSDT"] as const;
+
+const KronosBadge = ({ kronos }: { kronos: KronosCardData }) => {
+  const bias = kronosBias(kronos.directionSignal);
+  const confidencePct = kronos.confidence * 100;
+  const volPct = kronos.volatilityForecast * 100;
+  const hasBoost = Math.abs(kronos.boost) >= 0.05;
+
+  return (
+    <div className="mt-2 border-t border-[#27272a]/40 pt-2">
+      <div className="flex items-center gap-1 flex-wrap">
+        <span className={cn(
+          "inline-flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wide",
+          bias === "bullish" ? "bg-j-up-bright/15 text-j-up-bright" :
+          bias === "bearish" ? "bg-j-down-bright/15 text-j-down-bright" :
+          "bg-[#71717a]/15 text-[#71717a]"
+        )}>
+          Kronos {bias}
+          {kronos.isLive && (
+            <span className="w-1 h-1 rounded-full bg-j-up animate-pulse" title="Live forecast" />
+          )}
+        </span>
+        <span className={cn(
+          "text-[9px] px-1.5 py-0.5 rounded font-bold tabular-nums",
+          confidencePct >= 70 ? "bg-j-up-bright/10 text-j-up-bright" :
+          confidencePct >= 50 ? "bg-[#f59e0b]/10 text-[#f59e0b]" :
+          "bg-[#52525b]/10 text-[#52525b]"
+        )}>
+          {confidencePct.toFixed(0)}% conf
+        </span>
+        <span className={cn(
+          "text-[9px] px-1.5 py-0.5 rounded font-semibold tabular-nums",
+          volPct > 12 ? "bg-j-down-bright/10 text-j-down-bright" :
+          volPct > 8 ? "bg-[#f59e0b]/10 text-[#f59e0b]" :
+          "bg-[#3b82f6]/10 text-[#3b82f6]"
+        )}>
+          Vol {volPct.toFixed(1)}%
+        </span>
+        {hasBoost && (
+          <span className={cn(
+            "text-[9px] px-1.5 py-0.5 rounded font-bold tabular-nums ml-auto",
+            kronos.boost > 0 ? "bg-j-up-bright/10 text-j-up-bright" :
+            kronos.boost < 0 ? "bg-j-down-bright/10 text-j-down-bright" :
+            "bg-[#52525b]/10 text-[#52525b]"
+          )}>
+            {kronos.boost > 0 ? "+" : ""}{kronos.boost.toFixed(1)} score
+          </span>
+        )}
+      </div>
+      <div className="mt-0.5 text-[8px] text-[#52525b] leading-tight italic">
+        {kronos.isLive
+          ? `Live 1m forecast · signal ${kronos.directionSignal >= 0 ? "+" : ""}${kronos.directionSignal.toFixed(2)}`
+          : `Snapshot at signal time · signal ${kronos.directionSignal >= 0 ? "+" : ""}${kronos.directionSignal.toFixed(2)}`}
+        {volPct > 12 && " · high vol gate risk"}
+      </div>
+    </div>
+  );
+};
+
 // ─── Signal Card ───
-const SignalCard = ({ signal }: { signal: any }) => {
+const SignalCard = ({
+  signal,
+  liveKronos,
+}: {
+  signal: any;
+  liveKronos?: KronosLivePrediction | null;
+}) => {
   const indicators = signal.metadata ? (typeof signal.metadata === "string" ? JSON.parse(signal.metadata) : signal.metadata) : {};
   const regime = getRegime(signal);
   const composite = parseFloat(signal.compositeScore);
@@ -76,6 +149,7 @@ const SignalCard = ({ signal }: { signal: any }) => {
   const ts = signal.createdAt ? new Date(signal.createdAt) : null;
   const age = ts ? Math.floor((Date.now() - ts.getTime()) / 60000) : null;
   const sym = (signal.symbol || "").replace("B-", "").replace("_", "");
+  const kronos = resolveKronosForCard(parseKronosMetadata(indicators.kronos), liveKronos ?? null);
   const rsi = indicators.rsi ?? 50;
   const imbalance = indicators.imbalance ?? 0;
 
@@ -273,6 +347,9 @@ const SignalCard = ({ signal }: { signal: any }) => {
         </>
       )}
 
+      {/* Kronos AI forecast badge */}
+      {kronos && <KronosBadge kronos={kronos} />}
+
       {/* KNN SuperTrend badge */}
       {indicators.knn && (
         <div className="mt-2 border-t border-[#27272a]/40 pt-2">
@@ -348,6 +425,35 @@ const Signals = () => {
   const [analyzeAllTrigger, setAnalyzeAllTrigger] = useState(0);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [refreshInterval, setRefreshInterval] = useState(0); // seconds (0 = disabled)
+  const [liveKronos, setLiveKronos] = useState<Record<string, KronosLivePrediction>>({});
+
+  const trpcUtils = trpc.useUtils();
+  useEffect(() => {
+    let cancelled = false;
+    const hydrate = async () => {
+      await Promise.all(
+        TRACKED_SYMBOLS.map(async (symbol) => {
+          try {
+            const prediction = await trpcUtils.signal.kronosLatest.fetch({ symbol });
+            if (!prediction || cancelled) return;
+            setLiveKronos((prev) => ({
+              ...prev,
+              [symbol]: {
+                directionSignal: prediction.directionSignal,
+                volatilityForecast: prediction.volatilityForecast,
+                confidence: prediction.confidence,
+                timestamp: prediction.timestamp,
+              },
+            }));
+          } catch {
+            // Kronos service may be offline — stream/cache will catch up later
+          }
+        })
+      );
+    };
+    hydrate();
+    return () => { cancelled = true; };
+  }, [trpcUtils]);
 
   const { data: signals, isLoading, refetch } = trpc.signal.latest.useQuery(
     { limit: 50 },
@@ -379,6 +485,20 @@ const Signals = () => {
     },
   });
   trpc.signal.knnStream.useSubscription(undefined, knnStreamOptsRef.current);
+
+  trpc.signal.kronosStream.useSubscription(undefined, {
+    onData: (data: { symbol: string; prediction: KronosLivePrediction }) => {
+      setLiveKronos((prev) => ({
+        ...prev,
+        [data.symbol]: {
+          directionSignal: data.prediction.directionSignal,
+          volatilityForecast: data.prediction.volatilityForecast,
+          confidence: data.prediction.confidence,
+          timestamp: data.prediction.timestamp,
+        },
+      }));
+    },
+  });
 
   // Client-side interval trigger — fires analyzeAll at user-selected rate
   useEffect(() => {
@@ -604,7 +724,7 @@ const Signals = () => {
       )}
 
       {/* Legend */}
-      <div className="flex items-center gap-4 text-[10px] text-[#71717a]">
+      <div className="flex items-center gap-4 text-[10px] text-[#71717a] flex-wrap">
         <div className="flex items-center gap-1">
           <div className="w-2 h-2 rounded-full bg-[#3b82f6]" />
           Microstructure (20%)
@@ -618,8 +738,49 @@ const Signals = () => {
           Swing (35%)
         </div>
         <div className="flex items-center gap-1">
+          <div className="w-2 h-2 rounded-full bg-[#06b6d4]" />
+          Kronos AI (±15 score adj.)
+        </div>
+        <div className="flex items-center gap-1">
           <ChevronRight size={10} />
           Gate Threshold: 75
+        </div>
+      </div>
+
+      {/* Live Kronos strip */}
+      <div className="rounded-lg border border-[#27272a] bg-[#18181b] px-3 py-2">
+        <div className="flex items-center gap-2 mb-1.5">
+          <Activity size={11} className="text-[#06b6d4]" />
+          <span className="text-[10px] font-semibold text-[#f4f4f5]">Kronos Live Forecasts</span>
+          <span className="text-[9px] text-[#52525b]">1m horizon · updates on inference</span>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {TRACKED_SYMBOLS.map((symbol) => {
+            const forecast = liveKronos[symbol];
+            if (!forecast) {
+              return (
+                <span
+                  key={symbol}
+                  className="text-[9px] px-2 py-0.5 rounded border border-[#27272a] text-[#52525b] tabular-nums"
+                >
+                  {symbol.replace("USDT", "")} · —
+                </span>
+              );
+            }
+            const bias = kronosBias(forecast.directionSignal);
+            const biasColor =
+              bias === "bullish" ? "text-j-up-bright border-j-up-bright/30 bg-j-up-bright/5" :
+              bias === "bearish" ? "text-j-down-bright border-j-down-bright/30 bg-j-down-bright/5" :
+              "text-[#71717a] border-[#27272a] bg-[#0f0f11]";
+            return (
+              <span
+                key={symbol}
+                className={cn("text-[9px] px-2 py-0.5 rounded border font-semibold tabular-nums", biasColor)}
+              >
+                {symbol.replace("USDT", "")} {bias.slice(0, 4)} {(forecast.confidence * 100).toFixed(0)}%
+              </span>
+            );
+          })}
         </div>
       </div>
 
@@ -669,7 +830,11 @@ const Signals = () => {
         {filteredSorted.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
             {filteredSorted.map((signal) => (
-              <SignalCard key={signal.id} signal={signal} />
+              <SignalCard
+                key={signal.id}
+                signal={signal}
+                liveKronos={liveKronos[normalizeBinanceSymbol(signal.symbol || "")] ?? null}
+              />
             ))}
           </div>
         )}

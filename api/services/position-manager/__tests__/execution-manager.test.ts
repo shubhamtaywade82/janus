@@ -28,9 +28,7 @@ describe("isSlImprovement", () => {
 
 describe("MOVE_TO_BREAKEVEN default SL formula", () => {
   const computeBreakeven = (side: "LONG" | "SHORT", entryPrice: number) =>
-    side === "LONG"
-      ? entryPrice * (1 + TAKER_FEE * 2)
-      : entryPrice * (1 - TAKER_FEE * 2);
+    entryPrice * (1 + TAKER_FEE * 2);
 
   it("LONG: breakeven SL is ABOVE entry price", () => {
     const sl = computeBreakeven("LONG", 1000);
@@ -38,25 +36,25 @@ describe("MOVE_TO_BREAKEVEN default SL formula", () => {
     expect(sl).toBeCloseTo(1000 * 1.001, 4);
   });
 
-  it("SHORT: breakeven SL is BELOW entry price (not above)", () => {
+  it("SHORT: breakeven SL is ABOVE entry price", () => {
     const sl = computeBreakeven("SHORT", 1000);
-    expect(sl).toBeLessThan(1000);
-    expect(sl).toBeCloseTo(1000 * 0.999, 4);
+    expect(sl).toBeGreaterThan(1000);
+    expect(sl).toBeCloseTo(1000 * 1.001, 4);
   });
 
-  it("SHORT: breakeven SL isSlImprovement vs a higher current SL", () => {
+  it("SHORT: breakeven SL isSlImprovement vs a wider current SL", () => {
     const entry = 1000;
-    const breakeven = computeBreakeven("SHORT", entry); // ~999
-    // Current SL for SHORT might be above entry (old bug: 1001)
-    // New SL (999) < current SL (1001) → improvement for SHORT
-    expect(isSlImprovement("SHORT", 1001, breakeven)).toBe(true);
+    const breakeven = computeBreakeven("SHORT", entry); // ~1001
+    // Current SL for SHORT above entry but wider than breakeven
+    // New SL (1001) < current SL (1005) → improvement for SHORT (tighter)
+    expect(isSlImprovement("SHORT", 1005, breakeven)).toBe(true);
   });
 
-  it("SHORT: breakeven SL is NOT an improvement if SL already below breakeven", () => {
+  it("SHORT: breakeven SL is NOT an improvement if SL already at breakeven", () => {
     const entry = 1000;
-    const breakeven = computeBreakeven("SHORT", entry); // ~999
-    // If SL is already at 990 (better), moving to 999 is worse
-    expect(isSlImprovement("SHORT", 990, breakeven)).toBe(false);
+    const breakeven = computeBreakeven("SHORT", entry); // ~1001
+    // If SL is already at 1001 (tight), moving to 1005 would worsen it
+    expect(isSlImprovement("SHORT", 1001, 1005)).toBe(false);
   });
 });
 

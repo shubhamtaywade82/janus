@@ -46,3 +46,4 @@ coverage/
 backups/
 kill-switch-state.json
 dedup-cache-state.json
+graphify-out/

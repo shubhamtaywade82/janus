@@ -21,6 +21,8 @@ import { CrosshairTooltipPrimitive } from "@/lib/chart/primitives/CrosshairToolt
 import { LiquiditySweepPrimitive, type SweepMarker } from "@/lib/chart/primitives/LiquiditySweepPrimitive";
 import { VolumeProfilePrimitive } from "@/lib/chart/primitives/VolumeProfilePrimitive";
 import { OrderBookDepthPrimitive } from "@/lib/chart/primitives/OrderBookDepthPrimitive";
+import { LastPriceLinePrimitive } from "@/lib/chart/primitives/LastPriceLinePrimitive";
+import { PremiumDiscountPrimitive } from "@/lib/chart/primitives/PremiumDiscountPrimitive";
 
 import type { OverlayToggles } from "@/components/ChartOverlayPanel";
 import type { IndicatorConfig } from "@/components/IndicatorPanel";
@@ -65,8 +67,9 @@ import {
   type CandleBar,
   buildIntensityBands,
   getIntensityColor,
-  getLiveIntensityColor,
 } from "@/lib/chart/candle-intensity";
+
+import { useTheme } from "@/providers/theme";
 
 // ─── Types ───
 export interface KlineData {
@@ -95,11 +98,13 @@ function getVolumeIntensityColor(
   intensityMode?: IntensityMode,
   intensityBands?: ReturnType<typeof buildIntensityBands>,
   high?: number, low?: number,
+  themeUpColor?: string,
+  themeDownColor?: string,
 ) {
   const bar: CandleBar = { open, high: high ?? Math.max(open, close), low: low ?? Math.min(open, close), close, volume };
   const mode = intensityMode || "off";
   const bands = intensityBands || { p10: 0, p50: 0, p90: 0, max: 0 };
-  return getIntensityColor(bar, mode, bands);
+  return getIntensityColor(bar, mode, bands, themeUpColor, themeDownColor);
 }
 
 export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, interval, onLoadMore, overlayData, overlayToggles, indicatorCfg, bidPrice, askPrice, cvdBars, liquidityEvents, orderBook, intensityMode = "off" }: {
@@ -116,10 +121,23 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
   orderBook?: { bids: [number, number][]; asks: [number, number][] };
   intensityMode?: IntensityMode;
 }) => {
+  const { meta } = useTheme();
+  const themeUpColorRef = useRef(meta.upColor);
+  const themeDownColorRef = useRef(meta.downColor);
+  useEffect(() => {
+    themeUpColorRef.current = meta.upColor;
+    themeDownColorRef.current = meta.downColor;
+  }, [meta.upColor, meta.downColor]);
   const chartContainerRef = useRef<HTMLDivElement>(null);
   const [hudData, setHudData] = useState<any>(null);
   const [chartInitialized, setChartInitialized] = useState(false);
   const [lastPriceY, setLastPriceY] = useState<number | null>(null);
+  useEffect(() => {
+    // Suppress unused warning while preserving state
+    if (lastPriceY !== null) {
+      // noop
+    }
+  }, [lastPriceY]);
   const [countdownStr, setCountdownStr] = useState<string>("");
   const [positionsY, setPositionsY] = useState<Record<number, { entryY: number | null; liqY: number | null }>>({});
   const [isScrolledBack, setIsScrolledBack] = useState(false);
@@ -129,6 +147,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
   const [alertRules, setAlertRules] = useState<any[]>([]);
   const customAlertLinesRef = useRef<any[]>([]);
   const bidAskLinesRef = useRef<{ bidLine: any; askLine: any }>({ bidLine: null, askLine: null });
+  const lastPriceLineRef = useRef<any>(null);
   const [hoveredCrosshair, setHoveredCrosshair] = useState<{ price: number; y: number } | null>(null);
 
   const handleContainerMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
@@ -214,6 +233,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
   const obPrimRef = useRef<OrderBlockPrimitive | null>(null);
   const fvgPrimRef = useRef<FVGPrimitive | null>(null);
   const strPrimRef = useRef<StructurePrimitive | null>(null);
+  const pdPrimRef = useRef<PremiumDiscountPrimitive | null>(null);
   const sessionPrimRef = useRef<SessionShadingPrimitive | null>(null);
   const tooltipPrimRef = useRef<CrosshairTooltipPrimitive | null>(null);
   const sweepPrimRef = useRef<LiquiditySweepPrimitive | null>(null);
@@ -242,6 +262,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
   const indicatorMarkersRef = useRef<ReturnType<typeof createSeriesMarkers> | null>(null);
   // ─── Price line overlay (smooth thin line tracking close price) ───
   const priceLineSeriesRef = useRef<any>(null);
+  const lastPricePrimRef = useRef<LastPriceLinePrimitive | null>(null);
   // ─── Volume MA line overlay ───
   const volumeMASeriesRef = useRef<any>(null);
   // Volume history buffer for computing running MA during animation
@@ -305,10 +326,19 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
         }
 
         // Still do a final render
-        const idleColors = getVolumeIntensityColor(t.open, t.close, t.vol, maxVolumeRef.current, intensityModeRef.current, intensityBandsRef.current, t.high, t.low);
+        const idleColors = getVolumeIntensityColor(t.open, t.close, t.vol, maxVolumeRef.current, intensityModeRef.current, intensityBandsRef.current, t.high, t.low, themeUpColorRef.current, themeDownColorRef.current);
         candlestickSeriesRef.current.update({ time: t.time as UTCTimestamp, open: t.open, high: t.high, low: t.low, close: t.close, color: idleColors.color, wickColor: idleColors.wickColor, borderColor: idleColors.borderColor });
+        if (lastPriceLineRef.current) {
+          const isGreen = t.close >= t.open;
+          const lineColor = isGreen ? themeUpColorRef.current : themeDownColorRef.current;
+          try { lastPriceLineRef.current.applyOptions({ price: t.close, color: lineColor }); } catch { }
+          if (lastPricePrimRef.current) {
+            lastPricePrimRef.current.setLastPrice(t.close, lineColor);
+          }
+        }
+        setLastPriceY(candlestickSeriesRef.current.priceToCoordinate(t.close));
         if (volumeSeriesRef.current) {
-          volumeSeriesRef.current.update({ time: t.time as UTCTimestamp, value: t.vol, color: t.close >= t.open ? "rgba(14,203,129,0.15)" : "rgba(246,70,93,0.15)" });
+          volumeSeriesRef.current.update({ time: t.time as UTCTimestamp, value: t.vol, color: t.close >= t.open ? themeUpColorRef.current + "26" : themeDownColorRef.current + "26" });
         }
         if (priceLineSeriesRef.current) {
           priceLineSeriesRef.current.update({ time: t.time as UTCTimestamp, value: t.close });
@@ -340,7 +370,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
       // Use full high/low from animTarget directly — do NOT clamp to animated close.
       // Clamping made the wick length depend on the lerp position, causing wicks to
       // flicker every frame as `c` moved. Wicks are accurate; only close animates.
-      const moveColors = getVolumeIntensityColor(t.open, c, v, maxVolumeRef.current, intensityModeRef.current, intensityBandsRef.current, t.high, t.low);
+      const moveColors = getVolumeIntensityColor(t.open, c, v, maxVolumeRef.current, intensityModeRef.current, intensityBandsRef.current, t.high, t.low, themeUpColorRef.current, themeDownColorRef.current);
       candlestickSeriesRef.current.update({
         time: t.time as UTCTimestamp,
         open: t.open,
@@ -351,13 +381,22 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
         wickColor: moveColors.wickColor,
         borderColor: moveColors.borderColor,
       });
+      if (lastPriceLineRef.current) {
+        const isGreen = c >= t.open;
+        const lineColor = isGreen ? themeUpColorRef.current : themeDownColorRef.current;
+        try { lastPriceLineRef.current.applyOptions({ price: c, color: lineColor }); } catch { }
+        if (lastPricePrimRef.current) {
+          lastPricePrimRef.current.setLastPrice(c, lineColor);
+        }
+      }
+      setLastPriceY(candlestickSeriesRef.current.priceToCoordinate(c));
 
       // Animated volume bar update
       if (volumeSeriesRef.current) {
         volumeSeriesRef.current.update({
           time: t.time as UTCTimestamp,
           value: v,
-          color: c >= t.open ? "rgba(14,203,129,0.15)" : "rgba(246,70,93,0.15)",
+          color: c >= t.open ? themeUpColorRef.current + "26" : themeDownColorRef.current + "26",
         });
       }
 
@@ -437,12 +476,14 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
     chartRef.current = chart;
 
     const candlestickSeries = chart.addSeries(CandlestickSeries, {
-      upColor: resolveCSSColor("--janus-up-bright", "#0ecb81"),
-      downColor: resolveCSSColor("--janus-down-bright", "#f6465d"),
-      borderUpColor: resolveCSSColor("--janus-up-bright", "#0ecb81"),
-      borderDownColor: resolveCSSColor("--janus-down-bright", "#f6465d"),
-      wickUpColor: resolveCSSColor("--janus-up-bright", "#0ecb81"),
-      wickDownColor: resolveCSSColor("--janus-down-bright", "#f6465d"),
+      upColor: meta.upColor,
+      downColor: meta.downColor,
+      borderUpColor: meta.upColor,
+      borderDownColor: meta.downColor,
+      wickUpColor: meta.upColor,
+      wickDownColor: meta.downColor,
+      lastValueVisible: false,
+      priceLineVisible: false,
     });
     candlestickSeriesRef.current = candlestickSeries;
 
@@ -593,6 +634,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
       obPrimRef.current = null;
       fvgPrimRef.current = null;
       strPrimRef.current = null;
+      pdPrimRef.current = null;
       markersPluginRef.current = null;
       obvSeriesRef.current = null;
       priceLineSeriesRef.current = null;
@@ -621,11 +663,20 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
       const sweepPrim = new LiquiditySweepPrimitive();
       candlestickSeriesRef.current.attachPrimitive(sweepPrim);
       obPrimRef.current = obPrim;
+      
+      const pdPrim = new PremiumDiscountPrimitive();
+      candlestickSeriesRef.current.attachPrimitive(pdPrim);
+      pdPrimRef.current = pdPrim;
+
       fvgPrimRef.current = fvgPrim;
       strPrimRef.current = strPrim;
       sessionPrimRef.current = sessionPrim;
       tooltipPrimRef.current = tooltipPrim;
       sweepPrimRef.current = sweepPrim;
+
+      const lastPricePrim = new LastPriceLinePrimitive();
+      candlestickSeriesRef.current.attachPrimitive(lastPricePrim);
+      lastPricePrimRef.current = lastPricePrim;
       // createSeriesMarkers replaces the old .setMarkers() — create lazily only when needed
       // to avoid interfering with auto-scroll and chart rendering pipeline
     } catch (err) {
@@ -635,10 +686,15 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
       obPrimRef.current = null;
       fvgPrimRef.current = null;
       strPrimRef.current = null;
+      pdPrimRef.current = null;
       sessionPrimRef.current = null;
       tooltipPrimRef.current = null;
       sweepPrimRef.current = null;
       markersPluginRef.current = null;
+      if (lastPricePrimRef.current) {
+        try { candlestickSeriesRef.current?.detachPrimitive(lastPricePrimRef.current); } catch {}
+        lastPricePrimRef.current = null;
+      }
     };
   }, [chartInitialized]);
 
@@ -718,7 +774,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
       const bands = buildIntensityBands(bars, intensityMode);
       intensityBandsRef.current = bands;
       const chartData = bars.map((bar, i) => {
-        const { color, wickColor, borderColor } = getIntensityColor(bar, intensityMode, bands);
+        const { color, wickColor, borderColor } = getIntensityColor(bar, intensityMode, bands, meta.upColor, meta.downColor);
         return {
           time: (data[i].openTime / 1000) as UTCTimestamp,
           open: bar.open,
@@ -736,7 +792,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
         return {
           time: (d.openTime / 1000) as UTCTimestamp,
           value: parseFloat(d.volume),
-          color: c >= o ? "rgba(14, 203, 129, 0.15)" : "rgba(246, 70, 93, 0.15)",
+          color: c >= o ? meta.upColor + "26" : meta.downColor + "26",
         };
       }).sort((a, b) => (a.time as number) - (b.time as number));
       candlestickSeriesRef.current.setData(chartData);
@@ -831,13 +887,22 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
     });
   }, [data, symbol, interval]);
 
-  // 2b. Repaint candle colours when intensity mode changes (no full chart reload needed)
+  // 2b. Repaint candle and volume colours when intensity mode or theme changes (no full chart reload needed)
   useEffect(() => {
-    if (!candlestickSeriesRef.current || data.length === 0) return;
-    // Skip if mode hasn't actually changed (avoid double-paint on mount)
-    if (intensityModeRef.current === intensityMode) return;
+    if (!candlestickSeriesRef.current || dataRef.current.length === 0) return;
+
+    // Apply series options for dynamic theme colors
+    candlestickSeriesRef.current.applyOptions({
+      upColor: meta.upColor,
+      downColor: meta.downColor,
+      borderUpColor: meta.upColor,
+      borderDownColor: meta.downColor,
+      wickUpColor: meta.upColor,
+      wickDownColor: meta.downColor,
+    });
+
     intensityModeRef.current = intensityMode;
-    const bars: CandleBar[] = data.map((d) => ({
+    const bars: CandleBar[] = dataRef.current.map((d) => ({
       open: parseFloat(d.open),
       high: parseFloat(d.high),
       low: parseFloat(d.low),
@@ -846,11 +911,12 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
     }));
     const bands = buildIntensityBands(bars, intensityMode);
     intensityBandsRef.current = bands;
+
     // Re-set all candle data with new colours
     const chartData = bars.map((bar, i) => {
-      const { color, wickColor, borderColor } = getIntensityColor(bar, intensityMode, bands);
+      const { color, wickColor, borderColor } = getIntensityColor(bar, intensityMode, bands, meta.upColor, meta.downColor);
       return {
-        time: (data[i].openTime / 1000) as UTCTimestamp,
+        time: (dataRef.current[i].openTime / 1000) as UTCTimestamp,
         open: bar.open,
         high: bar.high,
         low: bar.low,
@@ -860,8 +926,23 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
         borderColor,
       };
     }).sort((a, b) => (a.time as number) - (b.time as number));
+
+    // Also update volume bar colors
+    const volumeData = dataRef.current.map((d) => {
+      const o = parseFloat(d.open);
+      const c = parseFloat(d.close);
+      return {
+        time: (d.openTime / 1000) as UTCTimestamp,
+        value: parseFloat(d.volume),
+        color: c >= o ? meta.upColor + "26" : meta.downColor + "26",
+      };
+    }).sort((a, b) => (a.time as number) - (b.time as number));
+
     candlestickSeriesRef.current.setData(chartData);
-  }, [intensityMode]);
+    if (volumeSeriesRef.current) {
+      volumeSeriesRef.current.setData(volumeData);
+    }
+  }, [intensityMode, meta.upColor, meta.downColor]);
 
   // 3. Live price tick — drives chart animation for all timeframes from ticker lastPrice.
   // klineStream provides high/low/volume updates; lastPrice provides real-time close.
@@ -941,6 +1022,14 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
       tog?.liquidity && pa?.liquidity ? pa.liquidity : [],
       tog?.swings && pa?.swings ? pa.swings : []
     );
+
+    // Premium / Discount
+    if (pdPrimRef.current) {
+      pdPrimRef.current.setZone(
+        tog?.premiumDiscount && pa?.premiumDiscount ? pa.premiumDiscount : null,
+        pa?.swings ?? []
+      );
+    }
 
     // Swing markers + displacement markers — create plugin lazily on first use
     if (!markersPluginRef.current && candlestickSeriesRef.current) {
@@ -1846,6 +1935,14 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
     const series = candlestickSeriesRef.current;
     if (!series || !chartInitialized) return;
 
+    // Ensure default series last price label and line are disabled in favor of our custom LAST line
+    try {
+      series.applyOptions({
+        lastValueVisible: false,
+        priceLineVisible: false,
+      });
+    } catch { }
+
     if (bidAskLinesRef.current.bidLine) {
       try { series.removePriceLine(bidAskLinesRef.current.bidLine); } catch { }
       bidAskLinesRef.current.bidLine = null;
@@ -1855,6 +1952,11 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
       bidAskLinesRef.current.askLine = null;
     }
 
+    // Draw bid/ask as dashed canvas lines but hide their axis labels to prevent overlap
+    const dec = getPriceDecimals(symbol);
+    const spread = (askPrice && bidPrice) ? (askPrice - bidPrice) : 0;
+    const spreadStr = spread > 0 ? spread.toFixed(dec) : "";
+
     if (bidPrice && bidPrice > 0) {
       try {
         bidAskLinesRef.current.bidLine = series.createPriceLine({
@@ -1862,7 +1964,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
           color: "rgba(16, 185, 129, 0.65)",
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
+          axisLabelVisible: false,
           title: "BID",
         });
       } catch (err) {
@@ -1872,13 +1974,14 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
 
     if (askPrice && askPrice > 0) {
       try {
+        const askTitle = spreadStr ? `ASK (Spread: ${spreadStr})` : "ASK";
         bidAskLinesRef.current.askLine = series.createPriceLine({
           price: askPrice,
           color: "rgba(239, 68, 68, 0.65)",
           lineWidth: 1,
           lineStyle: LineStyle.Dashed,
-          axisLabelVisible: true,
-          title: "ASK",
+          axisLabelVisible: false,
+          title: askTitle,
         });
       } catch (err) {
         console.error("Error creating ask line", err);
@@ -1897,7 +2000,67 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
         bidAskLinesRef.current.askLine = null;
       }
     };
-  }, [bidPrice, askPrice, chartInitialized]);
+  }, [bidPrice, askPrice, symbol, chartInitialized]);
+
+  // Draw custom last price line with label once per symbol
+  useEffect(() => {
+    const series = candlestickSeriesRef.current;
+    if (!series || !chartInitialized) return;
+
+    if (lastPriceLineRef.current) {
+      try { series.removePriceLine(lastPriceLineRef.current); } catch { }
+      lastPriceLineRef.current = null;
+    }
+
+    try {
+      const titleText = countdownStr ? `LAST (${countdownStr})` : "LAST";
+      const last = data[data.length - 1];
+      const openPrice = last ? parseFloat(last.open) : 0;
+      const isGreen = lastPrice >= openPrice;
+      const lineColor = isGreen ? meta.upColor : meta.downColor;
+
+      // Create a native price line with width 0 so that ONLY the axis label badge is rendered by the library
+      lastPriceLineRef.current = series.createPriceLine({
+        price: lastPrice || 0,
+        color: lineColor, // dynamic up/down color matching the theme
+        lineWidth: 0, // hide the full horizontal line natively
+        lineStyle: LineStyle.Solid,
+        axisLabelVisible: true,
+        title: titleText,
+      });
+
+      // Initialize the custom canvas primitive which draws the line starting from the last candle center
+      if (lastPricePrimRef.current) {
+        lastPricePrimRef.current.setLastPrice(lastPrice || 0, lineColor);
+      }
+    } catch (err) {
+      console.error("Error creating last price line", err);
+    }
+
+    // Force coordinate calculation once on init
+    if (lastPrice > 0) {
+      setLastPriceY(series.priceToCoordinate(lastPrice));
+    }
+
+    return () => {
+      const s = candlestickSeriesRef.current;
+      if (!s) return;
+      if (lastPriceLineRef.current) {
+        try { s.removePriceLine(lastPriceLineRef.current); } catch { }
+        lastPriceLineRef.current = null;
+      }
+    };
+  }, [symbol, chartInitialized, meta.upColor, meta.downColor, data]);
+
+  // Update last price line title with countdown timer
+  useEffect(() => {
+    if (lastPriceLineRef.current) {
+      const titleText = countdownStr ? `LAST (${countdownStr})` : "LAST";
+      try {
+        lastPriceLineRef.current.applyOptions({ title: titleText });
+      } catch { }
+    }
+  }, [countdownStr]);
 
 
 
@@ -1907,7 +2070,9 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
     const newCoords: Record<number, { entryY: number | null; liqY: number | null }> = {};
 
     if (lastPrice > 0) {
-      setLastPriceY(series.priceToCoordinate(lastPrice));
+      if (!animLoopRunning.current) {
+        setLastPriceY(series.priceToCoordinate(lastPrice));
+      }
     } else {
       setLastPriceY(null);
     }
@@ -2052,19 +2217,7 @@ export const MiniChart = ({ data, positions, openOrders, lastPrice, symbol, inte
         </button>
       )}
 
-      {/* Countdown Timer Overlay */}
-      {lastPriceY !== null && countdownStr && (
-        <div
-          className="absolute z-20 text-[10px] text-[#f59e0b] font-medium font-mono pointer-events-none transition-all duration-75"
-          style={{
-            top: `${lastPriceY + 14}px`, // perfectly positioned right below the price tag
-            right: '4px',
-            textShadow: '0px 0px 4px rgba(0,0,0,0.8), 1px 1px 0px black, -1px -1px 0px black',
-          }}
-        >
-          {countdownStr}
-        </div>
-      )}
+
       {/* HTML Position Lines Left/Right Labels Overlay */}
       {chartInitialized && positions && positions.length > 0 && lastPrice > 0 && (
         <div className="absolute inset-0 pointer-events-none overflow-hidden z-10">

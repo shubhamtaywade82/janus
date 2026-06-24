@@ -5,6 +5,7 @@ import { desc, eq, and } from "drizzle-orm";
 import {
   analyzeConfluence,
   aggregateTradeTape,
+  calculateKronosAugmentedScore,
 } from "./confluence";
 import { fetchKlines, SUPPORTED_PAIRS } from "./binance";
 import { subscribeToSymbol, marketEvents } from "./streaming";
@@ -15,7 +16,7 @@ import {
   evaluateMomentumReversal,
   evaluateBBReversion,
   evaluateMLSizing,
-  evaluateScalpingMicro
+  evaluateAlphaProtocol
 } from "./strategies";
 import {
   detectRegimeForSymbol,
@@ -27,6 +28,7 @@ import {
   type KnnSupertrendSnapshot,
 } from "./knn-supertrend";
 import { alertEngine } from "./alert-engine";
+import { buildSignalPtaContext } from "./pta-helpers";
 import {
   ema,
   calculateRSI,
@@ -89,11 +91,31 @@ export async function runAnalysisForSymbol(binanceSymbol: string) {
       if (knnSnapshot) signalEvents.emit("knn-snapshot", { symbol: binanceSymbol, snapshot: knnSnapshot });
     }
 
-    const signalData = evaluateSymbolSignal(pair.coindcx, strategy, currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraMetrics);
+    let signalData = await evaluateSymbolSignalAsync(pair.coindcx, strategy, currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraMetrics);
+
+    // Evaluate Alpha Protocol in parallel
+    if (strategy !== "alpha_protocol") {
+      const alphaSignalData = await evaluateSymbolSignalAsync(pair.coindcx, "alpha_protocol", currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraMetrics);
+      // If Alpha Protocol finds a strong setup, it overrides the base regime strategy for this tick
+      if (alphaSignalData.direction !== "neutral" && Number(alphaSignalData.compositeScore) >= 75) {
+        signalData = alphaSignalData;
+      }
+    }
 
     if (knnSnapshot) {
       signalData.metadata = { ...(signalData.metadata as object), knn: knnSnapshot };
     }
+
+    const ptaCtx = buildSignalPtaContext(binanceSymbol);
+    Object.assign(signalData, ptaCtx, {
+      triggerMetadata: {
+        macroScore: Number(signalData.compositeScore),
+        microScore: Number(signalData.microScore),
+        obSpreadPct: obMetrics?.spreadPercent ?? 0,
+        tapeDelta: tapeMetrics?.delta ?? 0,
+        makerRatio: tapeMetrics?.makerRatio ?? 0.5,
+      },
+    });
 
     const lastSignal = await db.select().from(signals).where(eq(signals.symbol, pair.coindcx)).orderBy(desc(signals.createdAt)).limit(1).catch(() => []);
     const prev = lastSignal[0];
@@ -104,6 +126,13 @@ export async function runAnalysisForSymbol(binanceSymbol: string) {
     const isEmaCross = n >= 1 && ((ema(prices, 20)[n-1] <= ema(prices, 50)[n-1] && ema(prices, 20)[n] > ema(prices, 50)[n]) || (ema(prices, 20)[n-1] >= ema(prices, 50)[n-1] && ema(prices, 20)[n] < ema(prices, 50)[n]));
     const rsiVal = calculateRSI(prices, 14);
     const isRsiExtreme = rsiVal >= 70 || rsiVal <= 30;
+
+    const triggerDescParts: string[] = [];
+    if (tfStructure.bos) triggerDescParts.push("BOS");
+    if (tfStructure.choch) triggerDescParts.push("CHoCH");
+    if (isEmaCross) triggerDescParts.push("EMA Cross");
+    if (isRsiExtreme) triggerDescParts.push(`RSI ${rsiVal.toFixed(1)}`);
+    signalData.triggerDescription = triggerDescParts.join(" + ") || "Score change";
 
     const shouldRecord = !prev || tfStructure.bos || tfStructure.choch || isEmaCross || isRsiExtreme || signalData.direction !== prev.direction;
 
@@ -137,39 +166,115 @@ async function getCandlesForTimeframe(symbol: string, timeframe: AnalysisTimefra
   return rows.reverse().map(r => ({ timestamp: r.timestamp.getTime(), open: parseFloat(r.open), high: parseFloat(r.high), low: parseFloat(r.low), close: parseFloat(r.close), volume: parseFloat(r.volume), quoteVolume: parseFloat(r.quoteVolume), trades: r.tradeCount ?? 0 }));
 }
 
-function evaluateSymbolSignal(coindcxSymbol: string, strategy: StrategyType, currentPrice: number, prices: number[], volumes: number[], highs: number[], lows: number[], obMetrics: any, tapeMetrics: any, extraMetrics?: any): any {
+async function evaluateSymbolSignalAsync(coindcxSymbol: string, strategy: StrategyType, currentPrice: number, prices: number[], volumes: number[], highs: number[], lows: number[], obMetrics: any, tapeMetrics: any, extraMetrics?: any): Promise<any> {
   const config = STRATEGY_CONFIGS[strategy];
   let res: any;
   if (strategy === "grid") res = evaluateGridStrategy(currentPrice, prices, config.threshold);
   else if (strategy === "momentum_reversal") res = evaluateMomentumReversal(currentPrice, prices, config.threshold);
   else if (strategy === "bb_reversion") res = evaluateBBReversion(currentPrice, prices, config.threshold);
   else if (strategy === "ml_sizing") res = evaluateMLSizing(currentPrice, prices, highs, lows, config.threshold);
-  else if (strategy === "scalping_micro") res = evaluateScalpingMicro(currentPrice, obMetrics, tapeMetrics, config.threshold);
+  else if (strategy === "alpha_protocol") res = evaluateAlphaProtocol(currentPrice, prices, highs, lows, obMetrics, tapeMetrics, extraMetrics, config.threshold);
   else {
     const analysis = analyzeConfluence(coindcxSymbol, obMetrics, tapeMetrics, prices, volumes, extraMetrics, config.weights, config.threshold);
-    return { symbol: coindcxSymbol, microScore: String(analysis.microScore), intraScore: String(analysis.intraScore), swingScore: String(analysis.swingScore), compositeScore: String(analysis.compositeScore), threshold: String(analysis.threshold), isGated: analysis.isGated, direction: analysis.direction, metadata: { ...analysis.indicators, strategy, signalPrice: currentPrice } };
+    
+    // NEW: Kronos augmentation
+    const { composite, direction, kronosBoost, kronosSignal } = await calculateKronosAugmentedScore(
+      coindcxSymbol,
+      analysis.microScore,
+      analysis.intraScore,
+      analysis.swingScore,
+      config.weights,
+      config.threshold
+    );
+
+    return {
+      symbol: coindcxSymbol,
+      microScore: String(analysis.microScore),
+      intraScore: String(analysis.intraScore),
+      swingScore: String(analysis.swingScore),
+      compositeScore: String(composite),
+      threshold: String(analysis.threshold),
+      isGated: composite >= config.threshold,
+      direction,
+      metadata: {
+        ...analysis.indicators,
+        strategy,
+        signalPrice: currentPrice,
+        kronos: kronosSignal ? {
+          boost: kronosBoost,
+          directionSignal: kronosSignal.directionSignal,
+          volatilityForecast: kronosSignal.volatilityForecast,
+          confidence: kronosSignal.confidence,
+        } : null
+      }
+    };
   }
   return { symbol: coindcxSymbol, microScore: String(res.score), intraScore: "50.00", swingScore: "50.00", compositeScore: String(res.score), threshold: String(config.threshold), isGated: res.isGated, direction: res.direction, metadata: { ...res.metadata, strategy, signalPrice: currentPrice } };
 }
 
-export async function bootstrapHistoricalKlines() {
+async function persistKlines(
+  symbol: string,
+  timeframe: string,
+  klines: Awaited<ReturnType<typeof fetchKlines>>
+): Promise<number> {
+  const db = getDb();
+  let saved = 0;
+
+  for (const k of klines) {
+    await db.insert(marketData).values({
+      symbol,
+      timeframe,
+      timestamp: new Date(k.openTime),
+      open: String(k.open),
+      high: String(k.high),
+      low: String(k.low),
+      close: String(k.close),
+      volume: String(k.volume),
+      quoteVolume: String(k.quoteVolume || "0"),
+      tradeCount: k.trades || 0,
+    }).onConflictDoUpdate({
+      target: [marketData.symbol, marketData.timeframe, marketData.timestamp],
+      set: {
+        open: String(k.open),
+        high: String(k.high),
+        low: String(k.low),
+        close: String(k.close),
+        volume: String(k.volume),
+        quoteVolume: String(k.quoteVolume || "0"),
+        tradeCount: k.trades || 0,
+      },
+    });
+    saved++;
+  }
+
+  return saved;
+}
+
+export async function bootstrapHistoricalKlines(): Promise<void> {
+  console.log("[signal-engine] Bootstrapping historical klines...");
+
   for (const pair of SUPPORTED_PAIRS) {
     try {
-      const klines = await fetchKlines(pair.binance, "1m", 150);
-      for (const k of klines) {
-        await getDb().insert(marketData).values({ symbol: pair.binance, timeframe: "1m", timestamp: new Date(k.openTime), open: String(k.open), high: String(k.high), low: String(k.low), close: String(k.close), volume: String(k.volume), quoteVolume: String(k.quoteVolume || "0"), tradeCount: k.trades || 0 }).onConflictDoNothing();
-      }
-    } catch {}
+      const klines1m = await fetchKlines(pair.binance, "1m", 150);
+      const saved1m = await persistKlines(pair.binance, "1m", klines1m);
+
+      const klines1h = await fetchKlines(pair.binance, "1h", 100);
+      const saved1h = await persistKlines(pair.binance, "1h", klines1h);
+
+      console.log(`[signal-engine] Bootstrapped ${saved1m} 1m + ${saved1h} 1h klines for ${pair.binance}`);
+    } catch (err) {
+      console.warn(`[signal-engine] Kline bootstrap failed for ${pair.binance}:`, err);
+    }
   }
 }
 
 let klineUpdateListener: any = null;
 let manualStrategy: StrategyType | null = null;
 let autoSwitchEnabled = true;
-export function startAutoAnalysis(strategyType?: StrategyType, autoSwitch = true) {
+export async function startAutoAnalysis(strategyType?: StrategyType, autoSwitch = true): Promise<void> {
   autoSwitchEnabled = autoSwitch;
   manualStrategy = autoSwitch ? null : (strategyType ?? manualStrategy);
-  bootstrapHistoricalKlines();
+  await bootstrapHistoricalKlines();
   for (const pair of SUPPORTED_PAIRS) subscribeToSymbol(pair.binance);
   if (klineUpdateListener) marketEvents.off("kline-update", klineUpdateListener);
   klineUpdateListener = async (s: string, k: any) => { if (k.isClosed) await runAnalysisForSymbol(s); };

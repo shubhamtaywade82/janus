@@ -1,3 +1,4 @@
+import { sql } from "drizzle-orm";
 import {
   pgTable,
   pgEnum,
@@ -13,7 +14,6 @@ import {
   unique,
   uniqueIndex,
 } from "drizzle-orm/pg-core";
-import { sql } from "drizzle-orm";
 
 // ─── Enums (PostgreSQL custom types) ───
 export const roleEnum = pgEnum("role", ["user", "admin"]);
@@ -36,7 +36,10 @@ export const strategyTypeEnum = pgEnum("strategy_type", [
   "bb_reversion",
   "ml_sizing",
   "scalping_micro",
+  "h6_momentum",
+  "alpha_protocol",
 ]);
+export const executionModeEnum = pgEnum("execution_mode", ["PAPER", "LIVE", "SHADOW"]);
 
 // ─── Users Table (Auth) ───
 export const users = pgTable("users", {
@@ -107,10 +110,48 @@ export const signals = pgTable("signals", {
   direction: directionEnum("direction").default("neutral").notNull(),
   outcome: signalOutcomeEnum("outcome"), // set when linked position is closed
   metadata: jsonb("metadata"), // store indicator values
+  // ─── PTA extensions ───────────────────────────────────────────────────────
+  session: varchar("session", { length: 10 }), // ASIA | LONDON | US | OVERLAP
+  hoursToFunding: decimal("hours_to_funding", { precision: 5, scale: 2 }),
+  binanceMarkPrice: decimal("binance_mark_price", { precision: 18, scale: 8 }),
+  binanceIndexPrice: decimal("binance_index_price", { precision: 18, scale: 8 }),
+  binanceFundingRate: decimal("binance_funding_rate", { precision: 12, scale: 8 }),
+  binancePredictedRate: decimal("binance_predicted_rate", { precision: 12, scale: 8 }),
+  openInterestUsd: decimal("open_interest_usd", { precision: 20, scale: 2 }),
+  openInterestDelta: decimal("open_interest_delta", { precision: 20, scale: 2 }),
+  volume24hUsd: decimal("volume_24h_usd", { precision: 20, scale: 2 }),
+  atr14: decimal("atr_14", { precision: 18, scale: 8 }),
+  atrPercent: decimal("atr_percent", { precision: 8, scale: 4 }),
+  triggerDescription: text("trigger_description"),
+  triggerMetadata: jsonb("trigger_metadata").default("{}"),
+  disposition: varchar("disposition", { length: 30 }).default("PENDING"),
+  // PENDING | ORDER_PLACED | REJECTED_FILTER | REJECTED_RISK | EXPIRED | DUPLICATE
+  rejectionReason: text("rejection_reason"),
   createdAt: timestamp("created_at").defaultNow().notNull(),
-});
+}, (table) => ({
+  idxSignalsSession: index("idx_signals_session").on(table.session, table.createdAt),
+}));
 
 export type Signal = typeof signals.$inferSelect;
+
+// ─── Kronos AI Signals (Foundation Model Predictions) ───
+export const kronosSignals = pgTable("kronos_signals", {
+  id: serial("id").primaryKey(),
+  symbol: varchar("symbol", { length: 20 }).notNull(),
+  interval: varchar("interval", { length: 10 }).notNull().default("1m"),
+  directionSignal: decimal("direction_signal", { precision: 8, scale: 6 }).notNull(),
+  volatilityForecast: decimal("volatility_forecast", { precision: 8, scale: 6 }).notNull(),
+  confidence: decimal("confidence", { precision: 5, scale: 4 }).notNull(),
+  task: varchar("task", { length: 30 }).notNull().default("return_forecast"),
+  horizon: integer("horizon").default(4).notNull(),
+  metadata: jsonb("metadata"),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+}, (table) => ({
+  symbolTimeIdx: index("idx_kronos_signals_symbol_time").on(table.symbol, table.createdAt),
+  symbolIntervalIdx: index("idx_kronos_signals_symbol_interval").on(table.symbol, table.interval),
+}));
+
+export type KronosSignal = typeof kronosSignals.$inferSelect;
 
 // ─── Positions (Open Trades) ───
 export const positions = pgTable(
@@ -159,9 +200,9 @@ export const positions = pgTable(
   (table) => ({
     userIdStatusIdx: index("idx_positions_user_status").on(table.userId, table.status),
     symbolIdx: index("idx_positions_symbol").on(table.symbol),
-    uqOpenPosition: uniqueIndex("uq_positions_open")
+    uqPositionsOpen: uniqueIndex("uq_positions_open")
       .on(table.userId, table.symbol, table.side)
-      .where(sql`${table.status} = 'open'`),
+      .where(sql`status = 'open'`),
   })
 );
 
@@ -188,9 +229,31 @@ export const trades = pgTable(
     clientOrderId: varchar("client_order_id", { length: 255 }),
     executedAt: timestamp("executed_at"),
     createdAt: timestamp("created_at").defaultNow().notNull(),
-  },
+    // ─── PTA extensions ──────────────────────────────────────────────────────
+    strategyType: strategyTypeEnum("strategy_type").default("intraday"),
+    stopLossPrice: decimal("stop_loss_price", { precision: 18, scale: 8 }),
+    takeProfitPrice: decimal("take_profit_price", { precision: 18, scale: 8 }),
+    trailingStopPct: decimal("trailing_stop_pct", { precision: 6, scale: 4 }),
+    grossPnlUsdt: decimal("gross_pnl_usdt", { precision: 18, scale: 8 }),
+    netPnlUsdt: decimal("net_pnl_usdt", { precision: 18, scale: 8 }),
+    totalFeesUsdt: decimal("total_fees_usdt", { precision: 18, scale: 8 }),
+    fundingPaidUsdt: decimal("funding_paid_usdt", { precision: 18, scale: 8 }).default("0"),
+    mfePrice: decimal("mfe_price", { precision: 18, scale: 8 }),
+    mfePct: decimal("mfe_pct", { precision: 8, scale: 4 }),
+    maePrice: decimal("mae_price", { precision: 18, scale: 8 }),
+    maePct: decimal("mae_pct", { precision: 8, scale: 4 }),
+    exitReason: varchar("exit_reason", { length: 30 }),
+    // TP_HIT | SL_HIT | TRAILING_STOP | MANUAL | LIQUIDATED | TIME_EXIT
+    holdingPeriodSeconds: integer("holding_period_seconds"),
+    binanceSignalPrice: decimal("binance_signal_price", { precision: 18, scale: 8 }),
+    coindcxFillPrice: decimal("coindcx_fill_price", { precision: 18, scale: 8 }),
+    slippageBps: decimal("slippage_bps", { precision: 10, scale: 4 }),
+    executionMode: executionModeEnum("execution_mode").default("PAPER"),
+    },
   (table) => ({
     userIdPositionIdIdx: index("idx_trades_user_position").on(table.userId, table.positionId),
+    idxTradesSymbol: index("idx_trades_symbol").on(table.symbol, table.createdAt),
+    idxTradesExitReason: index("idx_trades_exit_reason").on(table.exitReason),
   })
 );
 
@@ -332,14 +395,18 @@ export const autoExecutorConfig = pgTable("auto_executor_config", {
   llmConfidenceThreshold: integer("llm_confidence_threshold").default(70),
   maxPositionsPerSymbol: integer("max_positions_per_symbol").default(1),
   maxTotalPositions: integer("max_total_positions").default(3),
-  capitalAllocationPct: decimal("capital_allocation_pct", { precision: 5, scale: 3 }).default("0.100"), // fraction of free balance per trade, e.g. 0.100 = 10%
+  capitalAllocationPct: decimal("capital_allocation_pct", { precision: 5, scale: 3 }).default("0.250"), // fraction of free balance per trade, e.g. 0.250 = 25%
   useStrategyLeverage: boolean("use_strategy_leverage").default(true).notNull(), // true = use STRATEGY_CONFIGS[strategy].maxLeverage, false = use defaultLeverage
   paperStartingBalance: decimal("paper_starting_balance", { precision: 12, scale: 2 }).default("100000"),
   paperCurrency: marginCurrencyEnum("paper_currency").default("INR").notNull(),
+  trailingStopEnabled: boolean("trailing_stop_enabled").default(true).notNull(),
+  riskRewardRatio: decimal("risk_reward_ratio", { precision: 4, scale: 2 }).default("2.00").notNull(),
   // AI Brain participation in the autonomous loop
   brainDriverEnabled: boolean("brain_driver_enabled").default(false).notNull(), // brain autonomously proposes/opens trades
   brainGateEnabled: boolean("brain_gate_enabled").default(false).notNull(),     // brain acts as an extra confirmation gate on confluence signals
   brainShadowMode: boolean("brain_shadow_mode").default(true).notNull(),        // true = log only (governor skipped, no execution)
+  useKronosFilter: boolean("use_kronos_filter").default(false).notNull(),
+  kronosConfidenceThreshold: decimal("kronos_confidence_threshold", { precision: 5, scale: 4 }).default("0.5000").notNull(),
   createdAt: timestamp("created_at").defaultNow().notNull(),
   updatedAt: timestamp("updated_at").defaultNow().notNull(),
 });
@@ -682,7 +749,7 @@ export const brainEpisodes = pgTable("brain_episodes", {
   signalSource: varchar("signal_source", { length: 50 }),     // "confluence" | "manual" | "brain"
   brainVerdict: varchar("brain_verdict", { length: 20 }),     // APPROVE | CAUTION | REDUCE_RISK | EXIT_NOW
   governorVerdict: varchar("governor_verdict", { length: 20 }), // approved | rejected
-  governorGate: varchar("governor_gate", { length: 50 }),     // which gate triggered (if rejected)
+  governorGate: varchar("governor_gate", { length: 255 }),     // which gate triggered (if rejected)
   executionResult: varchar("execution_result", { length: 20 }), // executed | skipped | error
   positionId: integer("position_id"),                         // FK to positions (if executed)
   // NOTE: the pgvector `embedding` column is NOT modelled in Drizzle — it is managed
@@ -827,3 +894,56 @@ export const killSwitchState = pgTable("kill_switch_state", {
 });
 
 export type KillSwitchStateRow = typeof killSwitchState.$inferSelect;
+
+// ─── Orders Table for Simulated/Paper Trading State Machine ───
+export const orders = pgTable("orders", {
+  id: serial("id").primaryKey(),
+  clientOrderId: varchar("client_order_id", { length: 255 }).notNull().unique(),
+  userId: integer("user_id")
+    .notNull()
+    .references(() => users.id),
+  symbol: varchar("symbol", { length: 20 }).notNull(),
+  side: varchar("side", { length: 10 }).notNull(), // 'BUY', 'SELL'
+  orderType: varchar("order_type", { length: 20 }).notNull(), // 'MARKET', 'LIMIT'
+  price: decimal("price", { precision: 18, scale: 8 }),
+  quantity: decimal("quantity", { precision: 18, scale: 8 }).notNull(),
+  filledQuantity: decimal("filled_quantity", { precision: 18, scale: 8 }).default("0.00000000").notNull(),
+  status: varchar("status", { length: 20 }).notNull(), // 'PENDING', 'OPEN', 'FILLED', 'CANCELLED', 'REJECTED'
+  leverage: integer("leverage").default(1).notNull(),
+  stopLoss: decimal("stop_loss", { precision: 18, scale: 8 }),
+  takeProfit: decimal("take_profit", { precision: 18, scale: 8 }),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at")
+    .defaultNow()
+    .notNull()
+    .$onUpdate(() => new Date()),
+  // ─── PTA extensions ────────────────────────────────────────────────────────
+  executionMode: executionModeEnum("execution_mode").default("PAPER"),
+  // PAPER | LIVE | SHADOW
+  fillModel: varchar("fill_model", { length: 30 }),
+  // MARK_PRICE | ORDERBOOK_WALK | SLIPPAGE_PENALTY | VWAP_ESTIMATE | WORST_CASE
+  simulatedSlippageBps: decimal("simulated_slippage_bps", { precision: 10, scale: 4 }),
+  binanceMarkPriceAtSend: decimal("binance_mark_price_at_send", { precision: 18, scale: 8 }),
+  orderConstructedAt: timestamp("order_constructed_at"),
+  orderSentAt: timestamp("order_sent_at"),
+  orderAckedAt: timestamp("order_acked_at"),
+  cancelReason: text("cancel_reason"),
+});
+
+export type Order = typeof orders.$inferSelect;
+export type InsertOrder = typeof orders.$inferInsert;
+
+export const liquidityZones = pgTable("liquidity_zones", {
+  id: serial("id").primaryKey(),
+  symbol: varchar("symbol", { length: 20 }).notNull(), // e.g. "B-BTC_USDT"
+  timeframe: varchar("timeframe", { length: 5 }).notNull(), // "15m" | "1h"
+  priceLevel: decimal("price_level", { precision: 28, scale: 8 }).notNull(),
+  zoneType: varchar("zone_type", { length: 20 }).notNull(), // "SWING_HIGH" | "SWING_LOW" | "EQH" | "EQL"
+  touches: integer("touches").default(1).notNull(),
+  isSwept: boolean("is_swept").default(false).notNull(),
+  createdAt: timestamp("created_at").defaultNow().notNull(),
+  updatedAt: timestamp("updated_at").defaultNow().notNull(),
+});
+
+export type LiquidityZone = typeof liquidityZones.$inferSelect;
+

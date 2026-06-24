@@ -3,20 +3,20 @@
  *
  * Runs every 10 seconds. For each open live position with a known
  * liquidationPrice, checks how close the current mark price is to
- * the liquidation level. Fires a Telegram alert when within 5% and
- * triggers an auto-reduce (closes 50% of position) when within 2%.
+ * the liquidation level. Logs critical/warning events and emits internal events
+ * for auto-reduce handling. Telegram is intentionally not used here.
  *
  * Monitors live positions regardless of PLACE_ORDERS — alerts fire even in monitor-only mode.
  */
 
 import { EventEmitter } from "events";
 import { getDb } from "../queries/connection";
-import { positions } from "@db/schema";
+import { positions, exchangeCredentials } from "@db/schema";
 import { eq, and } from "drizzle-orm";
 import { marketStateManager } from "./market-state";
 import { markPriceCache } from "./coindcx-ws";
-import { broadcastTelegramAlert } from "./telegram";
-import { env } from "../lib/env";
+import { createFuturesOrder } from "./coindcx";
+import { decryptCreds } from "../lib/crypto";
 
 export const liquidationMonitorEvents = new EventEmitter();
 
@@ -27,8 +27,10 @@ const ALERT_COOLDOWN_MS = 5 * 60_000;
 
 let monitorInterval: ReturnType<typeof setInterval> | null = null;
 
-async function checkPositions(): Promise<void> {
+// Track positions already auto-reduced to prevent duplicate orders
+const autoReducedPositions = new Set<number>();
 
+async function checkPositions(): Promise<void> {
   const db = getDb();
   const openPositions = await db
     .select()
@@ -42,7 +44,6 @@ async function checkPositions(): Promise<void> {
     const liqPrice = parseFloat(String(pos.liquidationPrice));
     if (!liqPrice || liqPrice <= 0) continue;
 
-    // Current price: mark price cache first (most accurate), then in-memory LTP
     let markPrice = markPriceCache.get(pos.symbol) ?? 0;
     if (markPrice <= 0) {
       markPrice = markPriceCache.get(`B-${pos.symbol.replace("USDT", "_USDT")}`) ?? 0;
@@ -53,14 +54,12 @@ async function checkPositions(): Promise<void> {
 
     if (!markPrice || markPrice <= 0) continue;
 
-    // Distance as a fraction of mark price
     const distance = Math.abs(markPrice - liqPrice) / markPrice;
 
     if (distance <= 0.02) {
-      // CRITICAL: within 2% — fire auto-reduce event (position manager/executor handles it)
       console.error(
         `[liq-monitor] CRITICAL: pos ${pos.id} ${pos.symbol} ${pos.side} ` +
-        `mark=${markPrice} liq=${liqPrice} distance=${(distance * 100).toFixed(2)}%`
+          `mark=${markPrice} liq=${liqPrice} distance=${(distance * 100).toFixed(2)}%`,
       );
       liquidationMonitorEvents.emit("critical", {
         positionId: pos.id,
@@ -70,21 +69,53 @@ async function checkPositions(): Promise<void> {
         liqPrice,
         distancePct: distance * 100,
       });
-      await broadcastTelegramAlert(
-        `🚨 <b>LIQUIDATION CRITICAL</b>\n` +
-        `${pos.symbol} ${pos.side.toUpperCase()} pos #${pos.id}\n` +
-        `Mark: ${markPrice.toFixed(4)} | Liq: ${liqPrice.toFixed(4)}\n` +
-        `Distance: <b>${(distance * 100).toFixed(2)}%</b> — AUTO-REDUCING`
-      ).catch(() => {});
+
+      // Auto-reduce: place 50% market reduce order if not already reduced
+      if (!autoReducedPositions.has(pos.id)) {
+        try {
+          const dbCreds = await db
+            .select()
+            .from(exchangeCredentials)
+            .where(and(eq(exchangeCredentials.userId, pos.userId), eq(exchangeCredentials.exchange, "coindcx")))
+            .limit(1);
+          if (!dbCreds || dbCreds.length === 0) {
+            console.warn(`[liq-monitor] No credentials for user ${pos.userId}, skipping auto-reduce`);
+            continue;
+          }
+          const creds = decryptCreds(dbCreds[0]);
+          const reduceSide = pos.side === "long" ? "sell" : "buy";
+          const reduceQty = parseFloat(String(pos.size)) * 0.5;
+          const coindcxSymbol = pos.symbol.startsWith("B-") ? pos.symbol : `B-${pos.symbol.replace("USDT", "_USDT")}`;
+
+          await createFuturesOrder(creds, {
+            market: coindcxSymbol,
+            side: reduceSide,
+            order_type: "market",
+            total_quantity: reduceQty,
+            price: markPrice,
+            leverage: pos.leverage,
+          });
+          autoReducedPositions.add(pos.id);
+          console.log(`[liq-monitor] Auto-reduced pos ${pos.id} ${pos.symbol}: 50% market ${reduceSide} @ ${markPrice}`);
+          liquidationMonitorEvents.emit("auto-reduced", {
+            positionId: pos.id,
+            symbol: pos.symbol,
+            side: pos.side,
+            reduceQty,
+            markPrice,
+          });
+        } catch (err: any) {
+          console.error(`[liq-monitor] Auto-reduce failed for pos ${pos.id}:`, err.message || err);
+        }
+      }
     } else if (distance <= 0.05) {
-      // WARNING: within 5% — alert once per cooldown window
       const lastAlert = alertCooldown.get(pos.id) ?? 0;
       if (Date.now() - lastAlert < ALERT_COOLDOWN_MS) continue;
       alertCooldown.set(pos.id, Date.now());
 
       console.warn(
         `[liq-monitor] WARNING: pos ${pos.id} ${pos.symbol} ${pos.side} ` +
-        `mark=${markPrice} liq=${liqPrice} distance=${(distance * 100).toFixed(2)}%`
+          `mark=${markPrice} liq=${liqPrice} distance=${(distance * 100).toFixed(2)}%`,
       );
       liquidationMonitorEvents.emit("warning", {
         positionId: pos.id,
@@ -94,15 +125,9 @@ async function checkPositions(): Promise<void> {
         liqPrice,
         distancePct: distance * 100,
       });
-      await broadcastTelegramAlert(
-        `⚠️ <b>LIQUIDATION WARNING</b>\n` +
-        `${pos.symbol} ${pos.side.toUpperCase()} pos #${pos.id}\n` +
-        `Mark: ${markPrice.toFixed(4)} | Liq: ${liqPrice.toFixed(4)}\n` +
-        `Distance: <b>${(distance * 100).toFixed(2)}%</b>`
-      ).catch(() => {});
     } else {
-      // Position moved away from danger — clear cooldown
       alertCooldown.delete(pos.id);
+      autoReducedPositions.delete(pos.id);
     }
   }
 }
@@ -110,9 +135,7 @@ async function checkPositions(): Promise<void> {
 export function startLiquidationMonitor(intervalMs = 10_000): void {
   if (monitorInterval) return;
   monitorInterval = setInterval(() => {
-    checkPositions().catch((err) =>
-      console.error("[liq-monitor] Check failed:", err)
-    );
+    checkPositions().catch((err) => console.error("[liq-monitor] Check failed:", err));
   }, intervalMs);
   console.log(`[liq-monitor] Started (interval=${intervalMs}ms)`);
 }
