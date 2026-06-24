@@ -1113,6 +1113,7 @@ private async executePosition(params: {
     await RiskManager.validateOrder(params.userId, orderParams, params.isPaper, currency);
 
     // 2. Insert order record into the database
+    const orderId = await db.transaction(async (tx) => {
       const now = new Date();
       const result = await tx
         .insert(orders as any)
