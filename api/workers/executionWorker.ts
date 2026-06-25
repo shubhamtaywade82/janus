@@ -4,6 +4,7 @@ import { getDb } from "../queries/connection";
 import { orders, positions, autoExecutorConfig } from "@db/schema";
 import { eq } from "drizzle-orm";
 import Decimal from "decimal.js";
+import { systemEvents } from "@db/pta-schema";
 import { WalletLedgerService } from "../services/WalletLedgerService";
 import {
   recordPositionTransaction,
@@ -50,12 +51,19 @@ export const executionWorker = new Worker(
           }
 
           // Update order status to FILLED
+          const now = new Date();
           await tx
             .update(orders)
             .set({
               status: "FILLED",
               filledQuantity: order.quantity,
-              updatedAt: new Date(),
+              updatedAt: now,
+              // ─── PTA fill attribution ────────────────────────────────────────
+              executionMode: "PAPER",
+              fillModel: "ORDERBOOK_WALK",
+              simulatedSlippageBps: "0",
+              orderSentAt: order.orderSentAt ?? now,
+              orderAckedAt: order.orderAckedAt ?? now,
             })
             .where(eq(orders.id, order.id));
 
@@ -135,6 +143,11 @@ export const executionWorker = new Worker(
             fee: feeUsdt,
             marginBefore: 0,
             marginAfter: marginUsdtNum,
+            executionMode: "PAPER",
+            liquiditySide: "TAKER",
+            fillModel: "ORDERBOOK_WALK",
+            simulatedSlippageBps: 0,
+            fillLatencyMs: 0,
             metadata: {
               isPaper,
               leverage: order.leverage,
@@ -155,6 +168,21 @@ export const executionWorker = new Worker(
               size: qty.toNumber(),
             });
           }
+
+          await tx.insert(systemEvents).values({
+            component: "execution-worker",
+            eventType: "execute_match",
+            severity: "INFO",
+            symbol: order.symbol,
+            message: `Simulated fill for order ${clientOrderId} -> position ${position.id}`,
+            metadata: {
+              executionMode: "PAPER",
+              fillModel: "ORDERBOOK_WALK",
+              executionPrice,
+              clientOrderId,
+              positionId: position.id,
+            },
+          });
 
           console.log(
             `[executionWorker] Successfully filled order ${clientOrderId} and opened position ${position.id}`

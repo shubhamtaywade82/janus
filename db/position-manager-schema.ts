@@ -119,6 +119,8 @@ export const positionTransactions = pgTable(
     // MARK_PRICE | ORDERBOOK_WALK | SLIPPAGE_PENALTY | VWAP_ESTIMATE | WORST_CASE
     simulatedSlippageBps: decimal("simulated_slippage_bps", { precision: 10, scale: 4 }),
     fillLatencyMs: integer("fill_latency_ms"),
+    // ─── PTA execution mode ──────────────────────────────────────────────────
+    executionMode: varchar("execution_mode", { length: 20 }),
     createdAt: timestamp("created_at").defaultNow().notNull(),
   },
   (table) => ({

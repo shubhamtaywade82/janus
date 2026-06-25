@@ -36,6 +36,7 @@ interface RecordTxInput {
   fillModel?: string;
   simulatedSlippageBps?: number;
   fillLatencyMs?: number;
+  executionMode?: string;
 }
 
 /**
@@ -67,6 +68,7 @@ export async function recordPositionTransaction(input: RecordTxInput): Promise<v
       fillModel: input.fillModel,
       simulatedSlippageBps: input.simulatedSlippageBps !== undefined ? String(input.simulatedSlippageBps) : undefined,
       fillLatencyMs: input.fillLatencyMs,
+      executionMode: input.executionMode,
     });
   } catch (err) {
     console.error(

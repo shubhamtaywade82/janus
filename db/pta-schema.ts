@@ -24,6 +24,7 @@ import {
   uuid,
   bigint,
   unique,
+  bigserial,
 } from "drizzle-orm/pg-core";
 
 // ─── Trade Price Ticks ───────────────────────────────────────────────────────
@@ -31,8 +32,8 @@ import {
 export const tradePriceTicks = pgTable(
   "trade_price_ticks",
   {
-    id: bigint("id", { mode: "number" }).primaryKey(),
-    tradeId: uuid("trade_id").notNull(), // matches pta_trades.id (UUID) once wired; nullable until then
+    id: bigserial<"id", "number">("id", { mode: "number" } as const).primaryKey(),
+    tradeId: varchar("trade_id", { length: 64 }).notNull(),
     observedAt: timestamp("observed_at").notNull(),
     markPrice: decimal("mark_price", { precision: 18, scale: 8 }).notNull(),
     indexPrice: decimal("index_price", { precision: 18, scale: 8 }),
@@ -70,7 +71,7 @@ export type FundingEvent = typeof fundingEvents.$inferSelect;
 export const systemEvents = pgTable(
   "system_events",
   {
-    id: bigint("id", { mode: "number" }).primaryKey(),
+    id: bigserial<"id", "number">("id", { mode: "number" } as const).primaryKey(),
     occurredAt: timestamp("occurred_at").defaultNow().notNull(),
     component: varchar("component", { length: 50 }).notNull(),
     eventType: varchar("event_type", { length: 50 }).notNull(),

@@ -288,6 +288,10 @@ startExitDaemon();
 import { startMarketRegimeRecorder } from "./services/market-regime-recorder";
 startMarketRegimeRecorder();
 
+// Start PTA mark-price tick sampler (10s per open position)
+import { startPtaTickSampler } from "./services/pta-service";
+startPtaTickSampler();
+
 // Start auto signal analysis loop with regime detection enabled
 import { startAutoAnalysis } from "./routers/signal-router";
 startAutoAnalysis("intraday", true).catch((err) => {
