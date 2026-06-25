@@ -33,6 +33,8 @@ export interface TrackedPosition {
 }
 
 const trackedPositions = new Map<number, TrackedPosition>();
+const lastTrailUpdate = new Map<number, number>();
+const TRAIL_UPDATE_COOLDOWN_MS = 60_000;
 let trailingTimer: ReturnType<typeof setInterval> | null = null;
 
 // In-memory Kline buffer per symbol (keeps last 100 1m klines)
@@ -210,12 +212,12 @@ export function calcNewTrailingStop(
     const effectiveBreakeven = Math.max(breakeven, minSlAfterBreakeven);
     newStop = Math.max(newStop, effectiveBreakeven);
   } else if (side === "short" && currentPrice <= entryPrice - initialRisk) {
-    const breakeven = entryPrice * (1 + TAKER_FEE * 2);
+    const breakeven = entryPrice * (1 - TAKER_FEE * 2);
     // Once breakeven is on the table, enforce a minimum post-breakeven SL width
     // so the stop cannot tighten to within 2-3 ticks of the entry.
-    const minSlAfterBreakeven = entryPrice * (1 + cfg.minPostBreakevenSlPct);
-    const effectiveBreakeven = Math.max(breakeven, minSlAfterBreakeven);
-    newStop = Math.max(newStop, effectiveBreakeven);
+    const minSlAfterBreakeven = entryPrice * (1 - cfg.minPostBreakevenSlPct);
+    const effectiveBreakeven = Math.min(breakeven, minSlAfterBreakeven);
+    newStop = Math.min(newStop, effectiveBreakeven);
   }
 
   return newStop;
@@ -324,8 +326,13 @@ function ensureTrailingEngine() {
           const strategyCfg = STRATEGY_CONFIGS[pos.strategyType] || STRATEGY_CONFIGS.intraday;
           const newStop = calcNewTrailingStop(pos.side, pos.stopLoss, currentPrice, trailPct, klines, pos.entryPrice, strategyCfg, pos.takeProfit);
           
-          if (Math.abs(newStop - pos.stopLoss) > 1e-8) {
+          const lastUpdated = lastTrailUpdate.get(posId) ?? 0;
+          if (
+            Math.abs(newStop - pos.stopLoss) > 1e-8 &&
+            lastUpdated < Date.now() - TRAIL_UPDATE_COOLDOWN_MS
+          ) {
             pos.stopLoss = newStop;
+            lastTrailUpdate.set(posId, Date.now());
             await db.update(positions)
               .set({ stopLoss: String(newStop), updatedAt: new Date() })
               .where(and(eq(positions.id, posId), eq(positions.status, "open")))

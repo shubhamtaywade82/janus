@@ -6,9 +6,6 @@ import { and, eq } from "drizzle-orm";
 Decimal.set({ precision: 30, rounding: Decimal.ROUND_HALF_UP });
 
 export class WalletLedgerService {
-  /**
-   * Safely reserves available funds by moving them to locked status.
-   */
   public static async lockMargin(
     userId: number,
     mode: "live" | "paper" | "backtest",
@@ -21,7 +18,6 @@ export class WalletLedgerService {
     const margin = new Decimal(marginStr);
 
     await db.transaction(async (tx) => {
-      // 1. Fetch account with an explicit row-level lock
       const [account] = await tx
         .select()
         .from(tradingAccounts)
@@ -32,14 +28,13 @@ export class WalletLedgerService {
             eq(tradingAccounts.currency, currency)
           )
         )
-        .for("update");
+        .for("update")
+        .limit(1);
 
-      if (!account) throw new Error("Target trading account registry missing");
+      if (!account) return;
 
       const available = new Decimal(account.availableBalance);
       const locked = new Decimal(account.lockedMargin);
-      const walletBalance = new Decimal(account.walletBalance);
-      const equity = new Decimal(account.equity);
 
       if (available.lt(margin)) {
         throw new Error(
@@ -53,7 +48,6 @@ export class WalletLedgerService {
       const newAvailable = available.sub(margin);
       const freeMargin = Decimal.max(0, newAvailable);
 
-      // 2. Perform safe transformations back into database string entries
       await tx
         .update(tradingAccounts)
         .set({
@@ -65,31 +59,27 @@ export class WalletLedgerService {
         })
         .where(eq(tradingAccounts.id, account.id));
 
-      // 3. Append to transactional ledger audit trail
       await tx.insert(accountLedger).values({
         accountId: account.id,
         eventType: "reserve_margin",
         debit: margin.toFixed(8),
         credit: "0.00000000",
-        balanceBefore: walletBalance.toFixed(8),
-        balanceAfter: walletBalance.sub(margin).toFixed(8),
+        balanceBefore: account.walletBalance,
+        balanceAfter: new Decimal(account.walletBalance).sub(margin).toFixed(8),
         referenceType,
         referenceId,
-        metadata: { margin: margin.toNumber(), equity: equity.toNumber() },
+        metadata: { margin: margin.toNumber() },
       });
     });
   }
 
-  /**
-   * Refund reserved margin (e.g. when order is rejected or cancelled).
-   */
   public static async refundMargin(
     userId: number,
     mode: "live" | "paper" | "backtest",
     currency: "USDT" | "INR",
     marginStr: string,
-    referenceId: number,
-    referenceType = "order"
+    _referenceId: number,
+    _referenceType = "order"
   ): Promise<void> {
     const db = getDb();
     const margin = new Decimal(marginStr);
@@ -105,7 +95,8 @@ export class WalletLedgerService {
             eq(tradingAccounts.currency, currency)
           )
         )
-        .for("update");
+        .for("update")
+        .limit(1);
 
       if (!account) return;
 
@@ -124,24 +115,9 @@ export class WalletLedgerService {
           updatedAt: new Date(),
         })
         .where(eq(tradingAccounts.id, account.id));
-
-      await tx.insert(accountLedger).values({
-        accountId: account.id,
-        eventType: "release_margin",
-        debit: "0.00000000",
-        credit: margin.toFixed(8),
-        balanceBefore: newAvailable.sub(margin).toFixed(8),
-        balanceAfter: newAvailable.toFixed(8),
-        referenceType,
-        referenceId,
-        metadata: { refunded: margin.toNumber() },
-      });
     });
   }
 
-  /**
-   * Release margin and settle realized PnL.
-   */
   public static async releaseMargin(
     userId: number,
     mode: "live" | "paper" | "backtest",
@@ -156,7 +132,6 @@ export class WalletLedgerService {
     const realizedPnl = new Decimal(realizedPnlStr);
 
     await db.transaction(async (tx) => {
-      // 1. Fetch account with an explicit row-level lock
       const [account] = await tx
         .select()
         .from(tradingAccounts)
@@ -167,9 +142,10 @@ export class WalletLedgerService {
             eq(tradingAccounts.currency, currency)
           )
         )
-        .for("update");
+        .for("update")
+        .limit(1);
 
-      if (!account) throw new Error("Target trading account registry missing");
+      if (!account) return;
 
       const balBefore = new Decimal(account.walletBalance);
       const newWalletBalance = balBefore.add(realizedPnl);
@@ -185,7 +161,6 @@ export class WalletLedgerService {
       const newTradeCount = account.tradeCount + 1;
       const newWinCount = account.winCount + (isWin ? 1 : 0);
 
-      // 2. Perform safe transformations back into database string entries
       await tx
         .update(tradingAccounts)
         .set({
@@ -204,7 +179,6 @@ export class WalletLedgerService {
         })
         .where(eq(tradingAccounts.id, account.id));
 
-      // 3. Append to transactional ledger audit trail
       await tx.insert(accountLedger).values({
         accountId: account.id,
         eventType: "pnl_realization",
@@ -220,24 +194,8 @@ export class WalletLedgerService {
           isWin,
         },
       });
-
-      await tx.insert(accountLedger).values({
-        accountId: account.id,
-        eventType: "release_margin",
-        debit: "0.00000000",
-        credit: margin.toFixed(8),
-        balanceBefore: newWalletBalance.sub(margin).toFixed(8),
-        balanceAfter: newWalletBalance.toFixed(8),
-        referenceType: "position",
-        referenceId: positionId,
-        metadata: { margin: margin.toNumber() },
-      });
     });
   }
-
-  /**
-   * Update unrealized PnL from mark prices.
-   */
   public static async updateUnrealizedPnl(
     userId: number,
     mode: "live" | "paper" | "backtest",
@@ -248,7 +206,6 @@ export class WalletLedgerService {
     const unrealizedPnl = new Decimal(unrealizedPnlStr);
 
     await db.transaction(async (tx) => {
-      // 1. Fetch account with an explicit row-level lock
       const [account] = await tx
         .select()
         .from(tradingAccounts)
@@ -259,7 +216,8 @@ export class WalletLedgerService {
             eq(tradingAccounts.currency, currency)
           )
         )
-        .for("update");
+        .for("update")
+        .limit(1);
 
       if (!account) return;
 
@@ -272,7 +230,6 @@ export class WalletLedgerService {
       const drawdown = Decimal.max(0, newPeakEquity.sub(equity));
       const freeMargin = equity.sub(lockedMargin);
 
-      // 2. Perform safe transformations back into database string entries
       await tx
         .update(tradingAccounts)
         .set({
@@ -288,9 +245,6 @@ export class WalletLedgerService {
     });
   }
 
-  /**
-   * Charge fee.
-   */
   public static async chargeFee(
     userId: number,
     mode: "live" | "paper" | "backtest",
@@ -313,7 +267,8 @@ export class WalletLedgerService {
             eq(tradingAccounts.currency, currency)
           )
         )
-        .for("update");
+        .for("update")
+        .limit(1);
 
       if (!account) return;
 
