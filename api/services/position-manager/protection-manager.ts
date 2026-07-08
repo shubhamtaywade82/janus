@@ -28,50 +28,51 @@ export async function ensureProtection(
   ctx: MarketContext,
   userId: number
 ): Promise<ProtectionStatus> {
-  const status = checkProtectionStatus(position);
-  if (!status.needsProtection) return status;
-
   const db = getDb();
 
   try {
+    const userCfg = await db.select()
+      .from(autoExecutorConfig)
+      .where(eq(autoExecutorConfig.userId, userId))
+      .limit(1)
+      .catch(() => []);
+    const userConfig = userCfg[0];
+    const trailingEnabled = userConfig?.trailingStopEnabled ?? true;
+    const forceRecalc = !trailingEnabled;
+
+    const currentStatus = checkProtectionStatus(position);
     let sl = position.stopLoss;
     let tp = position.takeProfit;
 
-    // Calculate missing SL
-    if (!status.hasSl) {
+    // Recalculate SL when trailing is disabled or missing
+    if (forceRecalc || !currentStatus.hasSl) {
       const slResult = await calculateStopLoss(position, ctx);
       sl = slResult.stopLoss;
     }
 
-    // Calculate missing TP using SL distance
-    if (!status.hasTp && sl !== null && position.entryPrice > 0) {
-      const slDistancePct = Math.abs((position.entryPrice - sl) / position.entryPrice);
-      
-      // Load user configuration
-      const userCfg = await db.select()
-        .from(autoExecutorConfig)
-        .where(eq(autoExecutorConfig.userId, userId))
-        .limit(1)
-        .catch(() => []);
-      const userConfig = userCfg[0];
-      
-      if (userConfig && userConfig.trailingStopEnabled === false) {
-        const rr = parseFloat(userConfig.riskRewardRatio ?? "2.00");
+    // Recalculate TP when trailing is disabled, missing, or SL changed
+    if (forceRecalc || !currentStatus.hasTp) {
+      const slDistancePct = sl
+        ? Math.abs((position.entryPrice - sl) / position.entryPrice)
+        : null;
+
+      if (!trailingEnabled && slDistancePct !== null) {
+        const rr = parseFloat(userConfig?.riskRewardRatio ?? "2.00");
         tp = position.side === "LONG"
           ? position.entryPrice * (1 + slDistancePct * rr)
           : position.entryPrice * (1 - slDistancePct * rr);
-      } else {
+      } else if (slDistancePct !== null) {
         const tpResult = calculateTakeProfit(position, ctx, slDistancePct);
         tp = tpResult.tp1;
       }
     }
 
-    if (sl === null || tp === null) return status;
+    if (sl === null || tp === null) return currentStatus;
 
     // Final safety check: ensure finite values for DB
     if (!Number.isFinite(sl) || !Number.isFinite(tp)) {
       console.warn(`[protection-manager] Non-finite SL/TP for ${position.id}: sl=${sl}, tp=${tp}`);
-      return status;
+      return currentStatus;
     }
 
     // Persist to DB
@@ -99,7 +100,7 @@ export async function ensureProtection(
     return { hasSl: true, hasTp: true, needsProtection: false };
   } catch (err) {
     console.error(`[protection-manager] Failed to protect position ${position.id}:`, err);
-    return status;
+    return checkProtectionStatus(position);
   }
 }
 

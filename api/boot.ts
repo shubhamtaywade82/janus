@@ -307,6 +307,17 @@ startRProfileRefresh();
 import { startDailyTrendScheduler, stopDailyTrendScheduler } from "./services/trend-bias";
 startDailyTrendScheduler();
 
+// Start periodic market feature computation (every 60s for all tracked symbols)
+import { computeMarketFeatures } from "./services/market-features";
+import { SUPPORTED_PAIRS } from "./services/binance";
+const FEATURE_INTERVAL_MS = 60_000;
+const featureTimer = setInterval(() => {
+  for (const pair of SUPPORTED_PAIRS) {
+    computeMarketFeatures(pair.binance).catch(() => {});
+  }
+}, FEATURE_INTERVAL_MS);
+featureTimer.unref();
+
 // Init LLM advisor (loads keys from DB + env-level Ollama config)
 import { globalLlmAdvisor } from "./services/llm-advisor";
 globalLlmAdvisor.init().catch((err) => {

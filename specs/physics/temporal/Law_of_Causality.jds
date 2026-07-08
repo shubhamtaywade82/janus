@@ -1,0 +1,11 @@
+module physics.temporal.Law_of_Causality@1.0.0;
+
+import relationship.causal.MitigatedBy@^1.0.0;
+
+law Law_of_Causality {
+    category: [Temporal, Graph];
+    severity: FATAL;
+    description: "A relationship cannot exist before the interaction that spawned it.";
+    applies_to: relationship.causal.MitigatedBy;
+    expression: "entity.createdAt >= entity.provenance.interactionTrigger.createdAt";
+}

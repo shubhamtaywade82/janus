@@ -1,0 +1,168 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "JanusFinancialKernel",
+  "description": "The language-agnostic JSON schema defining the Janus Financial Kernel model.",
+  "type": "object",
+  "required": [
+    "version",
+    "physics",
+    "objects",
+    "interactions",
+    "relationships",
+    "systems",
+    "policies"
+  ],
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "SemVer version of the Janus Financial Kernel model."
+    },
+    
+    // --- LAYER 0: PHYSICS ---
+    "physics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "domain", "severity", "expression"],
+        "properties": {
+          "id": { "type": "string" },
+          "domain": { "type": "string", "enum": ["TEMPORAL", "SPATIAL", "LIFECYCLE", "EVIDENCE", "RISK", "EXECUTION"] },
+          "severity": { "type": "string", "enum": ["FATAL", "WARNING"] },
+          "expression": { "type": "string" },
+          "description": { "type": "string" }
+        }
+      }
+    },
+
+    // --- LAYER 1: OBJECTS ---
+    "objects": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "category", "facets", "components", "lifecycle"],
+        "properties": {
+          "id": { "type": "string" },
+          "category": { "type": "string" },
+          "facets": {
+            "type": "object",
+            "required": ["domain", "spatial", "lifecycle", "execution"],
+            "properties": {
+              "domain": { "type": "array", "items": { "type": "string" } },
+              "spatial": { "type": "array", "items": { "type": "string" } },
+              "lifecycle": { "type": "array", "items": { "type": "string" } },
+              "execution": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "components": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "lifecycle": {
+            "type": "object",
+            "required": ["states", "outcomes", "transitions"],
+            "properties": {
+              "states": { "type": "array", "items": { "type": "string" } },
+              "outcomes": { "type": "array", "items": { "type": "string" } },
+              "transitions": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["from", "to", "trigger"],
+                  "properties": {
+                    "from": { "type": "string" },
+                    "to": { "type": "string" },
+                    "trigger": { "type": "string" },
+                    "condition": { "type": "string" },
+                    "yields": { "type": "string" }
+                  }
+                }
+              }
+            }
+          },
+          "affordances": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+
+    // --- LAYER 2: INTERACTIONS ---
+    "interactions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "requires", "evidenceRequirements"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string" },
+          "requires": {
+            "type": "object",
+            "required": ["entities", "conditions"],
+            "properties": {
+              "entities": { "type": "array", "items": { "type": "string" } },
+              "conditions": { "type": "array", "items": { "type": "string" } }
+            }
+          },
+          "evidenceRequirements": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    },
+
+    // --- LAYER 3: RELATIONSHIPS ---
+    "relationships": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "kind", "family", "directionality", "source", "target", "provenance"],
+        "properties": {
+          "id": { "type": "string" },
+          "kind": { "type": "string" },
+          "family": { "type": "string", "enum": ["CAUSAL", "STRUCTURAL", "TEMPORAL", "TRADING"] },
+          "directionality": { "type": "string", "enum": ["DIRECTED", "UNDIRECTED"] },
+          "source": { "type": "string" },
+          "target": { "type": "string" },
+          "properties": {
+            "type": "object",
+            "additionalProperties": { "type": "string" }
+          },
+          "provenance": {
+            "type": "object",
+            "required": ["system", "ruleVersion"],
+            "properties": {
+              "system": { "type": "string" },
+              "ruleVersion": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+
+    // --- LAYER 4: SYSTEMS & POLICIES ---
+    "systems": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "type", "consumes", "requires", "emits"],
+        "properties": {
+          "id": { "type": "string" },
+          "type": { "type": "string", "enum": ["StatelessSystem", "StatefulSystem"] },
+          "consumes": { "type": "array", "items": { "type": "string" } },
+          "requires": { "type": "array", "items": { "type": "string" } },
+          "emits": { "type": "array", "items": { "type": "string" } },
+          "description": { "type": "string" }
+        }
+      }
+    },
+    "policies": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "appliesTo", "guards", "actions"],
+        "properties": {
+          "id": { "type": "string" },
+          "appliesTo": { "type": "string" },
+          "guards": { "type": "array", "items": { "type": "string" } },
+          "actions": { "type": "array", "items": { "type": "string" } }
+        }
+      }
+    }
+  }
+}

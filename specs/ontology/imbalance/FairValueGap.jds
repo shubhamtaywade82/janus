@@ -1,0 +1,36 @@
+module ontology.imbalance.FairValueGap@1.2.0;
+
+import ontology.primitives.Candle@^1.0.0;
+import ontology.lifecycle.Finite@^2.0.0;
+import systems.mitigation.MitigationSystem@^1.0.0;
+
+object FairValueGap {
+    facets {
+        domain: Imbalance;
+        spatial: Zone;
+        lifecycle: Finite;
+        execution: Tradable;
+    }
+
+    data {
+        upperPrice: float;
+        lowerPrice: float;
+        direction: enum(BULLISH, BEARISH);
+        detectedAt: timestamp;
+    }
+
+    lifecycle {
+        states: [FORMING, DETECTED, ACTIVE, INTERACTING, RESOLVED, ARCHIVED];
+        outcomes: [MITIGATED, INVALIDATED, EXPIRED];
+    }
+
+    affordances {
+        entry;
+        confluence;
+        target;
+    }
+
+    evidence_requirements {
+        PRICE_OVERLAP required_for INTERACTING;
+    }
+}

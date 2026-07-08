@@ -1,0 +1,29 @@
+module relationship.causal.MitigatedBy@1.0.0;
+
+import ontology.imbalance.FairValueGap@^1.2.0;
+import ontology.interaction.MarketInteraction@^1.0.0;
+
+relationship MitigatedBy {
+    kind: MITIGATED_BY;
+    family: CAUSAL;
+    directionality: DIRECTED;
+    cardinality: ONE_TO_ONE;
+    source: ontology.imbalance.FairValueGap;
+    target: ontology.interaction.MarketInteraction;
+
+    properties {
+        strength: float;
+        confidence: float;
+        evidence: list(EvidenceArtifact);
+    }
+
+    lifecycle {
+        states: [FORMING, ACTIVE, CONFIRMED, RESOLVED];
+        outcomes: [SUCCESSFUL_MITIGATION, FAILED_MITIGATION];
+    }
+
+    provenance {
+        system: systems.mitigation.MitigationSystem;
+        ruleVersion: "MitigationRule_v1.0";
+    }
+}

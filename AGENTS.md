@@ -406,3 +406,47 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
 * **Column coverage**: added `execution_mode` to `trades` (non-null, default `PAPER`) and to `position_transactions` (string, pending Drizzle alignment).
 * **Migration flow**: `0033` drops dependent views/MVs before altering column type, then `npm run pta:views` rebuilds the derived layer.
 * **Files**: `db/schema.ts` (added `executionModeEnum`, updated `orders` and `trades`), `db/position-manager-schema.ts` (unchanged), `db/migrations/0033_pta_phase1_fixes.sql`, `db/migrations/0027_pta_derived_layer.sql` (unchanged).
+
+### [2026-07-08] Market Feature Engine & JDS Master Index
+* **Market Feature Engine (Phase 1)**: Created the complete, strictly typed market feature engine in [api/services/market-features/](file:///home/nemesis/project/trading-workspace/janus/api/services/market-features/) defining structured indicators (ATR with expansion, ADX with slope, EMA with KER/VHF/Choppiness/Slope, RSI/MACD with slope, Volume, Orderbook, CVD with divergences, OI, Funding, Liquidation cascade, Volatility, Liquidity, Session, Correlation, and the main orchestrating `feature-engine.ts`). Verified targeted compilation type-safety.
+* **JDS Masters Index (Phase 0)**: Initiated the comprehensive Janus Domain Specification (JDS) under [docs/janus-spec/](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/) compiling 29 files. 
+* **Ontological Engine & ECS Transition**: Evolved the domain design into a pure Entity-Component-System (ECS) architecture:
+  - Created [003.3-object-lifecycle-model.md](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/003.3-object-lifecycle-model.md) specifying a Universal Lifecycle Algebra, Statecharts with Triggers/Guards/Actions, and decay/archival rules.
+  - Created [003.4-object-facet-model.md](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/003.4-object-facet-model.md) specifying a multi-dimensional facet signature (Domain, Semantic, Trading, Temporal, Spatial, Lifecycle, Execution, Confidence) to characterize objects, enabling a declarative Object Query Language.
+  - Created [003.5-affordance-model.md](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/003.5-affordance-model.md) to define standard affordances (Entry, Target, Invalidation, Confluence, Context) bridging raw facts to strategy composition.
+  - Created [004-system-model.md](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/004-system-model.md) specifying the Systems pipelines (Features, Objects, Relationships, Patterns, Strategy, Policies, Execution, Semantics, Replay, Learning) to own all runtime behavior over passive data entities.
+  - Created the complete **005 Relationship & Interaction Series** ([005.1](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/005.1-interaction-model.md), [005.2](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/005.2-relationship-meta-model.md), [005.3](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/005.3-relationship-lifecycle.md), [005.4](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/005.4-relationship-taxonomy.md), [005.5](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/005.5-relationship-affordances.md)) promoting relationships to first-class domain entities born of transient interactions, carrying weight, confidence, evidence, and provenance.
+  - Created [006-domain-physics.md](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/006-domain-physics.md) defining the 11 categories of physical laws (Physical, Temporal, Lifecycle, Graph, Evidence, Provenance, Event, ECS, Replay, AI, Safety) from which property-based tests are dynamically compiled.
+  - Created [007-event-model.md](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/007-event-model.md) defining the event envelope schema and causal tracing headers.
+  - Created [026-spec-compiler-pipeline.md](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/026-spec-compiler-pipeline.md) outlining the parser, semantic analyzer, and code generators (types, zod schemas, property tests, runtime guards) for high-assurance specification-driven development.
+  - Scaffolded the first end-to-end compilable DSL source slice under **[`specs/`](file:///home/nemesis/project/trading-workspace/janus/specs/)** including:
+    - [FairValueGap.jds](file:///home/nemesis/project/trading-workspace/janus/specs/ontology/imbalance/FairValueGap.jds) (declarative Object properties, facets, and lifecycle state chart definition).
+    - [MitigatedBy.jds](file:///home/nemesis/project/trading-workspace/janus/specs/relationship/causal/MitigatedBy.jds) (first-class causal relationship definition with evidence artifacts).
+    - [MitigationSystem.jds](file:///home/nemesis/project/trading-workspace/janus/specs/systems/mitigation/MitigationSystem.jds) (stateless ECS mitigation scheduler system contract).
+    - [Law_of_Causality.jds](file:///home/nemesis/project/trading-workspace/janus/specs/physics/temporal/Law_of_Causality.jds) (executable physics law invariant).
+  - Implemented the first functional **Janus Specification Compiler toolchain** prototype under **[`api/compiler/`](file:///home/nemesis/project/trading-workspace/janus/api/compiler/)**:
+    - [fkir.ts](file:///home/nemesis/project/trading-workspace/janus/api/compiler/fkir.ts): Sets up the formal TypeScript types defining the Financial Kernel IR (FKIR) graph layers (Physics, Entities, Mechanics, Topology, Action, and Vocabulary).
+    - [parser.ts](file:///home/nemesis/project/trading-workspace/janus/api/compiler/parser.ts): Custom tokenizer and AST builder that parses `.jds` source modules using brace-nesting tracking.
+    - [passes.ts](file:///home/nemesis/project/trading-workspace/janus/api/compiler/passes.ts): Implements the compiler Pass Manager with `CapabilityInferencePass` (auto-detects `Zone` + `Finite` -> `Mitigatable`) and `EventGenerationPass` (mechanically generates event schemas from object lifecycles).
+  - Created and ran compilation verification test script **[`scripts/compile_specs.ts`](file:///home/nemesis/project/trading-workspace/janus/scripts/compile_specs.ts)**, successfully transpiling custom-grammar JDS source into FKIR graphs with inferred capabilities and 9 auto-generated lifecycle events.
+  - Initialized the JDS Standard Library under **[`specs/stdlib/`](file:///home/nemesis/project/trading-workspace/janus/specs/stdlib/)** including:
+    - [Price.jds](file:///home/nemesis/project/trading-workspace/janus/specs/stdlib/market/Price.jds): Atomic bid/ask, spread, and transaction size values entity.
+    - [Candle.jds](file:///home/nemesis/project/trading-workspace/janus/specs/stdlib/market/Candle.jds): OHLCV candle range definition with forming/closed lifecycles.
+    - [OrderBook.jds](file:///home/nemesis/project/trading-workspace/janus/specs/stdlib/market/OrderBook.jds): Level 2 orderbook depth queues.
+  - Updated [000.2-financial-kernel-specification.md](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/000.2-financial-kernel-specification.md) and [000.3-meta-model-specification.md](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/000.3-meta-model-specification.md) to implement a **Knowledge-Centric Metamodeling stack** (M3->M0) over EMF-style object structures:
+    - Defines M3 primitives around Uncertainty Reduction and Knowledge Acquisition: `Concept`, `Observation`, `Inference`, `Knowledge`, `Decision`, and `Projection`.
+    - Restructures M0 into a 4-layered cascading knowledge graph (Observation Graph -> Inference Graph -> Knowledge Graph -> Decision Graph).
+  - Created language-agnostic JSON Schema **[`specs/kernel.schema.json`](file:///home/nemesis/project/trading-workspace/janus/specs/kernel.schema.json)** defining the model specification format for the Janus Financial Kernel layers.
+  - Created [000.4-metaconstraint-logic-expression.md](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/000.4-metaconstraint-logic-expression.md) defining the canonical Abstract Syntax Tree (AST) grammar layout for representing and optimizing constraint logic proofs.
+  - Created [000.5-concept-model.md](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/000.5-concept-model.md) defining the state transition charts and uncertainty coefficients of the five Epistemological Stages.
+
+
+
+
+
+
+
+
+
+
+

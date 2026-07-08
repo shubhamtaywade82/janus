@@ -29,6 +29,7 @@ import {
 } from "./knn-supertrend";
 import { alertEngine } from "./alert-engine";
 import { buildSignalPtaContext } from "./pta-helpers";
+import { computeMarketFeatures } from "./market-features";
 import {
   ema,
   calculateRSI,
@@ -82,7 +83,11 @@ export async function runAnalysisForSymbol(binanceSymbol: string) {
     // Manual override pins strategy when regime auto-switch is disabled
     const strategy = (autoSwitchEnabled ? regimeVal.strategy : (manualStrategy ?? regimeVal.strategy)) as StrategyType;
 
-    const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = await getConfluenceInput(binanceSymbol);
+    const [confluenceInput, features] = await Promise.all([
+      getConfluenceInput(binanceSymbol),
+      computeMarketFeatures(binanceSymbol).catch(() => null),
+    ]);
+    const { obMetrics, tapeMetrics, prices, volumes, highs, lows, extraMetrics } = confluenceInput;
     const currentPrice = prices[prices.length - 1] || 0;
 
     let knnSnapshot: KnnSupertrendSnapshot | null = null;
@@ -91,11 +96,12 @@ export async function runAnalysisForSymbol(binanceSymbol: string) {
       if (knnSnapshot) signalEvents.emit("knn-snapshot", { symbol: binanceSymbol, snapshot: knnSnapshot });
     }
 
-    let signalData = await evaluateSymbolSignalAsync(pair.coindcx, strategy, currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraMetrics);
+    const extraWithFeatures = features ? { ...extraMetrics, marketFeatures: features } : extraMetrics;
+    let signalData = await evaluateSymbolSignalAsync(pair.coindcx, strategy, currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraWithFeatures);
 
     // Evaluate Alpha Protocol in parallel
     if (strategy !== "alpha_protocol") {
-      const alphaSignalData = await evaluateSymbolSignalAsync(pair.coindcx, "alpha_protocol", currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraMetrics);
+      const alphaSignalData = await evaluateSymbolSignalAsync(pair.coindcx, "alpha_protocol", currentPrice, prices, volumes, highs, lows, obMetrics, tapeMetrics, extraWithFeatures);
       // If Alpha Protocol finds a strong setup, it overrides the base regime strategy for this tick
       if (alphaSignalData.direction !== "neutral" && Number(alphaSignalData.compositeScore) >= 75) {
         signalData = alphaSignalData;
@@ -114,6 +120,24 @@ export async function runAnalysisForSymbol(binanceSymbol: string) {
         obSpreadPct: obMetrics?.spreadPercent ?? 0,
         tapeDelta: tapeMetrics?.delta ?? 0,
         makerRatio: tapeMetrics?.makerRatio ?? 0.5,
+        features: features ? {
+          atr: features.atr.value,
+          atrState: features.atr.state,
+          adx: features.adx.value,
+          adxTrend: features.adx.trendState,
+          adxDirection: features.adx.direction,
+          emaCrossover: features.ema.crossover,
+          emaAlignment: features.ema.alignment,
+          rsi: features.rsi.value,
+          rsiState: features.rsi.state,
+          macdCrossover: features.macd.crossover,
+          volatilityState: features.volatility.state,
+          session: features.session.activeSession,
+          cvdTrend: features.cvd.trend,
+          cvdDivergence: features.cvd.divergence,
+          oiTrend: features.oi.trend,
+          fundingState: features.funding.state,
+        } : null,
       },
     });
 

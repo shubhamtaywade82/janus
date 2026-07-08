@@ -1,0 +1,23 @@
+module stdlib.relationship.EvidenceArtifact@1.0.0;
+
+object EvidenceArtifact {
+    facets {
+        domain: Meta;
+        spatial: Point;
+        lifecycle: Immutable;
+        execution: Observational;
+    }
+
+    data {
+        source: string;
+        type: string;
+        value: float;
+        confidence: float;
+        capturedAt: timestamp;
+    }
+
+    lifecycle {
+        states: [RECORDED];
+        outcomes: [];
+    }
+}

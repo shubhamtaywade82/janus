@@ -1,0 +1,25 @@
+module stdlib.market.Price@1.0.0;
+
+object Price {
+    facets {
+        domain: Market;
+        spatial: Point;
+        lifecycle: Ephemeral;
+        execution: Observational;
+    }
+
+    data {
+        bid: float;
+        ask: float;
+        lastTradePrice: float;
+        lastTradeSize: float;
+        midPrice: float;
+        spread: float;
+        timestamp: timestamp;
+    }
+
+    lifecycle {
+        states: [LIVE, DECAYED];
+        outcomes: [SUPERSEDED, EXPIRED];
+    }
+}

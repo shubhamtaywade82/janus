@@ -13,6 +13,7 @@
 
 // ─── Types ───
 import { getCachedDailyTrend, dailyTrendScore } from "./trend-bias";
+import type { MarketFeatures } from "./market-features";
 export interface ConfluenceScore {
   symbol: string;
   microScore: number;   // 0-100
@@ -103,31 +104,38 @@ export function calculateMicroScore(
 // ─── Intraday Scoring (45%) ───
 export function calculateIntraScore(
   prices: number[],
-  volumes: number[]
+  volumes: number[],
+  features?: { rsi?: { value: number }; ema?: { ema20: number; ema50: number; crossover: string } }
 ): number {
   if (prices.length < 20) return 50;
 
   let score = 50;
 
-  // RSI calculation (14-period)
-  const rsi = calculateRSI(prices, 14);
-  const rsiScore = rsi > 70 ? -15 : rsi < 30 ? 15 : rsi > 50 ? 5 : -5;
+  // RSI (pre-computed from feature engine when available, inline fallback)
+  const rsiVal = features?.rsi?.value ?? calculateRSI(prices, 14);
+  const rsiScore = rsiVal > 70 ? -15 : rsiVal < 30 ? 15 : rsiVal > 50 ? 5 : -5;
   score += rsiScore;
 
-  // EMA crossover (20 vs 50)
-  const ema20 = calculateEMA(prices, 20);
-  const ema50 = calculateEMA(prices, 50);
-  if (ema20.length > 0 && ema50.length > 0) {
-    const currentEma20 = ema20[ema20.length - 1];
-    const currentEma50 = ema50[ema50.length - 1];
-    if (currentEma20 > currentEma50) score += 10;
+  // EMA crossover (pre-computed from feature engine when available, inline fallback)
+  if (features?.ema) {
+    if (features.ema.crossover === "BULLISH") score += 15;
+    else if (features.ema.crossover === "BEARISH") score -= 15;
+    else if (features.ema.ema20 > features.ema.ema50) score += 10;
     else score -= 10;
+  } else {
+    const ema20 = calculateEMA(prices, 20);
+    const ema50 = calculateEMA(prices, 50);
+    if (ema20.length > 0 && ema50.length > 0) {
+      const currentEma20 = ema20[ema20.length - 1];
+      const currentEma50 = ema50[ema50.length - 1];
+      if (currentEma20 > currentEma50) score += 10;
+      else score -= 10;
 
-    // Golden/Death cross proximity
-    const prevEma20 = ema20[ema20.length - 2] || currentEma20;
-    const prevEma50 = ema50[ema50.length - 2] || currentEma50;
-    if (prevEma20 <= prevEma50 && currentEma20 > currentEma50) score += 15; // golden cross
-    if (prevEma20 >= prevEma50 && currentEma20 < currentEma50) score -= 15; // death cross
+      const prevEma20 = ema20[ema20.length - 2] || currentEma20;
+      const prevEma50 = ema50[ema50.length - 2] || currentEma50;
+      if (prevEma20 <= prevEma50 && currentEma20 > currentEma50) score += 15;
+      if (prevEma20 >= prevEma50 && currentEma20 < currentEma50) score -= 15;
+    }
   }
 
   // Volume-weighted momentum
@@ -154,67 +162,67 @@ export function calculateIntraScore(
 // ─── Swing Scoring with Daily Trend Bias (35%) ───
 export function calculateSwingScore(
   prices: number[],
-  dailyTrendScore?: number
+  dailyTrendScore?: number,
+  features?: { adx?: { value: number }; ema?: { ema50: number; ema200: number } }
 ): number {
   if (dailyTrendScore !== undefined) {
-    // Use true multi-day trend bias as the base (50–100 scale),
-    // then supplement with intraday support/resistance and ADX.
     let score = dailyTrendScore;
 
-    // Support/Resistance proximity (intraday, last 50 candles)
     const recentHigh = Math.max(...prices.slice(-50));
     const recentLow = Math.min(...prices.slice(-50));
     const range = recentHigh - recentLow;
     const currentPrice = prices[prices.length - 1];
     if (range > 0) {
       const positionInRange = (currentPrice - recentLow) / range;
-      if (positionInRange > 0.8) score -= 10; // near resistance
-      else if (positionInRange < 0.2) score += 10; // near support
+      if (positionInRange > 0.8) score -= 10;
+      else if (positionInRange < 0.2) score += 10;
     }
 
-    // Trend strength (ADX approximation)
-    const adx = calculateADXApproximation(prices, 14);
-    if (adx > 25) score += 5; // strong trend
+    const adxVal = features?.adx?.value ?? calculateADXApproximation(prices, 14);
+    if (adxVal > 25) score += 5;
 
     return Math.max(0, Math.min(100, score));
   }
 
-  // ─── Fallback: legacy 1-minute "swing" scoring (kept for backward compat) ───
+  // ─── Fallback: legacy 1-minute "swing" scoring ───
   if (prices.length < 50) return 50;
 
   let score = 50;
 
-  // Long-term trend (50 EMA vs 200 EMA) — NOTE: these are 50-min / 200-min on 1m data
-  const ema50 = calculateEMA(prices, 50);
-  const ema200 = calculateEMA(prices, Math.min(200, prices.length));
-  if (ema50.length > 0 && ema200.length > 0) {
-    if (ema50[ema50.length - 1] > ema200[ema200.length - 1]) score += 15;
-    else score -= 15;
-  }
-
-  // Market regime (bull/bear) — NOTE: SMA50 on 1m data = 50-minute average
-  const sma50 = calculateSMA(prices, 50);
   const currentPrice = prices[prices.length - 1];
-  if (sma50.length > 0) {
-    if (currentPrice > sma50[sma50.length - 1] * 1.05) score += 10; // strong bull
-    else if (currentPrice > sma50[sma50.length - 1]) score += 5; // mild bull
-    else if (currentPrice < sma50[sma50.length - 1] * 0.95) score -= 10; // strong bear
-    else score -= 5; // mild bear
+
+  // Long-term trend (pre-computed EMA when available)
+  if (features?.ema) {
+    if (features.ema.ema50 > features.ema.ema200) score += 15;
+    else score -= 15;
+  } else {
+    const ema50 = calculateEMA(prices, 50);
+    const ema200 = calculateEMA(prices, Math.min(200, prices.length));
+    if (ema50.length > 0 && ema200.length > 0) {
+      if (ema50[ema50.length - 1] > ema200[ema200.length - 1]) score += 15;
+      else score -= 15;
+    }
   }
 
-  // Support/Resistance proximity
+  const sma50 = calculateSMA(prices, 50);
+  if (sma50.length > 0) {
+    if (currentPrice > sma50[sma50.length - 1] * 1.05) score += 10;
+    else if (currentPrice > sma50[sma50.length - 1]) score += 5;
+    else if (currentPrice < sma50[sma50.length - 1] * 0.95) score -= 10;
+    else score -= 5;
+  }
+
   const recentHigh = Math.max(...prices.slice(-50));
   const recentLow = Math.min(...prices.slice(-50));
   const range = recentHigh - recentLow;
   if (range > 0) {
     const positionInRange = (currentPrice - recentLow) / range;
-    if (positionInRange > 0.8) score -= 10; // near resistance
-    else if (positionInRange < 0.2) score += 10; // near support
+    if (positionInRange > 0.8) score -= 10;
+    else if (positionInRange < 0.2) score += 10;
   }
 
-  // Trend strength (ADX approximation)
-  const adx = calculateADXApproximation(prices, 14);
-  if (adx > 25) score += 5; // strong trend
+  const adxVal = features?.adx?.value ?? calculateADXApproximation(prices, 14);
+  if (adxVal > 25) score += 5;
 
   return Math.max(0, Math.min(100, score));
 }
@@ -307,18 +315,20 @@ export function analyzeConfluence(
     bidAskImbalance?: number;
     liquidityRemoved?: number;
     liquidityAdded?: number;
+    marketFeatures?: MarketFeatures;
   },
   strategyWeights?: { micro: number; intra: number; swing: number },
   strategyThreshold?: number
 ): ConfluenceScore {
+  const features = extraMetrics?.marketFeatures;
   const microScore = calculateMicroScore(orderBook, tradeTape);
-  const intraScore = calculateIntraScore(prices, volumes);
+  const intraScore = calculateIntraScore(prices, volumes, features ? { rsi: { value: features.rsi.value }, ema: { ema20: features.ema.ema20, ema50: features.ema.ema50, crossover: features.ema.crossover } } : undefined);
 
-  // Fetch true multi-day trend bias (daily SMA50/200) instead of relying on 1-minute data
   const dailyTrend = getCachedDailyTrend(symbol);
   const swingScore = calculateSwingScore(
     prices,
-    dailyTrend ? dailyTrendScore(dailyTrend) : undefined
+    dailyTrend ? dailyTrendScore(dailyTrend) : undefined,
+    features ? { adx: { value: features.adx.value }, ema: { ema50: features.ema.ema50, ema200: features.ema.ema200 } } : undefined
   );
 
   const { composite, direction } = calculateCompositeScore(
@@ -328,9 +338,6 @@ export function analyzeConfluence(
     strategyWeights ?? WEIGHTS,
     strategyThreshold ?? DEFAULT_THRESHOLD
   );
-
-  const ema20 = calculateEMA(prices, 20);
-  const ema50 = calculateEMA(prices, 50);
 
   return {
     symbol,
@@ -346,13 +353,13 @@ export function analyzeConfluence(
       spreadPercent: orderBook.spreadPercent,
       imbalance: orderBook.imbalance,
       vwap: calculateVWAP(prices, volumes),
-      rsi: calculateRSI(prices, 14),
-      ema20: ema20[ema20.length - 1] || prices[prices.length - 1],
-      ema50: ema50[ema50.length - 1] || prices[prices.length - 1],
-      trendStrength: calculateADXApproximation(prices, 14),
+      rsi: features?.rsi?.value ?? calculateRSI(prices, 14),
+      ema20: features?.ema?.ema20 ?? calculateEMA(prices, 20).slice(-1)[0] ?? prices[prices.length - 1],
+      ema50: features?.ema?.ema50 ?? calculateEMA(prices, 50).slice(-1)[0] ?? prices[prices.length - 1],
+      trendStrength: features?.adx?.value ?? calculateADXApproximation(prices, 14),
       sweepScore: extraMetrics?.sweepScore,
       absorptionScore: extraMetrics?.absorptionScore,
-      volatilityRegime: extraMetrics?.volatilityRegime,
+      volatilityRegime: extraMetrics?.volatilityRegime ?? features?.volatility?.state,
       bidAskImbalance: extraMetrics?.bidAskImbalance,
       liquidityRemoved: extraMetrics?.liquidityRemoved,
       liquidityAdded: extraMetrics?.liquidityAdded,

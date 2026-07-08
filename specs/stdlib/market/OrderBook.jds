@@ -1,0 +1,25 @@
+module stdlib.market.OrderBook@1.0.0;
+
+import stdlib.market.Price@^1.0.0;
+
+object OrderBook {
+    facets {
+        domain: Market;
+        spatial: Level2;
+        lifecycle: Ephemeral;
+        execution: Observational;
+    }
+
+    data {
+        bids: list(PriceDepthLevel);
+        asks: list(PriceDepthLevel);
+        spread: float;
+        imbalance: float;
+        timestamp: timestamp;
+    }
+
+    lifecycle {
+        states: [LIVE, DECAYED];
+        outcomes: [SUPERSEDED];
+    }
+}

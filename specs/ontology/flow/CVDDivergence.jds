@@ -1,0 +1,37 @@
+module ontology.flow.CVDDivergence@1.0.0;
+
+import ontology.lifecycle.Observable@^1.0.0;
+
+object CVDDivergence {
+    facets {
+        domain: FlowImbalance;
+        spatial: Point;
+        lifecycle: Observable;
+        execution: Observational;
+    }
+
+    data {
+        type: enum(CLASSIC_BULLISH, CLASSIC_BEARISH, HIDDEN_BULLISH, HIDDEN_BEARISH);
+        priceLow: float;
+        priceHigh: float;
+        cvdLow: float;
+        cvdHigh: float;
+        strength: float;
+        timeframe: string;
+        detectedAt: timestamp;
+    }
+
+    lifecycle {
+        states: [FORMING, DETECTED, ACTIVE, RESOLVED, ARCHIVED];
+        outcomes: [CONFIRMED, INVALIDATED, EXPIRED];
+    }
+
+    affordances {
+        confluence;
+        context;
+    }
+
+    evidence_requirements {
+        PRICE_CVD_DIVERGENCE required_for DETECTED;
+    }
+}

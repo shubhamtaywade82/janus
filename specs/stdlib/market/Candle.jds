@@ -1,0 +1,27 @@
+module stdlib.market.Candle@1.0.0;
+
+import stdlib.market.Price@^1.0.0;
+
+object Candle {
+    facets {
+        domain: Market;
+        spatial: Range;
+        lifecycle: Finite;
+        execution: Observational;
+    }
+
+    data {
+        open: float;
+        high: float;
+        low: float;
+        close: float;
+        volume: float;
+        closedAt: timestamp;
+        timeframe: string;
+    }
+
+    lifecycle {
+        states: [FORMING, CLOSED];
+        outcomes: [BULLISH, BEARISH, DOJI];
+    }
+}

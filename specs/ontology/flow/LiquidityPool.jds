@@ -1,0 +1,38 @@
+module ontology.flow.LiquidityPool@1.0.0;
+
+import ontology.lifecycle.Finite@^2.0.0;
+
+object LiquidityPool {
+    facets {
+        domain: Liquidity;
+        spatial: Zone;
+        lifecycle: Finite;
+        execution: Observational;
+    }
+
+    data {
+        upperPrice: float;
+        lowerPrice: float;
+        type: enum(SUPPORT, RESISTANCE, BID_WALL, ASK_WALL);
+        depth: float;
+        orderCount: integer;
+        strength: float;
+        detectedAt: timestamp;
+    }
+
+    lifecycle {
+        states: [FORMING, ACTIVE, WEAKENING, SWEPT, RESOLVED, ARCHIVED];
+        outcomes: [SWEPT, ABANDONED, REINFORCED, EXPIRED];
+    }
+
+    affordances {
+        confluence;
+        context;
+        invalidation;
+    }
+
+    evidence_requirements {
+        ORDER_CLUSTER required_for ACTIVE;
+        PRICE_ABSORPTION required_for SWEPT;
+    }
+}

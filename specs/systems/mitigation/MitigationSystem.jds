@@ -1,0 +1,34 @@
+module systems.mitigation.MitigationSystem@1.0.0;
+
+import ontology.imbalance.FairValueGap@^1.2.0;
+import relationship.causal.MitigatedBy@^1.0.0;
+
+system MitigationSystem {
+    type: StatelessSystem;
+    description: "Evaluates price action against active FVG entities to detect and register mitigation.";
+    
+    inputs {
+        PriceTick;
+        ontology.imbalance.FairValueGap filter "object.state == 'ACTIVE'";
+    }
+
+    outputs {
+        events {
+            MitigationStarted {
+                objectId: string;
+                price: float;
+                timestamp: timestamp;
+            }
+            MitigationCompleted {
+                objectId: string;
+                price: float;
+                timestamp: timestamp;
+            }
+        }
+    }
+
+    laws {
+        physics.temporal.Law_of_Causality;
+        physics.ecs.Law_of_Immutability;
+    }
+}

@@ -1,0 +1,40 @@
+module ontology.flow.OrderBlock@1.0.0;
+
+import ontology.lifecycle.Finite@^2.0.0;
+import systems.mitigation.MitigationSystem@^1.0.0;
+
+object OrderBlock {
+    facets {
+        domain: FlowImbalance;
+        spatial: Zone;
+        lifecycle: Finite;
+        execution: Tradable;
+    }
+
+    data {
+        upperPrice: float;
+        lowerPrice: float;
+        direction: enum(BULLISH, BEARISH);
+        strength: float;
+        candleCount: integer;
+        volume: float;
+        detectedAt: timestamp;
+    }
+
+    lifecycle {
+        states: [FORMING, DETECTED, ACTIVE, BREACHED, RESOLVED, ARCHIVED];
+        outcomes: [MITIGATED, INVALIDATED, EXPIRED, SWEPT];
+    }
+
+    affordances {
+        entry;
+        confluence;
+        target;
+        invalidation;
+    }
+
+    evidence_requirements {
+        VOLUME_CLUSTER required_for DETECTED;
+        PRICE_OVERLAP required_for BREACHED;
+    }
+}
