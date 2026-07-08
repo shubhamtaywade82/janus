@@ -1,5 +1,5 @@
-import { BinanceKline } from "../binance";
-import { RSIFeature } from "./types";
+import type { BinanceKline } from "../binance";
+import type { RSIFeature } from "./types";
 
 export function computeRSI(klines: BinanceKline[], period: number = 14): RSIFeature {
   const defaultFeature: RSIFeature = {

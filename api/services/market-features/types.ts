@@ -1,4 +1,4 @@
-import { DailyTrendBias } from "../trend-bias";
+import type { DailyTrendBias } from "../trend-bias";
 
 export interface ATRFeature {
   value: number;

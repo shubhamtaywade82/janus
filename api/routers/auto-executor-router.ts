@@ -7,7 +7,7 @@ import { observable } from "@trpc/server/observable";
 import { globalAutoExecutor, autoExecutorEvents } from "../services/auto-executor";
 import { globalKillSwitch, killSwitchEvents } from "../services/kill-switch";
 import { MIN_SYSTEM_LEVERAGE, MAX_SYSTEM_LEVERAGE } from "../../contracts/constants";
-import { computeMetrics } from "../services/performance-tracker";
+import { computeMetrics, computeSymbolRegimeMetrics } from "../services/performance-tracker";
 import {
   resetPaperWallet,
   getPaperLedger,
@@ -252,6 +252,12 @@ export const autoExecutorRouter = createRouter({
   metrics: authedQuery
     .query(async ({ ctx }) => {
       return computeMetrics(ctx.user.id);
+    }),
+
+  // ─── Win rate / R / PnL% breakdown by symbol × regime ───
+  metricsBySymbolRegime: authedQuery
+    .query(async ({ ctx }) => {
+      return computeSymbolRegimeMetrics(ctx.user.id);
     }),
 
   // ─── Equity curve (last N snapshots) ───

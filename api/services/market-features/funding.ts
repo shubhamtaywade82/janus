@@ -1,5 +1,5 @@
-import { InstrumentState } from "../market-state";
-import { FundingFeature } from "./types";
+import type { InstrumentState } from "../market-state";
+import type { FundingFeature } from "./types";
 
 // In-memory rolling cache of funding rates to compute statistical z-score
 const fundingHistory = new Map<string, number[]>();

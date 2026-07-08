@@ -1,4 +1,4 @@
-import { FinancialKernelIR, MarketObjectDefinition } from './fkir';
+import type { FinancialKernelIR } from './fkir';
 
 export interface CompilerPass {
   name: string;

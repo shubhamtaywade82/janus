@@ -1,5 +1,5 @@
-import { InstrumentState } from "../market-state";
-import { OrderBookFeature } from "./types";
+import type { InstrumentState } from "../market-state";
+import type { OrderBookFeature } from "./types";
 
 export function computeOrderBook(state: InstrumentState): OrderBookFeature {
   const defaultFeature: OrderBookFeature = {

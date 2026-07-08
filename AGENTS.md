@@ -440,6 +440,13 @@ Whenever you introduce a new feature, fix a bug, or change system behaviors, log
   - Created [000.4-metaconstraint-logic-expression.md](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/000.4-metaconstraint-logic-expression.md) defining the canonical Abstract Syntax Tree (AST) grammar layout for representing and optimizing constraint logic proofs.
   - Created [000.5-concept-model.md](file:///home/nemesis/project/trading-workspace/janus/docs/janus-spec/000.5-concept-model.md) defining the state transition charts and uncertainty coefficients of the five Epistemological Stages.
 
+### [2026-07-08] Elegant Chart Price Tracker Dot Styling
+* **Redesigned Last Price Dot**: Refined the appearance of the price tracker dot rendered at the center of the current forming candle in [LastPriceLinePrimitive.ts](file:///home/nemesis/project/trading-workspace/janus/src/lib/chart/primitives/LastPriceLinePrimitive.ts).
+  - Shrank the central dot radius from 3.5px to 2.0px and filled it with solid white (`#ffffff`) for a high-contrast, premium, and clean appearance.
+  - Added a thin 1.0px border of the active line's color (green or red) around the white dot.
+  - Reduced the outer glow ring radius from 6.5px to 4.5px and stroke thickness to 1px.
+* **Hex Transparency Fix**: Added a robust `setAlpha` helper utility to parse hex colors as well as rgb/rgba strings. Previously, the replacing regex did not match hex colors (which represent the theme colors), causing the outer glow ring to be drawn with 100% opacity, making it appear excessively large and distracting. Enforced `0.25` alpha transparency for the outer ring using the helper.
+
 
 
 

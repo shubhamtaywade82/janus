@@ -1,6 +1,6 @@
-import { InstrumentState } from "../market-state";
-import { BinanceKline } from "../binance";
-import { OIFeature } from "./types";
+import type { InstrumentState } from "../market-state";
+import type { BinanceKline } from "../binance";
+import type { OIFeature } from "./types";
 
 export function computeOI(state: InstrumentState, klines: BinanceKline[]): OIFeature {
   const defaultFeature: OIFeature = {

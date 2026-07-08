@@ -12,8 +12,8 @@ export class JanusSpecParser {
 
     let insideObject = false;
     let objectName = '';
-    let objectFacets: MarketObjectDefinition['facets'] = { domain: [], spatial: [], lifecycle: [], execution: [] };
-    let objectData: Record<string, any> = {};
+    const objectFacets: MarketObjectDefinition['facets'] = { domain: [], spatial: [], lifecycle: [], execution: [] };
+    const objectData: Record<string, any> = {};
     let objectStates: string[] = [];
     let objectOutcomes: string[] = [];
     const objectTransitions: StateTransition[] = [];

@@ -1,5 +1,5 @@
-import { BinanceKline } from "../binance";
-import { CorrelationFeature } from "./types";
+import type { BinanceKline } from "../binance";
+import type { CorrelationFeature } from "./types";
 
 export function computeCorrelation(
   symbol: string,

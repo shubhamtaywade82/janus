@@ -1,5 +1,5 @@
-import { InstrumentState } from "../market-state";
-import { LiquidityFeature } from "./types";
+import type { InstrumentState } from "../market-state";
+import type { LiquidityFeature } from "./types";
 
 export function computeLiquidity(state: InstrumentState): LiquidityFeature {
   const defaultFeature: LiquidityFeature = {

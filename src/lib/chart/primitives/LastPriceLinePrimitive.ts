@@ -1,6 +1,26 @@
 import type { ISeriesPrimitive, SeriesAttachedParameter, Time } from "lightweight-charts";
 import type { CanvasRenderingTarget2D } from "fancy-canvas";
 
+function setAlpha(color: string, alpha: number): string {
+  if (color.startsWith("#")) {
+    let hex = color.slice(1);
+    if (hex.length === 3) {
+      hex = hex.split("").map(c => c + c).join("");
+    }
+    const r = parseInt(hex.substring(0, 2), 16);
+    const g = parseInt(hex.substring(2, 4), 16);
+    const b = parseInt(hex.substring(4, 6), 16);
+    return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+  }
+  if (color.startsWith("rgb")) {
+    const matches = color.match(/\d+(\.\d+)?/g);
+    if (matches && matches.length >= 3) {
+      return `rgba(${matches[0]}, ${matches[1]}, ${matches[2]}, ${alpha})`;
+    }
+  }
+  return color;
+}
+
 export class LastPriceLinePrimitive implements ISeriesPrimitive<Time> {
   private _param: SeriesAttachedParameter<Time> | null = null;
   private _price: number = 0;
@@ -57,17 +77,22 @@ export class LastPriceLinePrimitive implements ISeriesPrimitive<Time> {
                 ctx.lineWidth = 1.5 * hpr; // scale line width
                 ctx.stroke();
 
-                // Draw a solid dot at the center of the current forming candle
+                // Draw a solid white dot at the center of the current forming candle
                 ctx.beginPath();
-                ctx.arc(bx, by, 3.5 * Math.min(hpr, vpr), 0, 2 * Math.PI);
-                ctx.fillStyle = self._color;
+                ctx.arc(bx, by, 2.0 * Math.min(hpr, vpr), 0, 2 * Math.PI);
+                ctx.fillStyle = "#ffffff";
                 ctx.fill();
 
-                // Draw a subtle outer glow ring for a premium indicator look
+                // Draw a thin stroke around the white dot in the theme color
+                ctx.lineWidth = 1.0 * Math.min(hpr, vpr);
+                ctx.strokeStyle = self._color;
+                ctx.stroke();
+
+                // Draw a subtle, thin outer glow ring for a premium indicator look
                 ctx.beginPath();
-                ctx.arc(bx, by, 6.5 * Math.min(hpr, vpr), 0, 2 * Math.PI);
-                ctx.strokeStyle = self._color.replace(/rgb\(|rgba\(/, "rgba(").replace(/\)/, ", 0.25)");
-                ctx.lineWidth = 1.5 * hpr;
+                ctx.arc(bx, by, 4.5 * Math.min(hpr, vpr), 0, 2 * Math.PI);
+                ctx.strokeStyle = setAlpha(self._color, 0.25);
+                ctx.lineWidth = 1.0 * hpr;
                 ctx.stroke();
 
                 ctx.restore();

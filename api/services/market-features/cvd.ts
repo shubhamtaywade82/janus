@@ -1,5 +1,5 @@
-import { InstrumentState } from "../market-state";
-import { CVDFeature } from "./types";
+import type { InstrumentState } from "../market-state";
+import type { CVDFeature } from "./types";
 
 export function computeCVD(state: InstrumentState): CVDFeature {
   const defaultFeature: CVDFeature = {
@@ -17,7 +17,6 @@ export function computeCVD(state: InstrumentState): CVDFeature {
     };
   }
 
-  const length = ticks.length;
   const cvdValues = ticks.map(t => t.cumulative);
   const priceValues = ticks.map(t => t.price);
 

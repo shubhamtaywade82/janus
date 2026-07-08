@@ -1,4 +1,4 @@
-import { SessionFeature } from "./types";
+import type { SessionFeature } from "./types";
 
 export function computeSession(time: Date = new Date()): SessionFeature {
   const hour = time.getUTCHours();

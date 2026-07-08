@@ -1,5 +1,5 @@
-import { BinanceKline } from "../binance";
-import { ADXFeature } from "./types";
+import type { BinanceKline } from "../binance";
+import type { ADXFeature } from "./types";
 
 export function computeADX(klines: BinanceKline[], period: number = 14): ADXFeature {
   const defaultFeature: ADXFeature = {

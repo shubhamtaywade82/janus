@@ -1,5 +1,5 @@
-import { BinanceKline } from "../binance";
-import { MACDFeature } from "./types";
+import type { BinanceKline } from "../binance";
+import type { MACDFeature } from "./types";
 
 export function computeMACD(
   klines: BinanceKline[],

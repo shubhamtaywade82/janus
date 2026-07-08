@@ -112,6 +112,86 @@ export async function computeMetrics(userId: number): Promise<PerformanceMetrics
   };
 }
 
+export interface SymbolRegimeBreakdown {
+  symbol: string;
+  strategyType: string;
+  trades: number;
+  wins: number;
+  losses: number;
+  winRate: number;
+  totalPnl: number;
+  avgPnlPct: number;   // realizedPnl / margin, averaged
+  avgR: number | null; // realizedPnl / initial risk (|entry-SL| * size), averaged where SL was set
+}
+
+/** Win rate / avg R / avg PnL% broken down by symbol × strategyType, for validating
+ * whether a given regime actually has an edge on a given pair before tuning configs. */
+export async function computeSymbolRegimeMetrics(userId: number): Promise<SymbolRegimeBreakdown[]> {
+  const db = getDb();
+  const closed = await db
+    .select({
+      symbol: positions.symbol,
+      strategyType: positions.strategyType,
+      realizedPnl: positions.realizedPnl,
+      margin: positions.margin,
+      entryPrice: positions.entryPrice,
+      stopLoss: positions.stopLoss,
+      size: positions.size,
+    })
+    .from(positions)
+    .where(and(eq(positions.userId, userId), eq(positions.status, "closed")));
+
+  const groups = new Map<
+    string,
+    { symbol: string; strategyType: string; trades: number; wins: number; losses: number; pnlSum: number; pnlPctSum: number; rSum: number; rCount: number }
+  >();
+
+  for (const pos of closed) {
+    const symbol = pos.symbol;
+    const strategyType = pos.strategyType ?? "unknown";
+    const key = `${symbol}:${strategyType}`;
+    if (!groups.has(key)) {
+      groups.set(key, { symbol, strategyType, trades: 0, wins: 0, losses: 0, pnlSum: 0, pnlPctSum: 0, rSum: 0, rCount: 0 });
+    }
+    const g = groups.get(key)!;
+
+    const pnl = parseFloat(pos.realizedPnl ?? "0");
+    const margin = parseFloat(pos.margin ?? "0");
+    const entryPrice = parseFloat(pos.entryPrice ?? "0");
+    const stopLoss = pos.stopLoss ? parseFloat(pos.stopLoss) : null;
+    const size = parseFloat(pos.size ?? "0");
+
+    g.trades++;
+    g.pnlSum += pnl;
+    if (margin > 0) g.pnlPctSum += pnl / margin;
+    if (pnl > 0) g.wins++;
+    else if (pnl < 0) g.losses++;
+
+    if (stopLoss !== null && size > 0) {
+      const riskPerUnit = Math.abs(entryPrice - stopLoss);
+      const initialRisk = riskPerUnit * size;
+      if (initialRisk > 0) {
+        g.rSum += pnl / initialRisk;
+        g.rCount++;
+      }
+    }
+  }
+
+  return [...groups.values()]
+    .map((g) => ({
+      symbol: g.symbol,
+      strategyType: g.strategyType,
+      trades: g.trades,
+      wins: g.wins,
+      losses: g.losses,
+      winRate: g.trades > 0 ? g.wins / g.trades : 0,
+      totalPnl: g.pnlSum,
+      avgPnlPct: g.trades > 0 ? g.pnlPctSum / g.trades : 0,
+      avgR: g.rCount > 0 ? g.rSum / g.rCount : null,
+    }))
+    .sort((a, b) => b.trades - a.trades);
+}
+
 // Start hourly equity snapshot timer
 let snapshotTimer: ReturnType<typeof setInterval> | null = null;
 

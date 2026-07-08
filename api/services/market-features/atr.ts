@@ -1,5 +1,5 @@
-import { BinanceKline } from "../binance";
-import { ATRFeature } from "./types";
+import type { BinanceKline } from "../binance";
+import type { ATRFeature } from "./types";
 
 export function computeATR(klines: BinanceKline[], period: number = 14): ATRFeature {
   const defaultFeature: ATRFeature = {

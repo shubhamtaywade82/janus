@@ -1,5 +1,5 @@
-import { BinanceKline } from "../binance";
-import { VolatilityFeature } from "./types";
+import type { BinanceKline } from "../binance";
+import type { VolatilityFeature } from "./types";
 
 export function computeVolatility(klines: BinanceKline[], period: number = 20): VolatilityFeature {
   const defaultFeature: VolatilityFeature = {

@@ -1,6 +1,6 @@
-import { BinanceKline } from "../binance";
-import { TradeTick } from "../market-state";
-import { VolumeFeature } from "./types";
+import type { BinanceKline } from "../binance";
+import type { TradeTick } from "../market-state";
+import type { VolumeFeature } from "./types";
 
 export function computeVolume(klines: BinanceKline[], tradeTicks?: TradeTick[]): VolumeFeature {
   const defaultFeature: VolumeFeature = {
@@ -51,7 +51,6 @@ export function computeVolume(klines: BinanceKline[], tradeTicks?: TradeTick[]):
     const high = parseFloat(lastKline.high);
     const low = parseFloat(lastKline.low);
     const close = parseFloat(lastKline.close);
-    const open = parseFloat(lastKline.open);
 
     const range = high - low;
     if (range > 0) {

@@ -1,5 +1,5 @@
-import { BinanceKline } from "../binance";
-import { EMAFeature } from "./types";
+import type { BinanceKline } from "../binance";
+import type { EMAFeature } from "./types";
 
 export function computeEMA(klines: BinanceKline[]): EMAFeature {
   const defaultFeature: EMAFeature = {

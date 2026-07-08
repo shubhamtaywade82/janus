@@ -16,7 +16,7 @@ import { computeVolatility } from "./volatility";
 import { computeLiquidity } from "./liquidity";
 import { computeSession } from "./session";
 import { computeCorrelation } from "./correlation";
-import { MarketFeatures } from "./types";
+import type { MarketFeatures } from "./types";
 
 /**
  * Computes all technical, order book, and derivative market features for a symbol.
@@ -29,9 +29,8 @@ export async function computeMarketFeatures(symbol: string): Promise<MarketFeatu
   const state = marketStateManager.getOrInitializeState(symbolUpper);
 
   // 2. Fetch required klines in parallel (catch errors and return empty arrays for robust fallbacks)
-  const [klines1h, klines1m, btcKlines1h, dailyTrend] = await Promise.all([
+  const [klines1h, btcKlines1h, dailyTrend] = await Promise.all([
     fetchKlines(symbolUpper, "1h", 600).catch(() => []),
-    fetchKlines(symbolUpper, "1m", 200).catch(() => []),
     symbolUpper !== "BTCUSDT"
       ? fetchKlines("BTCUSDT", "1h", 600).catch(() => [])
       : Promise.resolve([]),
