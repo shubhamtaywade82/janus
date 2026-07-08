@@ -468,8 +468,12 @@ export function evaluateAlphaProtocol(
   // 3. Squeeze Setup (High OI, negative funding, upward tape)
   const isSqueeze = (extraMetrics?.fundingRate ?? 0) < -0.001 && (extraMetrics?.openInterestChange ?? 0) > 0.05 && tradeTape.delta > 0;
   
-  // 4. Cascade Setup (Liquidation spike, exhaustion)
-  const isCascade = (extraMetrics?.liquidityRemoved ?? 0) > 100000 && tradeTape.delta > 0 && curRsi < 30; // proxy for liquidations
+  // 4. Cascade Setup (Liquidation spike, exhaustion) — direction follows which
+  // side actually cascaded (net delta + RSI extreme), not hardcoded to long.
+  const liquidationSpike = (extraMetrics?.liquidityRemoved ?? 0) > 100000;
+  const isLongCascade = liquidationSpike && tradeTape.delta > 0 && curRsi < 30; // shorts liquidated, bounce expected
+  const isShortCascade = liquidationSpike && tradeTape.delta < 0 && curRsi > 70; // longs liquidated, reversal down expected
+  const isCascade = isLongCascade || isShortCascade;
 
   if (isSqueeze) {
     score = 85;
@@ -477,8 +481,8 @@ export function evaluateAlphaProtocol(
     activeTrigger = "squeeze";
   } else if (isCascade) {
     score = 85;
-    direction = "long";
-    activeTrigger = "cascade";
+    direction = isLongCascade ? "long" : "short";
+    activeTrigger = isLongCascade ? "cascade_long" : "cascade_short";
   } else if (currentPrice > recentHigh && curRsi > 50) {
     // Breakout logic
     score = 80;

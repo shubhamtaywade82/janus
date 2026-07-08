@@ -49,6 +49,15 @@ export const REGIME_STRATEGY_MAP: Record<RegimeType, StrategyType> = {
 // - grid:        set manually for known consolidation zones
 // - ml_sizing:   set manually to overlay conviction-based sizing on any trend
 
+/** True only when the 4h EMA stack shows a real, meaningfully separated trend
+ * (not flat/crossed) — guards against a 1h ADX spike counter to the higher
+ * timeframe being mislabeled as a confirmed swing trend. */
+function is4hTrendConfirmed(input: RegimeInput): boolean {
+  if (input.ema200_4h === 0) return false;
+  const separationPct = Math.abs(input.ema50_4h - input.ema200_4h) / input.ema200_4h * 100;
+  return separationPct > 0.5;
+}
+
 export function classifyRegime(input: RegimeInput): RegimeType {
   // Priority 1: Extreme volatility — don't scalp chaos
   if (input.atrPct1h > 2.0) return "high_volatility";
