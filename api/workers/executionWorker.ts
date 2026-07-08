@@ -61,7 +61,7 @@ export const executionWorker = new Worker(
               // ─── PTA fill attribution ────────────────────────────────────────
               executionMode: "PAPER",
               fillModel: "ORDERBOOK_WALK",
-              simulatedSlippageBps: "0",
+              simulatedSlippageBps: "5",
               orderSentAt: order.orderSentAt ?? now,
               orderAckedAt: order.orderAckedAt ?? now,
             })
@@ -70,7 +70,10 @@ export const executionWorker = new Worker(
           const mappedSide = order.side.toLowerCase() === "buy" ? "long" : "short";
 
           const qty = new Decimal(order.quantity);
-          const price = new Decimal(executionPrice);
+          const SLIPPAGE_BPS = 5;
+          const isBuy = order.side.toLowerCase() === "buy";
+          const slippageMultiplier = new Decimal(1).add(new Decimal(isBuy ? 1 : -1).mul(SLIPPAGE_BPS).div(10000));
+          const price = new Decimal(executionPrice).mul(slippageMultiplier);
           const leverage = new Decimal(order.leverage);
           const notional = qty.mul(price);
           const marginUsdt = notional.div(leverage);

@@ -20,6 +20,10 @@ export const SUPPORTED_SYMBOLS = [
   "ETHUSDT",
   "SOLUSDT",
   "XRPUSDT",
+  "DOGEUSDT",
+  "ADAUSDT",
+  "AVAXUSDT",
+  "BNBUSDT",
 ] as const;
 
 export type SupportedSymbol = (typeof SUPPORTED_SYMBOLS)[number];

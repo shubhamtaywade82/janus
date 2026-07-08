@@ -227,6 +227,27 @@ export function calculateSwingScore(
   return Math.max(0, Math.min(100, score));
 }
 
+/**
+ * Direction must reflect the weighted consensus of all three sub-scores, not
+ * just intra — intra alone is only 45% of the composite, so picking direction
+ * from it in isolation can flip the trade against a dominant micro+swing lean.
+ */
+function deriveWeightedDirection(
+  microScore: number,
+  intraScore: number,
+  swingScore: number,
+  weights: typeof WEIGHTS
+): "long" | "short" | "neutral" {
+  const weightedSignal =
+    weights.micro * (microScore - 50) +
+    weights.intra * (intraScore - 50) +
+    weights.swing * (swingScore - 50);
+
+  if (weightedSignal > 0) return "long";
+  if (weightedSignal < 0) return "short";
+  return "neutral";
+}
+
 // ─── Composite Score ───
 export function calculateCompositeScore(
   microScore: number,
@@ -242,7 +263,7 @@ export function calculateCompositeScore(
 
   let direction: "long" | "short" | "neutral" = "neutral";
   if (composite >= threshold) {
-    direction = intraScore > 50 ? "long" : "short";
+    direction = deriveWeightedDirection(microScore, intraScore, swingScore, weights);
   }
 
   return { composite: Math.round(composite * 100) / 100, direction };
@@ -270,13 +291,13 @@ export async function calculateKronosAugmentedScore(
   if (kronos && kronos.confidence > 0.6) {
     const kronosDirection = kronos.directionSignal > 0.05 ? "long" : kronos.directionSignal < -0.05 ? "short" : "neutral";
 
-    // Boost composite if Kronos agrees with intra direction
-    const intraDirection = intraScore > 50 ? "long" : "short";
+    // Boost composite if Kronos agrees with the weighted technical direction
+    const technicalDirection = deriveWeightedDirection(microScore, intraScore, swingScore, weights);
 
-    if (kronosDirection === intraDirection) {
+    if (kronosDirection === technicalDirection) {
       // Kronos agrees with technical signal — boost up to +15 points
       kronosBoost = Math.min(15, Math.abs(kronos.directionSignal) * 20 * kronos.confidence);
-    } else if (kronosDirection !== "neutral" && kronosDirection !== intraDirection) {
+    } else if (kronosDirection !== "neutral" && kronosDirection !== technicalDirection) {
       // Kronos disagrees — penalize up to -10 points
       kronosBoost = -Math.min(10, Math.abs(kronos.directionSignal) * 15 * kronos.confidence);
     }
@@ -290,7 +311,7 @@ export async function calculateKronosAugmentedScore(
   const composite = Math.max(0, Math.min(100, baseComposite + kronosBoost));
 
   if (composite >= threshold) {
-    direction = intraScore > 50 ? "long" : "short";
+    direction = deriveWeightedDirection(microScore, intraScore, swingScore, weights);
   }
 
   return { 

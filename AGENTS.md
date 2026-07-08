@@ -72,6 +72,14 @@ Different parts of the system use different formats. Always handle conversion pr
 
 Whenever you introduce a new feature, fix a bug, or change system behaviors, log it here.
 
+### [2026-07-08] Emergency Panic Close, Dynamic Configs, Slippage Simulation, and Unit Test Alignments
+* **Emergency Panic Close All**: Added a tRPC `panicCloseAll` mutation that halts trading via the global kill switch and executes market close orders for all active positions (both paper and live exchange). Created a prominent red "Emergency Close All" button with confirmation modal on the Portfolio page.
+* **Manual Close Exchange Sync**: Updated `closePosition` mutation to transmit opposing market exit orders to the CoinDCX exchange for live positions, correcting a major gap where manual closes only cleared the database state.
+* **Simulated Paper Trading Slippage**: Integrated a 5 bps (0.05%) slippage model to paper entries (manual & auto matching engine) and exits (exit manager & execution manager) to simulate realistic market conditions.
+* **Dynamic Configuration limits**: Created a `systemConfig` tRPC query to serve leverage bounds, supported symbols, intervals, and pairs from a single backend source of truth, refactoring the hardcoded constants on the Dashboard frontend.
+* **Customizable LLM Evolution Threshold**: Refactored `MIN_EPISODES_FOR_EVOLUTION` to be loaded dynamically from `process.env.MIN_EPISODES_FOR_EVOLUTION` with a default fallback of 500.
+* **Prerequisite & Unit Test Alignment**: Resolved typecheck compilation errors by adding missing symbols (`DOGEUSDT`, `ADAUSDT`, `AVAXUSDT`, `BNBUSDT`) to `SUPPORTED_SYMBOLS` in `constants.ts`. Corrected the assertions in `trailing-stop.test.ts` for short trade trailing stops, achieving 100% test success on trailing stop metrics.
+
 ### [2026-06-23] Deterministic Position List Sorting
 * **UI Row Shifting Fix**: Fixed an issue where the rows in the "Open Positions" table on the Portfolio page kept changing order/swapping positions. This was caused by the database query retrieving open positions without a deterministic `orderBy` clause. Because PostgreSQL physical page indexes shift when rows are updated (e.g. when stop losses or mark prices update every few seconds), the backend output sequence fluctuated. Wrapped `allPositions` in a `useMemo` on the frontend that sorts positions deterministically by creation time (`createdAt` descending), falling back to symbol name and database ID.
 

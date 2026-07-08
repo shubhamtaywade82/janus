@@ -583,9 +583,21 @@ export async function executeOrder(userId: number, input: any) {
     exchangeOrderId = orderRes?.id;
   }
 
+  let entryPriceVal = parseFloat(input.entryPrice);
+  let currentPriceVal = parseFloat(input.currentPrice);
+  let marginVal = parseFloat(input.margin);
+
+  if (!exchangeOrderId) {
+    const SLIPPAGE_BPS = 5;
+    const isLong = input.side.toLowerCase() === "long" || input.side.toLowerCase() === "buy";
+    entryPriceVal = entryPriceVal * (1 + (isLong ? 1 : -1) * (SLIPPAGE_BPS / 10000));
+    currentPriceVal = entryPriceVal;
+    marginVal = (parseFloat(input.size) * entryPriceVal) / input.leverage;
+  }
+
   const result = await db.insert(positions).values({
-    userId, symbol: input.symbol, side: input.side, entryPrice: input.entryPrice, currentPrice: input.currentPrice, size: input.size,
-    leverage: input.leverage, margin: input.margin, status: "open", isPaper: !exchangeOrderId, exchangeOrderId,
+    userId, symbol: input.symbol, side: input.side, entryPrice: String(entryPriceVal), currentPrice: String(currentPriceVal), size: input.size,
+    leverage: input.leverage, margin: marginVal.toFixed(4), status: "open", isPaper: !exchangeOrderId, exchangeOrderId,
   }).returning({ id: positions.id });
 
   tradingEvents.emit(`portfolio-update:${userId}`);

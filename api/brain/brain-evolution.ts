@@ -3,7 +3,9 @@ import { brainStrategies, brainEpisodes } from "@db/schema";
 import { callLLM } from "../services/ollama";
 import { eq, count } from "drizzle-orm";
 
-const MIN_EPISODES_FOR_EVOLUTION = 500;
+const MIN_EPISODES_FOR_EVOLUTION = process.env.MIN_EPISODES_FOR_EVOLUTION
+  ? parseInt(process.env.MIN_EPISODES_FOR_EVOLUTION, 10)
+  : 500;
 
 /**
  * Simulates a historical backtest of the strategy

@@ -15,6 +15,7 @@ export interface MonitoredPosition {
   strategyType: StrategyType;
   stopLoss: number | null;
   takeProfit: number | null;
+  isPaper: boolean;
 }
 
 export interface ExitDecision {
@@ -37,10 +38,18 @@ export function evaluateExitCondition(
   size: number,
   takerFeeRate: number,
   stopLoss: number | null = null,
-  takeProfit: number | null = null
+  takeProfit: number | null = null,
+  isPaper: boolean = false
 ): ExitDecision {
-  const unrealizedPnl = side === "long" ? (currentPrice - entryPrice) * size : (entryPrice - currentPrice) * size;
-  const totalFees = (entryPrice + currentPrice) * size * takerFeeRate;
+  const SLIPPAGE_BPS = 5; // 0.05%
+  let actualExitPrice = currentPrice;
+  if (isPaper) {
+    const isLong = side === "long";
+    actualExitPrice = currentPrice * (1 + (isLong ? -1 : 1) * (SLIPPAGE_BPS / 10000));
+  }
+
+  const unrealizedPnl = side === "long" ? (actualExitPrice - entryPrice) * size : (entryPrice - actualExitPrice) * size;
+  const totalFees = (entryPrice + actualExitPrice) * size * takerFeeRate;
   const feeAdjustedPnl = unrealizedPnl - totalFees;
 
   let shouldExit = false;
@@ -84,7 +93,7 @@ export function startExitMonitor(userId: number, positions: MonitoredPosition[])
 
       const config = STRATEGY_CONFIGS[pos.strategyType];
       const decision = evaluateExitCondition(
-        pos.side, pos.entryPrice, currentPrice, pos.size, config.takerFeeRate, pos.stopLoss, pos.takeProfit
+        pos.side, pos.entryPrice, currentPrice, pos.size, config.takerFeeRate, pos.stopLoss, pos.takeProfit, pos.isPaper
       );
 
       if (decision.shouldExit) {
@@ -150,6 +159,7 @@ export function startDaemon() {
           strategyType: (p.strategyType ?? "intraday") as any,
           stopLoss: p.stopLoss ? parseFloat(p.stopLoss) : null,
           takeProfit: p.takeProfit ? parseFloat(p.takeProfit) : null,
+          isPaper: p.isPaper,
         });
         return acc;
       }, new Map<number, MonitoredPosition[]>());

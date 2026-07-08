@@ -1,6 +1,7 @@
 import { z } from "zod";
 import { observable } from "@trpc/server/observable";
 import { createRouter, authedQuery } from "../middleware";
+import { MIN_SYSTEM_LEVERAGE, MAX_SYSTEM_LEVERAGE, SUPPORTED_SYMBOLS } from "../../contracts/constants";
 import { analyzeAll, klinesFromBinance } from "../services/price-action";
 import { subscribeToSymbol, unsubscribeFromSymbol, marketEvents } from "../services/streaming";
 import type { LiquidityEvent } from "../services/liquidity-engine";
@@ -70,6 +71,17 @@ export const marketRouter = createRouter({
   // ─── Get supported trading pairs ───
   pairs: authedQuery.query(() => {
     return SUPPORTED_PAIRS;
+  }),
+
+  // ─── Expose system configurations dynamically ───
+  systemConfig: authedQuery.query(() => {
+    return {
+      minLeverage: MIN_SYSTEM_LEVERAGE,
+      maxLeverage: MAX_SYSTEM_LEVERAGE,
+      supportedSymbols: SUPPORTED_SYMBOLS,
+      supportedPairs: SUPPORTED_PAIRS,
+      intervals: ["1m", "5m", "15m", "1h", "4h", "1d"],
+    };
   }),
 
   // ─── Fetch OHLC Klines from Binance ───

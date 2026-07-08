@@ -352,9 +352,14 @@ export async function executeAction(
           }
         }
 
-        // Update position size in DB (paper: always; live: only after successful exchange order)
         const newQty = position.quantity - exitQty;
-        const partialPnl = (position.side === "LONG" ? 1 : -1) * (position.markPrice - position.entryPrice) * exitQty;
+        const SLIPPAGE_BPS = 5; // 0.05%
+        let exitPrice = position.markPrice;
+        if (position.isPaper) {
+          const isLong = position.side === "LONG" || position.side === "long";
+          exitPrice = exitPrice * (1 + (isLong ? -1 : 1) * (SLIPPAGE_BPS / 10000));
+        }
+        const partialPnl = (position.side === "LONG" ? 1 : -1) * (exitPrice - position.entryPrice) * exitQty;
         const prevRealized = position.realizedPnl || 0;
         const nextRealized = prevRealized + partialPnl;
 
@@ -404,7 +409,7 @@ export async function executeAction(
           quantityBefore: position.quantity,
           quantityAfter: newQty,
           quantityDelta: -exitQty,
-          price: position.markPrice,
+          price: position.isPaper ? exitPrice : position.markPrice,
           avgEntryPrice: position.entryPrice,
           realizedPnl: partialPnl,
           fee: estimateFee(position.markPrice * exitQty),
@@ -455,13 +460,18 @@ export async function executeAction(
           }
         }
 
-        // Close in DB (paper: always; live: only after successful exchange order above)
-        const realizedPnl = (position.side === "LONG" ? 1 : -1) * (position.markPrice - position.entryPrice) * position.quantity;
+        const SLIPPAGE_BPS = 5; // 0.05%
+        let exitPrice = position.markPrice;
+        if (position.isPaper) {
+          const isLong = position.side === "LONG" || position.side === "long";
+          exitPrice = exitPrice * (1 + (isLong ? -1 : 1) * (SLIPPAGE_BPS / 10000));
+        }
+        const realizedPnl = (position.side === "LONG" ? 1 : -1) * (exitPrice - position.entryPrice) * position.quantity;
         await db
           .update(positions)
           .set({
             status: "closed",
-            currentPrice: String(position.markPrice),
+            currentPrice: String(exitPrice),
             realizedPnl: String(realizedPnl),
             unrealizedPnl: "0",
             exitReason: recommendation.reasoning,
@@ -490,7 +500,7 @@ export async function executeAction(
           quantityBefore: position.quantity,
           quantityAfter: 0,
           quantityDelta: -position.quantity,
-          price: position.markPrice,
+          price: position.isPaper ? exitPrice : position.markPrice,
           avgEntryPrice: position.entryPrice,
           realizedPnl,
           fee: estimateFee(position.markPrice * position.quantity),
@@ -500,7 +510,7 @@ export async function executeAction(
             reason: recommendation.reasoning,
             exitReason: recommendation.reasoning,
             isPaper: position.isPaper,
-            exitPrice: position.markPrice,
+            exitPrice: position.isPaper ? exitPrice : position.markPrice,
             entryPrice: position.entryPrice,
           },
           // ─── PTA extensions ────────────────────────────────────────────────

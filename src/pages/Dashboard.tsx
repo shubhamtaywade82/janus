@@ -26,6 +26,7 @@ import { AnimatedNumber } from "@/components/AnimatedNumber";
 import { getPriceDecimals } from "@/utils/precision";
 
 const Dashboard = () => {
+  const { data: systemConfig } = trpc.market.systemConfig.useQuery();
   const [selectedSymbol, setSelectedSymbol] = useState(() => {
     if (typeof window !== "undefined") {
       return localStorage.getItem("janus_selected_symbol") || "BTCUSDT";
@@ -530,7 +531,7 @@ const Dashboard = () => {
     prevPaDataRef.current = paData ?? prevPaDataRef.current;
   }, [paData]);
 
-  const maxLeverage = instrInfo?.maxLeverage ?? 10;
+  const maxLeverage = instrInfo?.maxLeverage ?? systemConfig?.maxLeverage ?? 10;
   const availableBalance = instrInfo?.availableUsdtEquivalent ?? 0;
   const marginCurrency = instrInfo?.marginCurrency ?? "USDT";
   const minQty = instrInfo?.minQuantity ?? 0.001;
@@ -576,7 +577,7 @@ const Dashboard = () => {
     );
   }, [orderSize, lastPrice, side, leverage, selectedSymbol, strategyType, createPosition, utils]);
 
-  const intervals = ["1m", "5m", "15m", "1h", "4h", "1d"];
+  const intervals = systemConfig?.intervals ?? ["1m", "5m", "15m", "1h", "4h", "1d"];
 
   return (
     <div className="flex flex-col h-full">

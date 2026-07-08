@@ -53,8 +53,9 @@ export function classifyRegime(input: RegimeInput): RegimeType {
   // Priority 1: Extreme volatility — don't scalp chaos
   if (input.atrPct1h > 2.0) return "high_volatility";
 
-  // Priority 2: Strong sustained trend (ADX>30 + 4h EMA confirms)
-  if (input.adx1h > 30) return "swing_trend";
+  // Priority 2: Strong sustained trend (ADX>30 + 4h EMA confirms trend is real,
+  // not just a 1h spike counter to the higher timeframe)
+  if (input.adx1h > 30 && is4hTrendConfirmed(input)) return "swing_trend";
 
   // Priority 3: RSI extremes in trend → momentum exhaustion reversal
   if (input.adx1h >= 20 && (input.rsi1h < 30 || input.rsi1h > 70)) return "reversal";

@@ -13,6 +13,7 @@ import {
   ArrowDownRight,
   Shield,
   Percent,
+  AlertOctagon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { AnimatedNumber } from "@/components/AnimatedNumber";
@@ -546,7 +547,32 @@ export default function Portfolio() {
   const equityFlash = useFlash(totalEquityUsdt);
 
   const closePosition = trpc.trading.closePosition.useMutation();
+  const panicCloseAll = trpc.trading.panicCloseAll.useMutation();
   const utils = trpc.useUtils();
+
+  const handlePanicCloseAll = useCallback(() => {
+    const activeCount = portfolioMode === "paper" ? paperPositions.length : openLivePositions.length;
+    if (activeCount === 0) return;
+
+    const confirmed = window.confirm(
+      `WARNING: Are you sure you want to immediately CLOSE ALL ${activeCount} active ${portfolioMode} positions and pause new trade entries?`
+    );
+    if (!confirmed) return;
+
+    panicCloseAll.mutate(
+      { isPaper: portfolioMode === "paper" },
+      {
+        onSuccess: () => {
+          utils.trading.portfolio.invalidate();
+          utils.trading.positions.invalidate();
+          toast.success(`Halted trading and successfully closed all positions`);
+        },
+        onError: (err) => {
+          toast.error(`Panic close failed`, { description: err.message });
+        },
+      }
+    );
+  }, [portfolioMode, paperPositions, openLivePositions, panicCloseAll, utils]);
 
   const handleClosePosition = useCallback((pos: any, currentPrice: number, pnl: number) => {
     closePosition.mutate(
@@ -616,6 +642,19 @@ export default function Portfolio() {
               PAPER {paperPositions.length > 0 && <span className="ml-1 opacity-70">({paperPositions.length})</span>}
             </button>
           </div>
+
+          {/* Emergency Panic Close All */}
+          {(portfolioMode === "paper" ? paperPositions.length > 0 : openLivePositions.length > 0) && (
+            <button
+              onClick={handlePanicCloseAll}
+              disabled={panicCloseAll.isPending}
+              className="px-3 py-1.5 rounded bg-red-600 hover:bg-red-700 text-white font-semibold text-xs flex items-center gap-1.5 transition-colors border border-red-500/20 active:scale-95 disabled:opacity-50 disabled:pointer-events-none"
+            >
+              <AlertOctagon size={14} className="animate-pulse" />
+              {panicCloseAll.isPending ? "CLOSING..." : "EMERGENCY CLOSE ALL"}
+            </button>
+          )}
+
           {/* INR rate toggle */}
           <div className="flex rounded overflow-hidden border border-[#27272a] text-[10px] font-medium">
             <button

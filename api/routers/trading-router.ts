@@ -11,6 +11,7 @@ import {
   getFuturesWallet,
   getFuturesPositions,
   getFuturesOrders,
+  createFuturesOrder,
 } from "../services/coindcx";
 import { TRPCError } from "@trpc/server";
 import { observable } from "@trpc/server/observable";
@@ -22,6 +23,9 @@ import { releasePaperPositionMargin, resolvePaperPositionMargin } from "../servi
 import { autoExecutorConfig } from "@db/schema";
 import { encrypt, decryptCreds } from "../lib/crypto";
 import { fetchPortfolioData, executeOrder } from "../services/trading-service";
+import { env, coinDCXEnvCreds } from "../lib/env";
+import { globalKillSwitch } from "../services/kill-switch";
+import { recordPositionTransaction } from "../services/position-manager/transaction-ledger";
 
 export const tradingRouter = createRouter({
   positions: authedQuery
@@ -63,6 +67,35 @@ export const tradingRouter = createRouter({
       if (!pos) throw new TRPCError({ code: "NOT_FOUND", message: "Position not found" });
       if (pos.userId !== ctx.user.id) throw new TRPCError({ code: "FORBIDDEN" });
 
+      if (!pos.isPaper) {
+        if (!env.placeOrders) {
+          throw new TRPCError({ code: "PRECONDITION_FAILED", message: "Live order execution is disabled (PLACE_ORDERS=false)" });
+        }
+        try {
+          const dbCreds = await db.select().from(exchangeCredentials).where(and(eq(exchangeCredentials.userId, ctx.user.id), eq(exchangeCredentials.exchange, "coindcx"))).limit(1);
+          const coindcxCreds = dbCreds && dbCreds[0] ? decryptCreds(dbCreds[0]) : coinDCXEnvCreds;
+          if (!coindcxCreds) throw new TRPCError({ code: "BAD_REQUEST", message: "No CoinDCX exchange credentials found" });
+
+          const coindcxSide = (pos.side.toLowerCase() === "long" || pos.side.toLowerCase() === "buy") ? "sell" : "buy";
+          const coindcxSymbol = pos.symbol.startsWith("B-")
+            ? pos.symbol
+            : `B-${pos.symbol.replace("USDT", "_USDT")}`;
+          await createFuturesOrder(coindcxCreds, {
+            market: coindcxSymbol,
+            side: coindcxSide,
+            order_type: "market",
+            total_quantity: parseFloat(pos.size),
+            leverage: pos.leverage,
+          });
+        } catch (err: any) {
+          console.error(`[trading-router] Live exchange close failed for position #${pos.id}:`, err);
+          throw new TRPCError({
+            code: "INTERNAL_SERVER_ERROR",
+            message: `Exchange order failed: ${err.message || String(err)}`,
+          });
+        }
+      }
+
       await db.update(positions).set({ status: "closed", currentPrice: input.closePrice, realizedPnl: input.realizedPnl, unrealizedPnl: "0", exitReason: "Manual Close", closedAt: new Date() }).where(eq(positions.id, input.id));
 
       if (pos.isPaper) {
@@ -87,12 +120,170 @@ export const tradingRouter = createRouter({
           paperCurrency
         );
       }
+
+      try {
+        await recordPositionTransaction({
+          positionId: pos.id,
+          userId: ctx.user.id,
+          symbol: pos.symbol,
+          type: "FULL_EXIT",
+          side: (pos.side.toLowerCase() === "long" || pos.side.toLowerCase() === "buy") ? "LONG" : "SHORT",
+          quantityBefore: parseFloat(pos.size),
+          quantityAfter: 0,
+          quantityDelta: -parseFloat(pos.size),
+          price: parseFloat(input.closePrice),
+          avgEntryPrice: parseFloat(pos.entryPrice),
+          realizedPnl: parseFloat(input.realizedPnl),
+          fee: pos.isPaper ? 0 : parseFloat(input.closePrice) * parseFloat(pos.size) * 0.0004,
+          marginBefore: parseFloat(pos.margin),
+          marginAfter: 0,
+          metadata: { reason: "Manual Close" }
+        });
+      } catch (ledgerErr) {
+        console.error("[trading-router] Ledger entry failed:", ledgerErr);
+      }
       
       const session = await getOrCreateSession(ctx.user.id, 0);
       await updateSession(globalRiskEngine.recordTrade(session, { pnl: parseFloat(input.realizedPnl) }));
       unregisterPosition(input.id);
       tradingEvents.emit(`portfolio-update:${ctx.user.id}`);
       return { success: true };
+    }),
+
+  panicCloseAll: authedQuery
+    .input(z.object({ isPaper: z.boolean() }))
+    .mutation(async ({ input, ctx }) => {
+      const db = getDb();
+      const userId = ctx.user.id;
+
+      globalKillSwitch.trigger("manual", `Panic Close All triggered manually by user for ${input.isPaper ? "Paper" : "Live"} trading.`);
+
+      const openPosList = await db
+        .select()
+        .from(positions)
+        .where(
+          and(
+            eq(positions.userId, userId),
+            eq(positions.status, "open"),
+            eq(positions.isPaper, input.isPaper)
+          )
+        );
+
+      if (openPosList.length === 0) {
+        return { success: true, count: 0 };
+      }
+
+      let successCount = 0;
+      let failCount = 0;
+      const errors: string[] = [];
+
+      for (const pos of openPosList) {
+        try {
+          if (!pos.isPaper) {
+            if (env.placeOrders) {
+              const dbCreds = await db.select().from(exchangeCredentials).where(and(eq(exchangeCredentials.userId, userId), eq(exchangeCredentials.exchange, "coindcx"))).limit(1);
+              const coindcxCreds = dbCreds && dbCreds[0] ? decryptCreds(dbCreds[0]) : coinDCXEnvCreds;
+              if (!coindcxCreds) throw new Error("No CoinDCX exchange credentials found");
+
+              const coindcxSide = (pos.side.toLowerCase() === "long" || pos.side.toLowerCase() === "buy") ? "sell" : "buy";
+              const coindcxSymbol = pos.symbol.startsWith("B-")
+                ? pos.symbol
+                : `B-${pos.symbol.replace("USDT", "_USDT")}`;
+              await createFuturesOrder(coindcxCreds, {
+                market: coindcxSymbol,
+                side: coindcxSide,
+                order_type: "market",
+                total_quantity: parseFloat(pos.size),
+                leverage: pos.leverage,
+              });
+            }
+          }
+
+          const markPriceVal = parseFloat(pos.currentPrice);
+          const entryPriceVal = parseFloat(pos.entryPrice);
+          const sizeVal = parseFloat(pos.size);
+          const isLong = pos.side.toLowerCase() === "long" || pos.side.toLowerCase() === "buy";
+          const realizedPnl = (isLong ? 1 : -1) * (markPriceVal - entryPriceVal) * sizeVal;
+
+          await db
+            .update(positions)
+            .set({
+              status: "closed",
+              realizedPnl: String(realizedPnl),
+              unrealizedPnl: "0",
+              exitReason: "Panic Close All",
+              closedAt: new Date(),
+              updatedAt: new Date(),
+            })
+            .where(eq(positions.id, pos.id));
+
+          if (pos.isPaper) {
+            const [cfg] = await db
+              .select({ paperCurrency: autoExecutorConfig.paperCurrency })
+              .from(autoExecutorConfig)
+              .where(eq(autoExecutorConfig.userId, userId))
+              .limit(1);
+            const paperCurrency = (cfg?.paperCurrency as "USDT" | "INR") ?? "INR";
+            const { marginUsdt } = await resolvePaperPositionMargin({
+              marginStored: parseFloat(pos.margin),
+              marginCurrency: paperCurrency,
+              size: sizeVal,
+              entryPrice: entryPriceVal,
+              leverage: pos.leverage,
+            });
+            await releasePaperPositionMargin(
+              userId,
+              marginUsdt,
+              realizedPnl,
+              pos.id,
+              paperCurrency
+            );
+          }
+
+          try {
+            await recordPositionTransaction({
+              positionId: pos.id,
+              userId,
+              symbol: pos.symbol,
+              type: "FULL_EXIT",
+              side: isLong ? "LONG" : "SHORT",
+              quantityBefore: sizeVal,
+              quantityAfter: 0,
+              quantityDelta: -sizeVal,
+              price: markPriceVal,
+              avgEntryPrice: entryPriceVal,
+              realizedPnl,
+              fee: pos.isPaper ? 0 : markPriceVal * sizeVal * 0.0004,
+              marginBefore: parseFloat(pos.margin),
+              marginAfter: 0,
+              metadata: { reason: "Panic Close All" }
+            });
+          } catch (ledgerErr) {
+            console.error("[trading-router] Ledger entry failed:", ledgerErr);
+          }
+
+          const session = await getOrCreateSession(userId, 0);
+          await updateSession(globalRiskEngine.recordTrade(session, { pnl: realizedPnl }));
+
+          unregisterPosition(pos.id);
+          successCount++;
+        } catch (err: any) {
+          console.error(`[trading-router] Failed to close position #${pos.id}:`, err);
+          failCount++;
+          errors.push(`${pos.symbol}: ${err.message || String(err)}`);
+        }
+      }
+
+      tradingEvents.emit(`portfolio-update:${userId}`);
+
+      if (failCount > 0) {
+        throw new TRPCError({
+          code: "INTERNAL_SERVER_ERROR",
+          message: `Closed ${successCount} positions. Failed to close ${failCount}: ${errors.join(", ")}`,
+        });
+      }
+
+      return { success: true, count: successCount };
     }),
 
   portfolio: authedQuery.query(async ({ ctx }) => fetchPortfolioData(ctx.user.id)),
