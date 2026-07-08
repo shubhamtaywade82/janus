@@ -38,6 +38,8 @@ import { STRATEGY_CONFIGS } from "./strategy-config";
 import { latestRegimeCache } from "./regime-detector";
 import type { ExitDecision } from "./exit-manager";
 import { snapshotEquity } from "./performance-tracker";
+import { computeMarketFeatures } from "./market-features";
+import { evaluateContinuationSetup, CONTINUATION_FILTER_SYMBOLS } from "./market-features/continuation-filter";
 import { getPaperWallet, getPaperEquity } from "./paper-wallet";
 import {
   lockPaperPositionMargin,
@@ -524,6 +526,12 @@ export class AutoExecutor {
       return this.skip(signal, kronosAdvice.reason, kronosAdvice.gate, { llmDecision: kronosAdvice.kronosDecision });
     }
 
+    // ─── Continuation Gate: 10%+ trend-persistence filter (SOL/ETH/XRP only) ───
+    const continuationOutcome = await this.evaluateContinuationGate(signal, symbol);
+    if (continuationOutcome && continuationOutcome.action === "skip") {
+      return this.skip(signal, continuationOutcome.reason, "continuation_filter");
+    }
+
     // ─── Sizing & Price Discovery ───
     const currentPrice = await this.getCurrentPrice(symbol, signal);
     if (!currentPrice || currentPrice <= 0) {
@@ -763,6 +771,39 @@ export class AutoExecutor {
       gate: "kronos",
       kronosDecision: { decision: "execute", confidence: kronos.confidence * 100, reasoning: `aligned: ${kronosDirection}`, keyUsed: "kronos" }
     };
+  }
+
+  /**
+   * Additional gate for SOL/ETH/XRP swing/intraday entries: filters chop/fakeouts
+   * out of "trend about to run 10%+" setups using the market-features engine
+   * (ADX/EMA/ATR/CVD/volume/funding/session/liquidity/volatility). No-ops for
+   * every other symbol and for scalping regimes, so it cannot affect existing
+   * fast-strategy behavior.
+   */
+  private async evaluateContinuationGate(
+    signal: Signal,
+    symbol: string
+  ): Promise<{ action: "skip" | "approve"; reason: string } | null> {
+    if (!CONTINUATION_FILTER_SYMBOLS.includes(symbol)) return null;
+
+    const regimeData = latestRegimeCache.get("BTCUSDT");
+    const strategyType = regimeData?.strategy ?? "intraday";
+    if (strategyType !== "swing" && strategyType !== "intraday") return null;
+
+    const direction = signal.direction as "long" | "short" | "neutral" | null;
+    if (direction !== "long" && direction !== "short") return null;
+
+    try {
+      const features = await computeMarketFeatures(symbol);
+      const verdict = evaluateContinuationSetup(features, direction);
+      if (!verdict.passes) {
+        return { action: "skip", reason: `continuation filter: ${verdict.reason}` };
+      }
+      return { action: "approve", reason: `continuation filter: ${verdict.reason}` };
+    } catch (err) {
+      console.warn(`[auto-executor] continuation gate failed for ${symbol}, allowing through:`, err);
+      return null;
+    }
   }
 
   private async getCurrentPrice(symbol: string, signal: Signal): Promise<number> {
